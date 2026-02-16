@@ -1,3 +1,4 @@
+mod config;
 mod embedding;
 mod errors;
 mod memory;
