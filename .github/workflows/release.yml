@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos-arm64:
+    name: Build macOS ARM64
+    runs-on: macos-14  # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag format
+        run: |
+          if ! [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "Error: Tag ${GITHUB_REF_NAME} does not follow semver format (vx.y.z or vx.y.z-prerelease)"
+            exit 1
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build release
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Run tests
+        run: cargo test --release --target aarch64-apple-darwin
+
+      - name: Verify binary exists and is executable
+        run: |
+          if [ ! -f "target/aarch64-apple-darwin/release/vipune" ]; then
+            echo "Error: Binary vipune not found at target/aarch64-apple-darwin/release/vipune"
+            exit 1
+          fi
+          if [ ! -x "target/aarch64-apple-darwin/release/vipune" ]; then
+            echo "Error: Binary vipune is not executable"
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          cd target/aarch64-apple-darwin/release
+          tar czf ../../../vipune-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz vipune
+          cd ../../..
+          # macOS uses shasum, use sha256sum for Linux builds when extending support
+          shasum -a 256 vipune-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz > vipune-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz.sha256
+
+      - name: Detect prerelease
+        id: prerelease_check
+        run: |
+          if [[ "${GITHUB_REF_NAME}" =~ - ]]; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            vipune-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
+            vipune-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz.sha256
+          fail_on_unmatched_files: true
+          prerelease: ${{ steps.prerelease_check.outputs.is_prerelease }}
+          generate_release_notes: true

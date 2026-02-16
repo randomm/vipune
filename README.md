@@ -17,12 +17,96 @@ Store semantic memories, search by meaning, and detect conflicts. Single binary 
 - **No API keys** - Everything runs locally, no network dependencies
 - **Project scoped** - Memories isolated by git repository
 
+## Installation
+
+### Prerequisites
+
+For source installation:
+- Rust 1.70+ (install via https://rustup.rs)
+- System dependencies for ONNX Runtime:
+  - Linux: libgomp1, libc6
+  - macOS: None required
+
+### Pre-built binary
+
+**macOS Apple Silicon (arm64)**
+```bash
+# Download
+curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-apple-darwin.tar.gz
+
+# Extract
+tar xzf vipune-aarch64-apple-darwin.tar.gz
+
+# Install to system directory (requires sudo)
+sudo mv vipune /usr/local/bin/
+
+# Or install to user directory (no sudo)
+mkdir -p ~/.local/bin
+mv vipune ~/.local/bin/
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+**macOS Intel (x86_64)**
+```bash
+curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-x86_64-apple-darwin.tar.gz
+tar xzf vipune-x86_64-apple-darwin.tar.gz
+sudo mv vipune /usr/local/bin/
+```
+
+**Linux x86_64**
+```bash
+curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-x86_64-unknown-linux-gnu.tar.gz
+tar xzf vipune-x86_64-unknown-linux-gnu.tar.gz
+sudo mv vipune /usr/local/bin/
+```
+
+**Linux ARM64**
+```bash
+curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-unknown-linux-gnu.tar.gz
+tar xzf vipune-aarch64-unknown-linux-gnu.tar.gz
+sudo mv vipune /usr/local/bin/
+```
+
+### Build from source
+
+**Latest release (recommended)**
+```bash
+cargo install --git https://github.com/randomm/vipune --tag $LATEST_TAG vipune
+```
+
+**Or clone and build manually**
+```bash
+git clone https://github.com/randomm/vipune.git
+cd vipune && cargo build --release
+
+# Binary at ./target/release/vipune
+
+# Add to PATH temporarily
+export PATH="$(pwd)/target/release:$PATH"
+
+# Or install permanently
+sudo cp target/release/vipune /usr/local/bin/
+```
+
+### Uninstall
+
+```bash
+# Remove pre-built binary
+sudo rm /usr/local/bin/vipune
+
+# Remove from user directory
+rm ~/.local/bin/vipune
+
+# Remove via cargo
+cargo uninstall vipune
+
+# Clear data (optional)
+rm -rf ~/.local/share/vipune ~/.cache/vipune ~/.config/vipune
+```
+
 ## Quick Start
 
 ```bash
-# Install from source
-cargo install --git https://github.com/randomm/vipune vipune
-
 # Add a memory
 vipune add "Alice works at Microsoft"
 
