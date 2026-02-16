@@ -27,13 +27,13 @@ vipune add <text> [--metadata <json>] [--force]
 
 **Flags:**
 - `-m, --metadata <json>` - Optional JSON metadata (e.g., `{"topic": "auth"}`)
-- `--force` - Bypass conflict detection and add regardless (**not implemented in v0.1.0**, see issue #6)
+- `--force` - Bypass conflict detection and add regardless
 
 **Behavior:**
 - Generates semantic embedding for the text
 - Checks for similar existing memories (similarity ≥ threshold)
 - If conflicts found: returns exit code 2, lists conflicting memories
-- If `--force` used: would skip conflict check (not implemented in v0.1.0)
+- If `--force` used: skips conflict check and adds memory
 
 **Exit codes:**
 - `0` - Successfully added
@@ -84,7 +84,7 @@ Use --force to add anyway
 Find memories by semantic similarity.
 
 ```
-vipune search <query> [--limit <n>]
+vipune search <query> [--limit <n>] [--recency <weight>]
 ```
 
 **Arguments:**
@@ -92,12 +92,20 @@ vipune search <query> [--limit <n>]
 
 **Flags:**
 - `-l, --limit <n>` - Maximum results to return (default: `5`)
+- `--recency <weight>` - Recency bias for scoring, 0.0 to 1.0 (default: from config, typically `0.3`)
 
 **Behavior:**
 - Generates embedding for query
 - Finds memories with highest cosine similarity
-- Returns results sorted by similarity (highest first)
+- Combines semantic similarity with time decay for final score
+- Returns results sorted by final score (highest first)
 - All memories in current project scope
+
+**Recency scoring:**
+The final score combines: `(1 - recency_weight) * similarity + recency_weight * time_score`
+- `recency_weight = 0.0`: Pure semantic similarity
+- `recency_weight = 1.0`: Pure recency (newest first)
+- `recency_weight = 0.3`: Default balance (70% semantic, 30% recency)
 
 **Exit codes:**
 - `0` - Success (may return empty results if no matches)
@@ -129,6 +137,18 @@ vipune search <query> [--limit <n>]
     }
   ]
 }
+```
+
+**Recency example:**
+```bash
+# Default recency balance (0.3)
+vipune search "authentication"
+
+# High recency bias (recent memories rank higher)
+vipune search "authentication" --recency 0.7
+
+# Pure semantic similarity (no time bias)
+vipune search "authentication" --recency 0.0
 ```
 
 ---
@@ -164,7 +184,7 @@ Updated: 2024-01-15T10:30:00Z
   "id": "123e4567-e89b-12d3-a456-426614174000",
   "content": "Alice works at Microsoft as a senior engineer",
   "project_id": "git@github.com:user/repo.git",
-  "metadata": "{\"topic\": \"team\"}",  // or null if no metadata
+  "metadata": "{\"topic\": \"team\"}",
   "created_at": "2024-01-15T10:30:00Z",
   "updated_at": "2024-01-15T10:30:00Z"
 }
@@ -282,6 +302,103 @@ Updated memory: 123e4567-e89b-12d3-a456-426614174000
 
 ---
 
+### import
+
+Import memories from a remory SQLite database or JSON file.
+
+```
+vipune import <source> [--dry-run] [--format <format>]
+```
+
+**Arguments:**
+- `source` - Path to remory SQLite database or JSON file (required)
+
+**Flags:**
+- `--dry-run` - Preview what would be imported without actually importing
+- `-f, --format <format>` - Import format: `sqlite` (default) or `json`
+
+**Behavior:**
+- Reads memories from remory SQLite database or JSON export
+- Generates new embeddings for all memories
+- Skips duplicates based on content similarity
+- Preserves original timestamps when possible
+
+**Exit codes:**
+- `0` - Import complete (or dry run complete)
+- `1` - Error (file not found, invalid format, database error)
+
+**SQLite import (remory database):**
+```bash
+# Preview import from remory SQLite
+vipune import ~/.local/share/remory/memories.db --dry-run
+
+# Actually perform the import
+vipune import ~/.local/share/remory/memories.db
+```
+
+**JSON import:**
+```bash
+# Import from JSON file (no dry-run support for JSON)
+vipune import export.json --format json
+```
+
+**Dry run output:**
+```
+Dry run: would import from /path/to/remory.db
+Total memories: 150
+Imported: 0
+Skipped duplicates: 0
+Skipped corrupted: 0
+Projects: 3
+  - git@github.com:user/repo1.git
+  - git@github.com:user/repo2.git
+  - default
+```
+
+**Import output:**
+```
+Imported from /path/to/remory.db
+Total memories: 150
+Imported: 142
+Skipped duplicates: 8
+Skipped corrupted: 0
+Projects: 3
+  - git@github.com:user/repo1.git
+  - git@github.com:user/repo2.git
+  - default
+```
+
+**JSON output (dry run):**
+```json
+{
+  "status": "dry_run",
+  "total_memories": 150,
+  "imported": 0,
+  "skipped_duplicates": 0,
+  "skipped_corrupted": 0,
+  "projects": 3
+}
+```
+
+**JSON output (imported):**
+```json
+{
+  "status": "imported",
+  "total_memories": 150,
+  "imported": 142,
+  "skipped_duplicates": 8,
+  "skipped_corrupted": 0,
+  "projects": 3
+}
+```
+
+**Limitations:**
+- JSON import does not support `--dry-run`
+- Only remory SQLite format and vipune JSON export format are supported
+- Duplicate detection uses semantic similarity, not exact string matching
+
+---
+
 ### version
 
 Display version information.
@@ -339,6 +456,7 @@ All commands return exit code `1` on error, with error message to stderr or JSON
 - Invalid metadata (not valid JSON)
 - Database errors (permissions, disk full)
 - Missing or invalid configuration
+- Invalid import format or file not found
 
 ---
 
@@ -353,6 +471,29 @@ vipune search "how do we handle authentication"
 ```bash
 vipune add "Users table has email, password hash, created_at" --metadata '{"table": "users"}'
 vipune search "table schema"  # Will find it by semantic meaning
+```
+
+**Recency-weighted search:**
+```bash
+# High recency bias for time-sensitive queries
+vipune search "recent changes" --recency 0.8
+
+# Pure semantic search for knowledge retrieval
+vipune search "authentication architecture" --recency 0.0
+```
+
+**Force add despite conflicts:**
+```bash
+vipune add "Duplicate memory" --force
+```
+
+**Batch import from remory:**
+```bash
+# Preview first
+vipune import ~/.local/share/remory/memories.db --dry-run
+
+# Then import
+vipune import ~/.local/share/remory/memories.db
 ```
 
 **Batch import (loop in shell):**
@@ -383,4 +524,18 @@ echo "Added: $ID"
 
 # Search and get highest similarity
 vipune search --json "test" | jq '.results[0].similarity'
+
+# Check for conflicts in script
+if vipune add --json "New fact" | jq -e '.conflicts' > /dev/null; then
+  echo "Conflict detected!"
+fi
+```
+
+**Project-specific operations:**
+```bash
+# Add memory to specific project
+vipune --project "my-company/project" add "Company-specific knowledge"
+
+# Search within project
+vipune --project "my-company/project" search "API keys"
 ```

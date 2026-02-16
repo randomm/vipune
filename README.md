@@ -2,6 +2,10 @@
 
 A minimal memory layer for AI agents.
 
+**Pronunciation: vee-poo-neh** (Finnish: Vipunen, minus the last syllable)
+
+In Finnish mythology, Antero Vipunen is a giant who sleeps underground, holding all the world's knowledge and ancient songs. vipune is your agent's sleeping giant — a local knowledge store that remembers everything.
+
 Store semantic memories, search by meaning, and detect conflicts. Single binary CLI. No API keys required.
 
 ## Features
@@ -39,6 +43,7 @@ vipune add "Auth uses JWT tokens" --metadata '{"topic": "authentication"}'
 | `vipune list` | List all memories |
 | `vipune delete <id>` | Delete a memory |
 | `vipune update <id> <text>` | Update a memory's content |
+| `vipune import <source>` | Import memories from SQLite or JSON |
 | `vipune version` | Show version |
 
 [Complete CLI reference](docs/cli-reference.md) • [Quickstart guide](docs/quickstart.md)
@@ -58,6 +63,7 @@ vipune works with zero configuration. All paths use platform-standard XDG direct
 - `VIPUNE_MODEL_CACHE` - Model download cache directory
 - `VIPUNE_PROJECT` - Project identifier (overrides auto-detection)
 - `VIPUNE_SIMILARITY_THRESHOLD` - Conflict detection threshold, 0.0-1.0 (default: `0.85`)
+- `VIPUNE_RECENCY_WEIGHT` - Recency bias in search results, 0.0-1.0 (default: `0.3`)
 
 **Config file (`~/.config/vipune/config.toml`):**
 ```toml
@@ -65,6 +71,7 @@ database_path = "/custom/path/memories.db"
 embedding_model = "sentence-transformers/bge-small-en-v1.5"
 model_cache = "~/.cache/vipune/models"
 similarity_threshold = 0.85
+recency_weight = 0.3
 ```
 
 ## Agent Integration
@@ -92,8 +99,8 @@ vipune add "Authentication uses OAuth2"
 
 # Agent can then:
 # 1. Skip dupe (exit code 2)
-# 2. Force add (not available in v0.1.0, see issue #6)
-# vipune add "Authentication uses OAuth2" --force  # Coming soon
+# 2. Force add to bypass conflict detection
+vipune add "Authentication uses OAuth2" --force
 # 3. Update existing memory
 vipune update 123e4567-e89b-12d3-a456-426614174000 "Auth system uses OAuth2 for login"
 ```
@@ -102,6 +109,22 @@ vipune update 123e4567-e89b-12d3-a456-426614174000 "Auth system uses OAuth2 for 
 - `0` - Success
 - `1` - Error (missing file, invalid input, etc.)
 - `2` - Conflicts detected (similar memories found)
+
+## Recency Scoring
+
+Search results can be weighted by recency using the `--recency` flag or `VIPUNE_RECENCY_WEIGHT` config:
+
+```bash
+# Increase recency bias (recent memories rank higher)
+vipune search "authentication" --recency 0.7
+
+# Pure semantic similarity (no recency bias)
+vipune search "authentication" --recency 0.0
+```
+
+The final score combines semantic similarity and recency time decay:
+- `score = (1 - recency_weight) * similarity + recency_weight * time_score`
+- Default balance: 70% semantic, 30% recency
 
 ## Code Search + Memory Management
 
@@ -117,7 +140,24 @@ vipune add "JWT token validation in src/auth/middleware.rs (validate_token funct
 
 ## Migration from remory
 
-Coming soon. See [issue #9](https://github.com/randomm/vipune/issues/9).
+Import remory SQLite database directly:
+
+```bash
+# Preview what would be imported
+vipune import ~/.local/share/remory/memories.db --dry-run
+
+# Import all memories
+vipune import ~/.local/share/remory/memories.db
+```
+
+Import supports SQLite (remory) and JSON formats:
+```bash
+# SQLite import (default)
+vipune import /path/to/remory.db --format sqlite
+
+# JSON import
+vipune import export.json --format json
+```
 
 ## License
 

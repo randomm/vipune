@@ -5,8 +5,8 @@ Get started with vipune in 5 minutes.
 ## Step 1: Install
 
 ```bash
-# From crates.io (recommended)
-cargo install vipune
+# Install from source
+cargo install --git https://github.com/randomm/vipune vipune
 
 # Or build from source
 git clone https://github.com/randomm/vipune.git
@@ -48,6 +48,20 @@ vipune search "where does alice work"
 - Try variations if results aren't ideal: same meaning, different words
 - Check similarity scores: 0.9+ = very similar, 0.7-0.9 = related, below 0.7 = distant
 
+**Recency scoring:**
+Search results can be biased toward recent memories:
+
+```bash
+# Default balance (70% semantic, 30% recency)
+vipune search "authentication"
+
+# High recency bias (recent memories rank higher)
+vipune search "authentication" --recency 0.7
+
+# Pure semantic search (no time bias)
+vipune search "authentication" --recency 0.0
+```
+
 ## Step 4: Conflict Detection
 
 vipune warns when you add duplicate or very similar memories.
@@ -66,8 +80,8 @@ vipune add "Alice is a senior engineer at Microsoft"
 
 # Options when conflicts occur:
 # 1. Skip (don't add)
-# 2. Force add (not available in v0.1.0, see issue #6)
-# vipune add "Alice is a senior engineer at Microsoft" --force  # Coming soon
+# 2. Force add to bypass conflict detection
+vipune add "Alice is a senior engineer at Microsoft" --force
 # 3. Update existing memory instead
 vipune update 123e4567-e89b-12d3-a456-426614174000 "Alice works at Microsoft as a senior engineer (since 2020)"
 ```
@@ -118,6 +132,21 @@ export VIPUNE_SIMILARITY_THRESHOLD="0.95"
 export VIPUNE_SIMILARITY_THRESHOLD="1.0"
 ```
 
+### Adjust Recency Bias
+
+**Default:** 0.3 (30% recency, 70% semantic similarity)
+
+```bash
+# High recency bias (recent memories always rank higher)
+export VIPUNE_RECENCY_WEIGHT="0.8"
+
+# Pure semantic search (no time bias)
+export VIPUNE_RECENCY_WEIGHT="0.0"
+
+# Balance semantic and recency equally
+export VIPUNE_RECENCY_WEIGHT="0.5"
+```
+
 ### Config File Example
 
 Create `~/.config/vipune/config.toml`:
@@ -127,14 +156,54 @@ database_path = "~/.local/share/vipune/memories.db"
 embedding_model = "sentence-transformers/bge-small-en-v1.5"
 model_cache = "~/.cache/vipune/models"
 similarity_threshold = 0.85
+recency_weight = 0.3
 ```
 
 ## Step 6: Migration from remory (Optional)
 
-If you're migrating from remory:
+If you're migrating from remory, import your existing memories directly:
 
-1. Export memories from remory
-2. Import into vipune (command coming soon - see [issue #9](https://github.com/randomm/vipune/issues/9))
+```bash
+# Preview what would be imported
+vipune import ~/.local/share/remory/memories.db --dry-run
+
+# Output:
+# Dry run: would import from /home/user/.local/share/remory/memories.db
+# Total memories: 150
+# Imported: 0
+# Skipped duplicates: 0
+# Skipped corrupted: 0
+# Projects: 3
+#   - git@github.com:user/repo1.git
+#   - git@github.com:user/repo2.git
+#   - default
+
+# Perform the actual import
+vipune import ~/.local/share/remory/memories.db
+
+# Output:
+# Imported from /home/user/.local/share/remory/memories.db
+# Total memories: 150
+# Imported: 142
+# Skipped duplicates: 8
+# Skipped corrupted: 0
+# Projects: 3
+#   - git@github.com:user/repo1.git
+#   - git@github.com:user/repo2.git
+#   - default
+```
+
+Import formats:
+- **SQLite (default):** remory database format
+- **JSON:** vipune JSON export format
+
+```bash
+# Import from remory SQLite
+vipune import ~/.local/share/remory/memories.db --format sqlite
+
+# Import from JSON export
+vipune import export.json --format json
+```
 
 ## Common Workflows
 
@@ -200,6 +269,19 @@ if vipune add --json "New fact" | jq -e '.conflicts' > /dev/null; then
 fi
 ```
 
+### Recency-Weighted Search
+
+```bash
+# Find recent changes first (high recency bias)
+vipune search "API changes" --recency 0.8
+
+# Find fundamental knowledge (pure semantic)
+vipune search "authentication patterns" --recency 0.0
+
+# Balance relevance and freshness
+vipune search "database schema" --recency 0.4
+```
+
 ## Troubleshooting
 
 ### Model Download Fails
@@ -220,6 +302,9 @@ If legitimate memories are flagged as conflicts:
 # Lower threshold temporarily
 export VIPUNE_SIMILARITY_THRESHOLD="0.9"
 vipune add "Your memory"
+
+# Or force add the memory
+vipune add "Your memory" --force
 ```
 
 ### Can't Find Memories After Adding
@@ -232,6 +317,19 @@ vipune --project "git@github.com:user/repo.git" list
 vipune --project "default" search "query"
 ```
 
+### Search Results Don't Rank by Time
+
+If you want recent memories to rank higher:
+
+```bash
+# Increase recency bias
+export VIPUNE_RECENCY_WEIGHT="0.7"
+vipune search "recent changes"
+
+# Or use --recency flag per search
+vipune search "recent changes" --recency 0.7
+```
+
 ### Database Locked
 
 ```bash
@@ -242,5 +340,5 @@ vipune --project "default" search "query"
 ## Next Steps
 
 - Read the [complete CLI reference](cli-reference.md)
-- Check [issue #9](https://github.com/randomm/vipune/issues/9) for remory migration
 - Explore agent integration patterns in the [README](../README.md#agent-integration)
+- Check project issues for upcoming features
