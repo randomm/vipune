@@ -40,7 +40,7 @@ impl Default for Config {
             embedding_model: "sentence-transformers/bge-small-en-v1.5".to_string(),
             model_cache: cache_dir.join("vipune/models"),
             similarity_threshold: 0.85,
-            recency_weight: 0.0,
+            recency_weight: 0.3,
         }
     }
 }
@@ -151,11 +151,23 @@ impl Config {
 
     #[allow(dead_code)] // Dead code justified: called from Config::load()
     fn validate(&self) -> Result<(), Error> {
+        if self.similarity_threshold.is_nan() || self.similarity_threshold.is_infinite() {
+            return Err(Error::Config(
+                "Invalid similarity threshold: NaN and infinity are not allowed".into(),
+            ));
+        }
+
         if self.similarity_threshold < 0.0 || self.similarity_threshold > 1.0 {
             return Err(Error::Config(format!(
                 "Invalid similarity threshold: {} (must be between 0.0 and 1.0)",
                 self.similarity_threshold
             )));
+        }
+
+        if self.recency_weight.is_nan() || self.recency_weight.is_infinite() {
+            return Err(Error::Config(
+                "Invalid recency weight: NaN and infinity are not allowed".into(),
+            ));
         }
 
         if self.recency_weight < 0.0 || self.recency_weight > 1.0 {
@@ -217,13 +229,18 @@ struct ConfigFile {
     #[serde(default = "default_threshold")]
     similarity_threshold: f64,
 
-    #[serde(default)]
+    #[serde(default = "default_recency_weight")]
     recency_weight: f64,
 }
 
 #[allow(dead_code)] // Dead code justified: used in ConfigFile serde default
 fn default_threshold() -> f64 {
     0.85
+}
+
+#[allow(dead_code)] // Dead code justified: used in ConfigFile serde default
+fn default_recency_weight() -> f64 {
+    0.3
 }
 
 /// Expand `~` to home directory in a PathBuf (in-place).
@@ -281,7 +298,7 @@ mod tests {
         );
         assert!(config.model_cache.ends_with("vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
-        assert_eq!(config.recency_weight, 0.0);
+        assert_eq!(config.recency_weight, 0.3);
     }
 
     #[test]
@@ -500,5 +517,188 @@ This is not valid TOML
         assert!(config.embedding_model.is_empty());
         assert!(config.model_cache.as_os_str().is_empty());
         assert_eq!(config.similarity_threshold, 0.85);
+    }
+
+    #[test]
+    fn test_config_file_missing_recency_weight() {
+        let content = ""; // No recency_weight field
+
+        let result: Result<ConfigFile, _> = toml::from_str(content);
+        assert!(result.is_ok());
+
+        let config = result.unwrap();
+        assert_eq!(config.recency_weight, 0.3); // Should use default, not f64::default() (0.0)
+    }
+
+    #[test]
+    fn test_config_file_partial_toml() {
+        let content = r#"
+            database_path = "/test/db.db"
+        "#;
+
+        let result: Result<ConfigFile, _> = toml::from_str(content);
+        assert!(result.is_ok());
+
+        let config = result.unwrap();
+        assert_eq!(config.database_path, PathBuf::from("/test/db.db"));
+        assert_eq!(config.recency_weight, 0.3); // Missing field uses default 0.3
+        assert_eq!(config.similarity_threshold, 0.85); // Missing field uses default 0.85
+    }
+
+    #[test]
+    fn test_recency_weight_env_var_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars();
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "0.5");
+
+        let config = Config::load().unwrap();
+        assert_eq!(config.recency_weight, 0.5);
+
+        cleanup_env_vars();
+    }
+
+    #[test]
+    fn test_invalid_recency_weight_format() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars();
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "invalid");
+
+        let result = Config::load();
+        assert!(matches!(result, Err(Error::Config(_))));
+
+        cleanup_env_vars();
+    }
+
+    #[test]
+    fn test_recency_weight_range_validation() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars();
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "1.5");
+
+        let result = Config::load();
+        assert!(matches!(result, Err(Error::Config(_))));
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::remove_var("VIPUNE_RECENCY_WEIGHT");
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "-0.1");
+
+        let result = Config::load();
+        assert!(matches!(result, Err(Error::Config(_))));
+
+        cleanup_env_vars();
+    }
+
+    #[test]
+    fn test_valid_recency_weight_bounds() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars();
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "0.0");
+
+        let config = Config::load().unwrap();
+        assert_eq!(config.recency_weight, 0.0);
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "1.0");
+
+        let config = Config::load().unwrap();
+        assert_eq!(config.recency_weight, 1.0);
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "0.3");
+
+        let config = Config::load().unwrap();
+        assert_eq!(config.recency_weight, 0.3);
+
+        cleanup_env_vars();
+    }
+
+    #[test]
+    fn test_empty_recency_weight_env_var_rejected() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars();
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "");
+        let result = Config::load();
+        assert!(matches!(result, Err(Error::Config(_))));
+        #[allow(clippy::disallowed_methods)]
+        std::env::remove_var("VIPUNE_RECENCY_WEIGHT");
+
+        cleanup_env_vars();
+    }
+
+    #[test]
+    fn test_whitespace_recency_weight_env_var_rejected() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars();
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "  ");
+        let result = Config::load();
+        assert!(matches!(result, Err(Error::Config(_))));
+
+        cleanup_env_vars();
+    }
+
+    #[test]
+    fn test_recency_weight_nan_rejected() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars();
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "NaN");
+        let result = Config::load();
+        assert!(matches!(result, Err(Error::Config(_))));
+
+        cleanup_env_vars();
+    }
+
+    #[test]
+    fn test_recency_weight_infinity_rejected() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars();
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "inf");
+        let result = Config::load();
+        assert!(matches!(result, Err(Error::Config(_))));
+
+        cleanup_env_vars();
+    }
+
+    #[test]
+    fn test_similarity_threshold_nan_rejected() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars();
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "NaN");
+        let result = Config::load();
+        assert!(matches!(result, Err(Error::Config(_))));
+
+        cleanup_env_vars();
+    }
+
+    #[test]
+    fn test_similarity_threshold_infinity_rejected() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars();
+
+        #[allow(clippy::disallowed_methods)]
+        std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "inf");
+        let result = Config::load();
+        assert!(matches!(result, Err(Error::Config(_))));
+
+        cleanup_env_vars();
     }
 }

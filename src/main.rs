@@ -62,9 +62,9 @@ enum Commands {
         #[arg(short = 'l', long, default_value = "5")]
         limit: usize,
 
-        /// Recency weight for search results (0.0 to 1.0, default: 0.0)
-        #[arg(long, default_value = "0.0")]
-        recency: f64,
+        /// Recency weight for search results (0.0 to 1.0)
+        #[arg(long)]
+        recency: Option<f64>,
     },
     Get {
         /// Memory ID
@@ -189,11 +189,7 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
             limit,
             recency,
         } => {
-            let recency_weight = if *recency == 0.0 {
-                config.recency_weight
-            } else {
-                *recency
-            };
+            let recency_weight = recency.unwrap_or(config.recency_weight);
             temporal::validate_recency_weight(recency_weight)?;
             let memories = store.search(&project_id, query, *limit, recency_weight)?;
             if cli.json {
@@ -485,6 +481,32 @@ mod tests {
                 dry_run: false,
                 format
             } if source == "export.json" && format == "json"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_search_with_recency() {
+        let cli = Cli::parse_from(&["vipune", "search", "query", "--recency", "0.5"]);
+        matches!(
+            cli.command,
+            Commands::Search {
+                query,
+                recency: Some(0.5),
+                ..
+            } if query == "query"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_search_without_recency() {
+        let cli = Cli::parse_from(&["vipune", "search", "query"]);
+        matches!(
+            cli.command,
+            Commands::Search {
+                query,
+                recency: None,
+                ..
+            } if query == "query"
         );
     }
 }
