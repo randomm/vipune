@@ -1,14 +1,17 @@
-# vipune (development)
+# vipune
 
-Private development repo for vipune — a minimal memory layer for AI agents.
+A minimal memory layer for AI agents.
 
-Public repo: https://github.com/randomm/vipune
+**Status: Work in progress**
 
-## Reference Material
+https://github.com/randomm/vipune
 
-`_reference/remory/` contains the original remory codebase as a git submodule for reference during the rewrite.
+## Architecture
 
-Remove before public release:
+Single binary CLI built in Rust with:
+- SQLite with FTS5 for text storage
+- ONNX embeddings (bge-small-en-v1.5, 384 dimensions)
+- Custom cosine similarity for vector search
+- Fully synchronous - no tokio, no async runtime, no network dependencies at runtime
 
-    git submodule deinit _reference/remory
-    git rm _reference/remory
+Apache-2.0 License by Janni Turunen.
