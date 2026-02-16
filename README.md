@@ -229,27 +229,6 @@ colgrep "authentication middleware"
 vipune add "JWT token validation in src/auth/middleware.rs (validate_token function)"
 ```
 
-## Migration from remory
-
-Import remory SQLite database directly:
-
-```bash
-# Preview what would be imported
-vipune import ~/.local/share/remory/memories.db --dry-run
-
-# Import all memories
-vipune import ~/.local/share/remory/memories.db
-```
-
-Import supports SQLite (remory) and JSON formats:
-```bash
-# SQLite import (default)
-vipune import /path/to/remory.db --format sqlite
-
-# JSON import
-vipune import export.json --format json
-```
-
 ## License
 
 Apache-2.0 © [Janni Turunen](https://github.com/randomm/vipune)
