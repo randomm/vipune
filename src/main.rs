@@ -1,6 +1,7 @@
 mod embedding;
 mod errors;
 mod memory;
+mod project;
 mod sqlite;
 
 use clap::Parser;
