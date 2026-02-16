@@ -9,7 +9,7 @@ mod sqlite;
 
 use clap::{Parser, Subcommand};
 use errors::Error;
-use memory::MemoryStore;
+use memory::{AddResult, MemoryStore};
 use project::detect_project;
 use serde::Serialize;
 use std::process::ExitCode;
@@ -136,11 +136,25 @@ struct ErrorResponse {
     error: String,
 }
 
+#[derive(Serialize)]
+struct ConflictMemoryResponse {
+    id: String,
+    content: String,
+    similarity: f64,
+}
+
+#[derive(Serialize)]
+struct ConflictsResponse {
+    status: String,
+    proposed: String,
+    conflicts: Vec<ConflictMemoryResponse>,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match run(&cli) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(exit_code) => exit_code,
         Err(error) => {
             if cli.json {
                 print_json(&ErrorResponse {
@@ -154,7 +168,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: &Cli) -> Result<(), Error> {
+fn run(cli: &Cli) -> Result<ExitCode, Error> {
     let mut config = config::Config::load()?;
     config.ensure_directories()?;
 
@@ -164,24 +178,62 @@ fn run(cli: &Cli) -> Result<(), Error> {
 
     let project_id = detect_project(cli.project.as_deref());
 
-    let mut store = MemoryStore::new(&config.database_path, &config.embedding_model)?;
+    let mut store = MemoryStore::new(
+        &config.database_path,
+        &config.embedding_model,
+        config.clone(),
+    )?;
 
     match &cli.command {
         Commands::Add {
             text,
             metadata,
-            force: _force,
-        } => {
-            let id = store.add(&project_id, text, metadata.as_deref())?;
-            if cli.json {
-                print_json(&AddResponse {
-                    status: "added".to_string(),
-                    id,
-                });
-            } else {
-                println!("Added memory: {}", id);
+            force,
+        } => match store.add_with_conflict(&project_id, text, metadata.as_deref(), *force)? {
+            AddResult::Added { id } => {
+                if cli.json {
+                    print_json(&AddResponse {
+                        status: "added".to_string(),
+                        id,
+                    });
+                } else {
+                    println!("Added memory: {}", id);
+                }
+                Ok(ExitCode::SUCCESS)
             }
-        }
+            AddResult::Conflicts {
+                proposed,
+                conflicts,
+            } => {
+                if cli.json {
+                    let conflict_responses: Vec<ConflictMemoryResponse> = conflicts
+                        .into_iter()
+                        .map(|c| ConflictMemoryResponse {
+                            id: c.id,
+                            content: c.content,
+                            similarity: c.similarity,
+                        })
+                        .collect();
+                    print_json(&ConflictsResponse {
+                        status: "conflicts".to_string(),
+                        proposed,
+                        conflicts: conflict_responses,
+                    });
+                } else {
+                    println!(
+                        "Conflicts detected: {} similar memory/memories found",
+                        conflicts.len()
+                    );
+                    println!("Proposed: {}", proposed);
+                    println!("Use --force to add anyway");
+                    for conflict in conflicts {
+                        println!("  {} (similarity: {:.3})", conflict.id, conflict.similarity);
+                        println!("    {}", conflict.content);
+                    }
+                }
+                Ok(ExitCode::from(2))
+            }
+        },
         Commands::Search { query, limit } => {
             let memories = store.search(&project_id, query, *limit)?;
             if cli.json {
@@ -204,6 +256,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
                     );
                 }
             }
+            Ok(ExitCode::SUCCESS)
         }
         Commands::Get { id } => {
             let memory = store.get(id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
@@ -226,6 +279,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
                 println!("Created: {}", memory.created_at);
                 println!("Updated: {}", memory.updated_at);
             }
+            Ok(ExitCode::SUCCESS)
         }
         Commands::List { limit } => {
             let memories = store.list(&project_id, *limit)?;
@@ -244,6 +298,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
                     println!("{}: {}", memory.id, memory.content);
                 }
             }
+            Ok(ExitCode::SUCCESS)
         }
         Commands::Delete { id } => {
             let deleted = store.delete(id)?;
@@ -256,8 +311,9 @@ fn run(cli: &Cli) -> Result<(), Error> {
                 } else {
                     println!("Deleted memory: {}", id);
                 }
+                Ok(ExitCode::SUCCESS)
             } else {
-                return Err(Error::NotFound(id.clone()));
+                Err(Error::NotFound(id.clone()))
             }
         }
         Commands::Update { id, text } => {
@@ -270,6 +326,7 @@ fn run(cli: &Cli) -> Result<(), Error> {
             } else {
                 println!("Updated memory: {}", id);
             }
+            Ok(ExitCode::SUCCESS)
         }
         Commands::Version => {
             if cli.json {
@@ -280,10 +337,9 @@ fn run(cli: &Cli) -> Result<(), Error> {
             } else {
                 println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
             }
+            Ok(ExitCode::SUCCESS)
         }
     }
-
-    Ok(())
 }
 
 fn print_json<T: Serialize>(value: &T) {

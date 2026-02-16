@@ -5,9 +5,30 @@
 
 use std::path::Path;
 
+use crate::config::Config;
 use crate::embedding::EmbeddingEngine;
 use crate::errors::Error;
 use crate::sqlite::{Database, Memory};
+
+/// Result type for conflict-aware add operations.
+#[derive(Debug, serde::Serialize)]
+pub enum AddResult {
+    /// Memory was successfully added.
+    Added { id: String },
+    /// Memory conflicts with existing similar memories.
+    Conflicts {
+        proposed: String,
+        conflicts: Vec<ConflictMemory>,
+    },
+}
+
+/// Details about a conflicting memory.
+#[derive(Debug, serde::Serialize)]
+pub struct ConflictMemory {
+    pub id: String,
+    pub content: String,
+    pub similarity: f64,
+}
 
 /// Core memory store combining embedding generation and persistence.
 ///
@@ -23,23 +44,29 @@ use crate::sqlite::{Database, Memory};
 pub struct MemoryStore {
     db: Database,
     embedder: EmbeddingEngine,
+    config: Config,
 }
 
 impl MemoryStore {
-    /// Initialize a new memory store with database path and model ID.
+    /// Initialize a new memory store with database path, model ID, and config.
     ///
     /// # Arguments
     ///
     /// * `db_path` - Path to the SQLite database file (created if it doesn't exist)
     /// * `model_id` - HuggingFace model ID (e.g., "sentence-transformers/bge-small-en-v1.5")
+    /// * `config` - Configuration including similarity threshold for conflict detection
     #[allow(dead_code)] // Dead code justified: public API for CLI integration
-    pub fn new(db_path: &Path, model_id: &str) -> Result<Self, Error> {
+    pub fn new(db_path: &Path, model_id: &str, config: Config) -> Result<Self, Error> {
         let db = Database::open(db_path)?;
         let embedder = EmbeddingEngine::new(model_id)?;
-        Ok(MemoryStore { db, embedder })
+        Ok(MemoryStore {
+            db,
+            embedder,
+            config,
+        })
     }
 
-    /// Add a memory to the store.
+    /// Add a memory to the store (legacy method without conflict detection).
     ///
     /// Generates an embedding for the content and stores it in SQLite.
     /// Returns the generated memory ID (UUID).
@@ -49,13 +76,6 @@ impl MemoryStore {
     /// * `project_id` - Project identifier (e.g., git repo URL or user-defined)
     /// * `content` - Text content to store
     /// * `metadata` - Optional JSON metadata string
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let mut store = MemoryStore::new(path, "sentence-transformers/bge-small-en-v1.5")?;
-    /// let id = store.add("my-project", "Important information", Some(r#"{"tag": "important"}"#))?;
-    /// ```
     #[allow(dead_code)] // Dead code justified: public API for CLI integration
     pub fn add(
         &mut self,
@@ -65,6 +85,60 @@ impl MemoryStore {
     ) -> Result<String, Error> {
         let embedding = self.embedder.embed(content)?;
         Ok(self.db.insert(project_id, content, &embedding, metadata)?)
+    }
+
+    /// Add a memory with conflict detection.
+    ///
+    /// Checks for similar existing memories before adding. If conflicts are found
+    /// (similarity >= threshold), returns conflicts details without storing.
+    ///
+    /// # Arguments
+    ///
+    /// * `project_id` - Project identifier (e.g., git repo URL or user-defined)
+    /// * `content` - Text content to store
+    /// * `metadata` - Optional JSON metadata string
+    /// * `force` - If true, bypass conflict detection and add regardless
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(AddResult::Added { id })` if no conflicts or force=true
+    /// * `Ok(AddResult::Conflicts { proposed, conflicts })` if conflicts found
+    #[allow(dead_code)] // Dead code justified: public API for CLI integration
+    pub fn add_with_conflict(
+        &mut self,
+        project_id: &str,
+        content: &str,
+        metadata: Option<&str>,
+        force: bool,
+    ) -> Result<AddResult, Error> {
+        if force {
+            let embedding = self.embedder.embed(content)?;
+            let id = self.db.insert(project_id, content, &embedding, metadata)?;
+            return Ok(AddResult::Added { id });
+        }
+
+        let embedding = self.embedder.embed(content)?;
+        let similars =
+            self.db
+                .find_similar(project_id, &embedding, self.config.similarity_threshold)?;
+        let conflicts: Vec<ConflictMemory> = similars
+            .into_iter()
+            .map(|m| ConflictMemory {
+                id: m.id,
+                content: m.content,
+                similarity: m.similarity.unwrap_or(0.0),
+            })
+            .collect();
+
+        if conflicts.is_empty() {
+            let id = self.db.insert(project_id, content, &embedding, metadata)?;
+            Ok(AddResult::Added { id })
+        } else {
+            Ok(AddResult::Conflicts {
+                proposed: content.to_string(),
+                conflicts,
+            })
+        }
     }
 
     /// Search memories by semantic similarity.
@@ -356,8 +430,10 @@ mod tests {
         use tempfile::TempDir;
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.db");
+        let config = Config::default();
 
-        let mut store = MemoryStore::new(&path, "sentence-transformers/bge-small-en-v1.5").unwrap();
+        let mut store =
+            MemoryStore::new(&path, "sentence-transformers/bge-small-en-v1.5", config).unwrap();
 
         let id = store
             .add("test-project", "semantic search is useful", None)
@@ -380,8 +456,10 @@ mod tests {
         use tempfile::TempDir;
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.db");
+        let config = Config::default();
 
-        let mut store = MemoryStore::new(&path, "sentence-transformers/bge-small-en-v1.5").unwrap();
+        let mut store =
+            MemoryStore::new(&path, "sentence-transformers/bge-small-en-v1.5", config).unwrap();
 
         let id = store.add("test-project", "original content", None).unwrap();
 
