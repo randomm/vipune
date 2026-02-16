@@ -5,14 +5,18 @@ mod embedding;
 mod errors;
 mod import;
 mod memory;
+mod memory_types;
+mod output;
 mod project;
 mod sqlite;
+mod temporal;
 
 use clap::{Parser, Subcommand};
 use errors::Error;
-use memory::{AddResult, MemoryStore};
+use memory::MemoryStore;
+use memory_types::AddResult;
+use output::*;
 use project::detect_project;
-use serde::Serialize;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -57,6 +61,10 @@ enum Commands {
         /// Maximum number of results (default: 5)
         #[arg(short = 'l', long, default_value = "5")]
         limit: usize,
+
+        /// Recency weight for search results (0.0 to 1.0, default: 0.0)
+        #[arg(long, default_value = "0.0")]
+        recency: f64,
     },
     Get {
         /// Memory ID
@@ -90,95 +98,6 @@ enum Commands {
         #[arg(short = 'f', long, default_value = "sqlite")]
         format: String,
     },
-}
-
-#[derive(Serialize)]
-struct DeleteResponse {
-    status: String,
-    id: String,
-}
-
-#[derive(Serialize)]
-struct UpdateResponse {
-    status: String,
-    id: String,
-}
-
-#[derive(Serialize)]
-struct SearchResultItem {
-    id: String,
-    content: String,
-    similarity: f64,
-    created_at: String,
-}
-
-#[derive(Serialize)]
-struct SearchResponse {
-    results: Vec<SearchResultItem>,
-}
-
-#[derive(Serialize)]
-struct GetResponse {
-    id: String,
-    content: String,
-    project_id: String,
-    metadata: Option<String>,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Serialize)]
-struct ListItem {
-    id: String,
-    content: String,
-    created_at: String,
-}
-
-#[derive(Serialize)]
-struct ListResponse {
-    memories: Vec<ListItem>,
-}
-
-#[derive(Serialize)]
-#[allow(dead_code)] // Dead code justified: available for future CLI enhancement
-struct VersionResponse {
-    status: String,
-    id: String,
-}
-
-#[derive(Serialize)]
-struct AddResponse {
-    status: String,
-    id: String,
-}
-
-#[derive(Serialize)]
-struct ImportResponse {
-    status: String,
-    total_memories: usize,
-    imported: usize,
-    skipped_duplicates: usize,
-    skipped_corrupted: usize,
-    projects: usize,
-}
-
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
-#[derive(Serialize)]
-struct ConflictMemoryResponse {
-    id: String,
-    content: String,
-    similarity: f64,
-}
-
-#[derive(Serialize)]
-struct ConflictsResponse {
-    status: String,
-    proposed: String,
-    conflicts: Vec<ConflictMemoryResponse>,
 }
 
 fn main() -> ExitCode {
@@ -265,8 +184,18 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
                 Ok(ExitCode::from(2))
             }
         },
-        Commands::Search { query, limit } => {
-            let memories = store.search(&project_id, query, *limit)?;
+        Commands::Search {
+            query,
+            limit,
+            recency,
+        } => {
+            let recency_weight = if *recency == 0.0 {
+                config.recency_weight
+            } else {
+                *recency
+            };
+            temporal::validate_recency_weight(recency_weight)?;
+            let memories = store.search(&project_id, query, *limit, recency_weight)?;
             if cli.json {
                 let results: Vec<SearchResultItem> = memories
                     .into_iter()
@@ -443,16 +372,6 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
     }
 }
 
-fn print_json<T: Serialize>(value: &T) {
-    match serde_json::to_string_pretty(value) {
-        Ok(json) => println!("{}", json),
-        Err(e) => {
-            eprintln!("Failed to serialize JSON: {}", e);
-            std::process::exit(1);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,7 +404,8 @@ mod tests {
             cli.command,
             Commands::Search {
                 query,
-                limit: 10
+                limit: 10,
+                ..
             } if query == "query"
         );
     }
@@ -530,32 +450,6 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_add_response() {
-        let response = AddResponse {
-            status: "added".to_string(),
-            id: "test-id".to_string(),
-        };
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("\"status\":\"added\""));
-        assert!(json.contains("\"id\":\"test-id\""));
-    }
-
-    #[test]
-    fn test_serialize_search_response() {
-        let response = SearchResponse {
-            results: vec![SearchResultItem {
-                id: "test-id".to_string(),
-                content: "test content".to_string(),
-                similarity: 0.95,
-                created_at: "2024-01-01T00:00:00Z".to_string(),
-            }],
-        };
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("\"results\""));
-        assert!(json.contains("\"similarity\":0.95"));
-    }
-
-    #[test]
     fn test_cli_parse_import_sqlite() {
         let cli = Cli::parse_from(&["vipune", "import", "/path/to/db.sqlite"]);
         matches!(
@@ -592,21 +486,5 @@ mod tests {
                 format
             } if source == "export.json" && format == "json"
         );
-    }
-
-    #[test]
-    fn test_serialize_import_response() {
-        let response = ImportResponse {
-            status: "imported".to_string(),
-            total_memories: 100,
-            imported: 95,
-            skipped_duplicates: 4,
-            skipped_corrupted: 1,
-            projects: 2,
-        };
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("\"imported\":95"));
-        assert!(json.contains("\"skipped_duplicates\":4"));
-        assert!(json.contains("\"projects\":2"));
     }
 }

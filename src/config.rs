@@ -23,6 +23,10 @@ pub struct Config {
     /// Minimum similarity threshold for search results.
     #[serde(default)]
     pub similarity_threshold: f64,
+
+    /// Recency weight for search results (0.0 to 1.0).
+    #[serde(default)]
+    pub recency_weight: f64,
 }
 
 impl Default for Config {
@@ -36,14 +40,72 @@ impl Default for Config {
             embedding_model: "sentence-transformers/bge-small-en-v1.5".to_string(),
             model_cache: cache_dir.join("vipune/models"),
             similarity_threshold: 0.85,
+            recency_weight: 0.0,
         }
     }
 }
 
 impl Config {
-    /// Load configuration with priority: defaults < config file < env vars.
-    ///
-    /// CLI overrides are applied separately by the caller.
+    fn apply_env_overrides(&mut self) -> Result<(), Error> {
+        if let Ok(val) = std::env::var("VIPUNE_DATABASE_PATH") {
+            if val.trim().is_empty() {
+                return Err(Error::Config("VIPUNE_DATABASE_PATH cannot be empty".into()));
+            }
+            self.database_path = expand_tilde_path(&PathBuf::from(&val));
+        }
+        if let Ok(val) = std::env::var("VIPUNE_EMBEDDING_MODEL") {
+            if val.trim().is_empty() {
+                return Err(Error::Config(
+                    "VIPUNE_EMBEDDING_MODEL cannot be empty".into(),
+                ));
+            }
+            self.embedding_model = val;
+        }
+        if let Ok(val) = std::env::var("VIPUNE_MODEL_CACHE") {
+            if val.trim().is_empty() {
+                return Err(Error::Config("VIPUNE_MODEL_CACHE cannot be empty".into()));
+            }
+            self.model_cache = expand_tilde_path(&PathBuf::from(&val));
+        }
+        if let Ok(val) = std::env::var("VIPUNE_SIMILARITY_THRESHOLD") {
+            if val.trim().is_empty() {
+                return Err(Error::Config(
+                    "VIPUNE_SIMILARITY_THRESHOLD cannot be empty".into(),
+                ));
+            }
+            self.similarity_threshold = val.trim().parse().map_err(|e| {
+                Error::Config(format!("Invalid VIPUNE_SIMILARITY_THRESHOLD value: {e}"))
+            })?;
+        }
+        if let Ok(val) = std::env::var("VIPUNE_RECENCY_WEIGHT") {
+            if val.trim().is_empty() {
+                return Err(Error::Config(
+                    "VIPUNE_RECENCY_WEIGHT cannot be empty".into(),
+                ));
+            }
+            self.recency_weight = val
+                .trim()
+                .parse()
+                .map_err(|e| Error::Config(format!("Invalid VIPUNE_RECENCY_WEIGHT value: {e}")))?;
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)] // Dead code justified: used in Config::load()
+    fn merge_from_file(&mut self, file: ConfigFile) {
+        if !file.database_path.as_os_str().is_empty() {
+            self.database_path = file.database_path;
+        }
+        if !file.embedding_model.is_empty() {
+            self.embedding_model = file.embedding_model;
+        }
+        if !file.model_cache.as_os_str().is_empty() {
+            self.model_cache = file.model_cache;
+        }
+        self.similarity_threshold = file.similarity_threshold;
+        self.recency_weight = file.recency_weight;
+    }
+
     #[allow(dead_code)] // Dead code justified: public API for CLI integration (issue #5)
     pub fn load() -> Result<Self, Error> {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -78,60 +140,10 @@ impl Config {
         let mut config = Config::default();
 
         if let Some(file) = file_config {
-            if !file.database_path.as_os_str().is_empty() {
-                config.database_path = file.database_path;
-            }
-            if !file.embedding_model.is_empty() {
-                config.embedding_model = file.embedding_model;
-            }
-            if !file.model_cache.as_os_str().is_empty() {
-                config.model_cache = file.model_cache;
-            }
-            config.similarity_threshold = file.similarity_threshold;
+            config.merge_from_file(file);
         }
 
-        if let Ok(database_path) = std::env::var("VIPUNE_DATABASE_PATH") {
-            if database_path.trim().is_empty() {
-                return Err(Error::Config(
-                    "VIPUNE_DATABASE_PATH cannot be empty".to_string(),
-                ));
-            }
-            config.database_path = expand_tilde_path(&PathBuf::from(&database_path));
-        }
-
-        if let Ok(embedding_model) = std::env::var("VIPUNE_EMBEDDING_MODEL") {
-            if embedding_model.trim().is_empty() {
-                return Err(Error::Config(
-                    "VIPUNE_EMBEDDING_MODEL cannot be empty or whitespace".to_string(),
-                ));
-            }
-            config.embedding_model = embedding_model;
-        }
-
-        if let Ok(model_cache) = std::env::var("VIPUNE_MODEL_CACHE") {
-            if model_cache.trim().is_empty() {
-                return Err(Error::Config(
-                    "VIPUNE_MODEL_CACHE cannot be empty".to_string(),
-                ));
-            }
-            config.model_cache = expand_tilde_path(&PathBuf::from(&model_cache));
-        }
-
-        if let Ok(threshold) = std::env::var("VIPUNE_SIMILARITY_THRESHOLD") {
-            let trimmed = threshold.trim();
-            if trimmed.is_empty() {
-                return Err(Error::Config(
-                    "VIPUNE_SIMILARITY_THRESHOLD cannot be empty".to_string(),
-                ));
-            }
-            config.similarity_threshold = trimmed.parse().map_err(|e| {
-                Error::Config(format!(
-                    "Invalid VIPUNE_SIMILARITY_THRESHOLD value '{}': {e}",
-                    threshold
-                ))
-            })?;
-        }
-
+        config.apply_env_overrides()?;
         config.validate()?;
 
         Ok(config)
@@ -143,6 +155,13 @@ impl Config {
             return Err(Error::Config(format!(
                 "Invalid similarity threshold: {} (must be between 0.0 and 1.0)",
                 self.similarity_threshold
+            )));
+        }
+
+        if self.recency_weight < 0.0 || self.recency_weight > 1.0 {
+            return Err(Error::Config(format!(
+                "Invalid recency weight: {} (must be between 0.0 and 1.0)",
+                self.recency_weight
             )));
         }
 
@@ -184,9 +203,7 @@ impl Config {
     }
 }
 
-/// Internal representation for TOML parsing.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // Dead code justified: used in Config::load() test
 struct ConfigFile {
     #[serde(default)]
     database_path: PathBuf,
@@ -199,6 +216,9 @@ struct ConfigFile {
 
     #[serde(default = "default_threshold")]
     similarity_threshold: f64,
+
+    #[serde(default)]
+    recency_weight: f64,
 }
 
 #[allow(dead_code)] // Dead code justified: used in ConfigFile serde default
@@ -236,17 +256,18 @@ mod tests {
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
-    /// Note: Tests in this module modify global environment variables.
-    /// Run with `--test-threads=1` for sequential execution to avoid interference.
     fn cleanup_env_vars() {
-        #[allow(clippy::disallowed_methods)]
-        std::env::remove_var("VIPUNE_DATABASE_PATH");
-        #[allow(clippy::disallowed_methods)]
-        std::env::remove_var("VIPUNE_EMBEDDING_MODEL");
-        #[allow(clippy::disallowed_methods)]
-        std::env::remove_var("VIPUNE_MODEL_CACHE");
-        #[allow(clippy::disallowed_methods)]
-        std::env::remove_var("VIPUNE_SIMILARITY_THRESHOLD");
+        let vars = [
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ];
+        for var in vars {
+            #[allow(clippy::disallowed_methods)]
+            std::env::remove_var(var);
+        }
     }
 
     #[test]
@@ -260,6 +281,7 @@ mod tests {
         );
         assert!(config.model_cache.ends_with("vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
+        assert_eq!(config.recency_weight, 0.0);
     }
 
     #[test]

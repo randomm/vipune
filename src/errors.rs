@@ -63,6 +63,10 @@ pub enum Error {
     /// SQLite module error (from sqlite::Error).
     #[error("SQLite module error: {0}")]
     SqliteModule(String),
+
+    /// Validation error (for parameter validation).
+    #[error("Validation error: {0}")]
+    Validation(String),
 }
 
 impl From<crate::sqlite::Error> for Error {
@@ -76,5 +80,11 @@ impl From<crate::sqlite::Error> for Error {
             return Error::NotFound("unknown".to_string());
         }
         Error::SqliteModule(err_str)
+    }
+}
+
+impl From<String> for Error {
+    fn from(s: String) -> Self {
+        Error::InvalidInput(s)
     }
 }

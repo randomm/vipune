@@ -1,0 +1,369 @@
+//! Temporal decay scoring for search result recency weighting.
+
+use chrono::{DateTime, Utc};
+
+#[cfg(test)]
+use chrono::Duration; // Only import in tests
+
+/// Decay function type.
+#[derive(Debug, Clone, Copy)]
+pub enum DecayFunction {
+    /// Exponential decay: e^(-λ × age_seconds)
+    Exponential,
+}
+
+/// Configuration for temporal decay calculation.
+#[derive(Debug, Clone, Copy)]
+pub struct DecayConfig {
+    /// Decay function to use.
+    pub function: DecayFunction,
+    /// Decay rate (default: 1e-6, ~50% at 8 days).
+    pub lambda: f64,
+    /// Grace period with no decay in days (default: 0.0).
+    pub offset_days: f64,
+}
+
+impl Default for DecayConfig {
+    fn default() -> Self {
+        Self {
+            function: DecayFunction::Exponential,
+            lambda: 1e-6,
+            offset_days: 0.0,
+        }
+    }
+}
+
+impl DecayConfig {
+    /// Validate decay configuration parameters.
+    ///
+    /// Returns error if parameters are mathematically invalid (e.g., negative lambda).
+    pub fn new() -> Result<Self, String> {
+        let config = Self::default();
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validate decay configuration parameters.
+    fn validate(&self) -> Result<(), String> {
+        if self.lambda <= 0.0 {
+            return Err(format!(
+                "Invalid lambda: {} (must be positive)",
+                self.lambda
+            ));
+        }
+        if self.lambda > 1e-3 {
+            return Err(format!("Lambda {} is too large (max: 1e-3)", self.lambda));
+        }
+        if self.offset_days < 0.0 {
+            return Err(format!(
+                "Invalid offset_days: {} (must be >= 0)",
+                self.offset_days
+            ));
+        }
+        Ok(())
+    }
+
+    /// Calculate decay factor for a memory created at `created_at`.
+    ///
+    /// Returns 1.0 for brand new, approaches 0.0 for very old.
+    pub fn calculate_decay(&self, created_at: &DateTime<Utc>) -> f64 {
+        let now = Utc::now();
+        let age = now.signed_duration_since(*created_at);
+        let age_seconds = age.num_seconds().max(0) as f64;
+
+        // Guard against extreme values (should not occur with i64 age)
+        if age_seconds.is_nan() || age_seconds.is_infinite() {
+            return 0.0;
+        }
+
+        // Apply offset (grace period)
+        let offset_seconds = self.offset_days * 86400.0;
+        let effective_age = (age_seconds - offset_seconds).max(0.0);
+
+        match self.function {
+            DecayFunction::Exponential => {
+                let exponent = -self.lambda * effective_age;
+                // Guard against underflow/overflow in exp()
+                if exponent < -700.0 {
+                    return 0.0;
+                }
+                if exponent > 700.0 {
+                    return 1.0;
+                }
+                exponent.exp()
+            }
+        }
+    }
+}
+
+/// Apply recency weighting to search results.
+///
+/// Formula: final_score = (1 - α) × similarity + α × decay
+///
+/// # Arguments
+///
+/// * `similarity` - Original semantic similarity score
+/// * `created_at` - Timestamp when the memory was created
+/// * `recency_weight` - Weight parameter α (0.0 to 1.0)
+/// * `config` - Decay configuration
+///
+/// # Returns
+///
+/// Combined score incorporating both semantic similarity and temporal decay.
+pub fn apply_recency_weight(
+    similarity: f64,
+    created_at: &DateTime<Utc>,
+    recency_weight: f64,
+    config: &DecayConfig,
+) -> f64 {
+    if recency_weight <= 0.0 {
+        return similarity;
+    }
+    let decay = config.calculate_decay(created_at);
+    (1.0 - recency_weight) * similarity + recency_weight * decay
+}
+
+/// Validate recency weight is in valid range [0.0, 1.0].
+pub fn validate_recency_weight(recency_weight: f64) -> Result<(), String> {
+    if !(0.0..=1.0).contains(&recency_weight) {
+        return Err(format!(
+            "Invalid recency weight: {} (must be between 0.0 and 1.0)",
+            recency_weight
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_exponential_decay_brand_new() {
+        let config = DecayConfig::default();
+        let now = Utc::now();
+        let decay = config.calculate_decay(&now);
+        assert!(
+            (decay - 1.0).abs() < 1e-10,
+            "Brand new should have decay ≈ 1.0"
+        );
+    }
+
+    #[test]
+    fn test_exponential_decay_8_days() {
+        let config = DecayConfig::default();
+        let created_at = Utc::now() - Duration::days(8);
+        let decay = config.calculate_decay(&created_at);
+        // With lambda=1e-6, 8 days = 8 * 86400 seconds = 691200
+        // e^(-1e-6 * 691200) = e^(-0.6912) ≈ 0.50
+        assert!(
+            (decay - 0.5).abs() < 0.1,
+            "8 days should have ~50% decay, got {}",
+            decay
+        );
+    }
+
+    #[test]
+    fn test_exponential_decay_very_old() {
+        let config = DecayConfig::default();
+        let created_at = Utc::now() - Duration::days(365);
+        let decay = config.calculate_decay(&created_at);
+        // 1 year = 365 * 86400 seconds, should be very close to 0
+        assert!(
+            decay < 0.1,
+            "1 year old should approach 0 decay, got {}",
+            decay
+        );
+    }
+
+    #[test]
+    fn test_decay_with_offset() {
+        let config = DecayConfig {
+            function: DecayFunction::Exponential,
+            lambda: 1e-6,
+            offset_days: 7.0,
+        };
+        let created_at = Utc::now() - Duration::days(3);
+        let decay = config.calculate_decay(&created_at);
+        // Within offset period, should be 1.0
+        assert!(
+            (decay - 1.0).abs() < 1e-10,
+            "Within offset should have no decay"
+        );
+    }
+
+    #[test]
+    fn test_decay_after_offset() {
+        let config = DecayConfig {
+            function: DecayFunction::Exponential,
+            lambda: 1e-6,
+            offset_days: 7.0,
+        };
+        let created_at = Utc::now() - Duration::days(15);
+        let decay = config.calculate_decay(&created_at);
+        // 15 days - 7 days offset = 8 days effective age
+        // Should have ~50% decay from effective age
+        assert!(
+            (decay - 0.5).abs() < 0.1,
+            "After offset should decay from effective age, got {}",
+            decay
+        );
+    }
+
+    #[test]
+    fn test_apply_recency_weight_zero() {
+        let config = DecayConfig::default();
+        let now = Utc::now();
+        let result = apply_recency_weight(0.9, &now, 0.0, &config);
+        assert!(
+            (result - 0.9).abs() < 1e-10,
+            "α=0 should return pure similarity"
+        );
+    }
+
+    #[test]
+    fn test_apply_recency_weight_one() {
+        let config = DecayConfig::default();
+        let now = Utc::now();
+        let result = apply_recency_weight(0.9, &now, 1.0, &config);
+        assert!(
+            (result - 1.0).abs() < 1e-10,
+            "α=1 with brand new should return decay=1.0"
+        );
+    }
+
+    #[test]
+    fn test_apply_recency_weight_half() {
+        let config = DecayConfig::default();
+        let now = Utc::now();
+        let similarity = 0.8;
+        let result = apply_recency_weight(similarity, &now, 0.5, &config);
+        // 0.5 * 0.8 + 0.5 * 1.0 = 0.9
+        assert!(
+            (result - 0.9).abs() < 1e-10,
+            "α=0.5 should average similarity and decay"
+        );
+    }
+
+    #[test]
+    fn test_recency_weight_negative_clamped() {
+        let config = DecayConfig::default();
+        let now = Utc::now();
+        let result = apply_recency_weight(0.9, &now, -0.5, &config);
+        assert!(
+            (result - 0.9).abs() < 1e-10,
+            "Negative recency weight should behave like 0.0"
+        );
+    }
+
+    #[test]
+    fn test_validate_recency_weight_valid() {
+        assert!(validate_recency_weight(0.0).is_ok());
+        assert!(validate_recency_weight(0.5).is_ok());
+        assert!(validate_recency_weight(1.0).is_ok());
+    }
+
+    #[test]
+    fn test_validate_recency_weight_negative() {
+        let result = validate_recency_weight(-0.1);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be between 0.0 and 1.0"));
+    }
+
+    #[test]
+    fn test_validate_recency_weight_exceeds_one() {
+        let result = validate_recency_weight(1.1);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be between 0.0 and 1.0"));
+    }
+
+    #[test]
+    fn test_decay_config_default() {
+        let config = DecayConfig::default();
+        assert!(matches!(config.function, DecayFunction::Exponential));
+        assert_eq!(config.lambda, 1e-6);
+        assert_eq!(config.offset_days, 0.0);
+    }
+
+    #[test]
+    fn test_decay_config_new_valid() {
+        let result = DecayConfig::new();
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.lambda, 1e-6);
+    }
+
+    #[test]
+    fn test_decay_config_validate_negative_lambda() {
+        let config = DecayConfig {
+            function: DecayFunction::Exponential,
+            lambda: -1e-6,
+            offset_days: 0.0,
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be positive"));
+    }
+
+    #[test]
+    fn test_decay_config_validate_zero_lambda() {
+        let config = DecayConfig {
+            function: DecayFunction::Exponential,
+            lambda: 0.0,
+            offset_days: 0.0,
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be positive"));
+    }
+
+    #[test]
+    fn test_decay_config_validate_large_lambda() {
+        let config = DecayConfig {
+            function: DecayFunction::Exponential,
+            lambda: 1e-2,
+            offset_days: 0.0,
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too large"));
+    }
+
+    #[test]
+    fn test_decay_config_validate_negative_offset() {
+        let config = DecayConfig {
+            function: DecayFunction::Exponential,
+            lambda: 1e-6,
+            offset_days: -7.0,
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be >= 0"));
+    }
+
+    #[test]
+    fn test_decay_config_validate_valid_offset() {
+        let config = DecayConfig {
+            function: DecayFunction::Exponential,
+            lambda: 1e-6,
+            offset_days: 7.0,
+        };
+        let result = config.validate();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_apply_recency_weight_with_old_memory() {
+        let config = DecayConfig::default();
+        let old_date = Utc::now() - Duration::days(365);
+        let similarity = 0.9;
+        let result = apply_recency_weight(similarity, &old_date, 0.5, &config);
+        // Old memory has decay close to 0, so result should be ~0.45
+        assert!(
+            result < 0.6,
+            "Old memory should be penalized, got {}",
+            result
+        );
+        assert!(result > 0.3, "But still has some similarity contribution");
+    }
+}

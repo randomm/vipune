@@ -5,30 +5,14 @@
 
 use std::path::Path;
 
+use chrono::Utc;
+
 use crate::config::Config;
 use crate::embedding::EmbeddingEngine;
 use crate::errors::Error;
+use crate::memory_types::{AddResult, ConflictMemory};
 use crate::sqlite::{Database, Memory};
-
-/// Result type for conflict-aware add operations.
-#[derive(Debug, serde::Serialize)]
-pub enum AddResult {
-    /// Memory was successfully added.
-    Added { id: String },
-    /// Memory conflicts with existing similar memories.
-    Conflicts {
-        proposed: String,
-        conflicts: Vec<ConflictMemory>,
-    },
-}
-
-/// Details about a conflicting memory.
-#[derive(Debug, serde::Serialize)]
-pub struct ConflictMemory {
-    pub id: String,
-    pub content: String,
-    pub similarity: f64,
-}
+use crate::temporal::{apply_recency_weight, DecayConfig};
 
 /// Core memory store combining embedding generation and persistence.
 ///
@@ -144,27 +128,62 @@ impl MemoryStore {
     /// Search memories by semantic similarity.
     ///
     /// Generates an embedding for the query and finds memories with highest
-    /// cosine similarity scores.
+    /// cosine similarity scores. Optionally applies recency weighting to
+    /// boost recent memories.
     ///
     /// # Arguments
     ///
     /// * `project_id` - Project identifier to search within
     /// * `query` - Search query text
     /// * `limit` - Maximum number of results to return
+    /// * `recency_weight` - Weight for temporal decay (0.0 = pure semantic, 1.0 = max recency)
     ///
     /// # Returns
     ///
-    /// Vector of memories sorted by similarity (highest first). Each memory
-    /// includes a `similarity` score field.
+    /// Vector of memories sorted by similarity or recency-adjusted score (highest first).
+    /// Each memory includes a `similarity` score field (recency-adjusted if weight > 0).
     #[allow(dead_code)] // Dead code justified: public API for CLI integration
     pub fn search(
         &mut self,
         project_id: &str,
         query: &str,
         limit: usize,
+        recency_weight: f64,
     ) -> Result<Vec<Memory>, Error> {
         let embedding = self.embedder.embed(query)?;
-        Ok(self.db.search(project_id, &embedding, limit)?)
+        let mut memories = self.db.search(project_id, &embedding, limit)?;
+
+        if recency_weight > 0.0 {
+            let decay_config = DecayConfig::new()?;
+            for memory in memories.iter_mut() {
+                let created_at = match memory.created_at.parse::<chrono::DateTime<chrono::Utc>>() {
+                    Ok(dt) => dt,
+                    Err(_) => {
+                        eprintln!(
+                            "Warning: Invalid timestamp for memory {}, using current time",
+                            memory.id
+                        );
+                        Utc::now()
+                    }
+                };
+                let similarity = memory.similarity.unwrap_or(0.0);
+                memory.similarity = Some(apply_recency_weight(
+                    similarity,
+                    &created_at,
+                    recency_weight,
+                    &decay_config,
+                ));
+            }
+            // Re-sort by recency-adjusted scores
+            memories.sort_by(|a, b| {
+                b.similarity
+                    .unwrap_or(0.0)
+                    .partial_cmp(&a.similarity.unwrap_or(0.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        Ok(memories)
     }
 
     /// Get a specific memory by ID.
@@ -440,7 +459,7 @@ mod tests {
             .unwrap();
 
         let results = store
-            .search("test-project", "finding information", 5)
+            .search("test-project", "finding information", 5, 0.0)
             .unwrap();
         assert!(!results.is_empty());
 
