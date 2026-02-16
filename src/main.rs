@@ -2,6 +2,9 @@ mod sqlite;
 
 use clap::Parser;
 
+mod embedding;
+mod errors;
+
 /// vipune - A minimal memory layer for AI agents
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
