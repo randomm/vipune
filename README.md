@@ -16,8 +16,8 @@ Store semantic memories, search by meaning, and detect conflicts. Single binary 
 ## Quick Start
 
 ```bash
-# Install from crates.io
-cargo install vipune
+# Install from source
+cargo install --git https://github.com/randomm/vipune vipune
 
 # Add a memory
 vipune add "Alice works at Microsoft"

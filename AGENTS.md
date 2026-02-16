@@ -12,8 +12,6 @@
 - Apache-2.0 license
 - Target: ~2,500 lines of Rust code total
 
-**Reference material:** `_reference/remory/` contains the original remory codebase as a git submodule (temporary). Use it to understand patterns, NOT to copy-paste. All code must be written fresh for vipune using a clean-room approach.
-
 ---
 
 ## 🚨 CRITICAL: context7 Usage Protocol 🚨
@@ -825,4 +823,3 @@ gh run watch <run-id>         # Watch CI in real-time
 See:
 - **Issue tracking** - All work requirements are in GitHub issues
 - **CI configuration** - `.github/workflows/ci.yml` for automated checks
-- **Reference material** - `_reference/remory/` for patterns (temporary git submodule)

@@ -1,0 +1,9 @@
+[workspace]
+# Generate changelog from conventional commits
+changelog_config = "cliff.toml"
+# Don't publish to crates.io yet (we're battle-testing)
+publish = false
+# Don't create git tags yet
+git_tag_enable = false
+# Don't create GitHub releases yet
+git_release_enable = false

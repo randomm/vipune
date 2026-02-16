@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/randomm/vipune"
+homepage = "https://github.com/randomm/vipune"
+keywords = ["ai", "memory", "embeddings", "semantic-search", "cli"]
+categories = ["command-line-utilities", "database"]
+readme = "README.md"
 authors = ["Janni Turunen"]
 description = "A minimal memory layer for AI agents"
 
