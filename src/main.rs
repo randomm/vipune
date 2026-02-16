@@ -3,6 +3,7 @@
 mod config;
 mod embedding;
 mod errors;
+mod import;
 mod memory;
 mod project;
 mod sqlite;
@@ -12,6 +13,7 @@ use errors::Error;
 use memory::{AddResult, MemoryStore};
 use project::detect_project;
 use serde::Serialize;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// vipune - A minimal memory layer for AI agents
@@ -76,10 +78,28 @@ enum Commands {
         text: String,
     },
     Version,
+    Import {
+        /// Path to remory database or JSON file
+        source: String,
+
+        /// Dry run (show what would be imported)
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Import format (default: sqlite)
+        #[arg(short = 'f', long, default_value = "sqlite")]
+        format: String,
+    },
 }
 
 #[derive(Serialize)]
-struct AddResponse {
+struct DeleteResponse {
+    status: String,
+    id: String,
+}
+
+#[derive(Serialize)]
+struct UpdateResponse {
     status: String,
     id: String,
 }
@@ -120,15 +140,26 @@ struct ListResponse {
 }
 
 #[derive(Serialize)]
-struct DeleteResponse {
+#[allow(dead_code)] // Dead code justified: available for future CLI enhancement
+struct VersionResponse {
     status: String,
     id: String,
 }
 
 #[derive(Serialize)]
-struct UpdateResponse {
+struct AddResponse {
     status: String,
     id: String,
+}
+
+#[derive(Serialize)]
+struct ImportResponse {
+    status: String,
+    total_memories: usize,
+    imported: usize,
+    skipped_duplicates: usize,
+    skipped_corrupted: usize,
+    projects: usize,
 }
 
 #[derive(Serialize)]
@@ -339,6 +370,76 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Commands::Import {
+            source,
+            dry_run,
+            format,
+        } => {
+            let source_path = PathBuf::from(&source);
+
+            let stats = match format.as_str() {
+                "sqlite" => import::import_from_sqlite(
+                    &source_path,
+                    *dry_run,
+                    &config.database_path,
+                    &config.embedding_model,
+                    config.clone(),
+                )?,
+                "json" => {
+                    if *dry_run {
+                        return Err(Error::InvalidInput(
+                            "Dry run not supported for JSON import".to_string(),
+                        ));
+                    }
+                    import::import_from_json(
+                        &source_path,
+                        &config.database_path,
+                        &config.embedding_model,
+                        config.clone(),
+                    )?
+                }
+                _ => {
+                    return Err(Error::InvalidInput(format!(
+                        "Invalid format '{}': must be 'sqlite' or 'json'",
+                        format
+                    )));
+                }
+            };
+
+            if cli.json {
+                print_json(&ImportResponse {
+                    status: if *dry_run {
+                        "dry_run".to_string()
+                    } else {
+                        "imported".to_string()
+                    },
+                    total_memories: stats.total_memories,
+                    imported: stats.imported_memories,
+                    skipped_duplicates: stats.skipped_duplicates,
+                    skipped_corrupted: stats.skipped_corrupted,
+                    projects: stats.projects.len(),
+                });
+            } else {
+                if *dry_run {
+                    println!("Dry run: would import from {}", source);
+                } else {
+                    println!("Imported from {}", source);
+                }
+                println!("Total memories: {}", stats.total_memories);
+                println!("Imported: {}", stats.imported_memories);
+                if stats.skipped_duplicates > 0 {
+                    println!("Skipped duplicates: {}", stats.skipped_duplicates);
+                }
+                if stats.skipped_corrupted > 0 {
+                    println!("Skipped corrupted: {}", stats.skipped_corrupted);
+                }
+                println!("Projects: {}", stats.projects.len());
+                for project in &stats.projects {
+                    println!("  - {}", project);
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 
@@ -452,5 +553,60 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"results\""));
         assert!(json.contains("\"similarity\":0.95"));
+    }
+
+    #[test]
+    fn test_cli_parse_import_sqlite() {
+        let cli = Cli::parse_from(&["vipune", "import", "/path/to/db.sqlite"]);
+        matches!(
+            cli.command,
+            Commands::Import {
+                source,
+                dry_run: false,
+                format
+            } if source == "/path/to/db.sqlite" && format == "sqlite"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_import_dry_run() {
+        let cli = Cli::parse_from(&["vipune", "import", "/path/to/db.sqlite", "--dry-run"]);
+        matches!(
+            cli.command,
+            Commands::Import {
+                source,
+                dry_run: true,
+                ..
+            } if source == "/path/to/db.sqlite"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_import_json() {
+        let cli = Cli::parse_from(&["vipune", "import", "export.json", "--format", "json"]);
+        matches!(
+            cli.command,
+            Commands::Import {
+                source,
+                dry_run: false,
+                format
+            } if source == "export.json" && format == "json"
+        );
+    }
+
+    #[test]
+    fn test_serialize_import_response() {
+        let response = ImportResponse {
+            status: "imported".to_string(),
+            total_memories: 100,
+            imported: 95,
+            skipped_duplicates: 4,
+            skipped_corrupted: 1,
+            projects: 2,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"imported\":95"));
+        assert!(json.contains("\"skipped_duplicates\":4"));
+        assert!(json.contains("\"projects\":2"));
     }
 }

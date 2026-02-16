@@ -8,7 +8,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub struct Database {
-    pub conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 pub struct Memory {

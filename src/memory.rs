@@ -42,9 +42,9 @@ pub struct ConflictMemory {
 /// for ONNX tensor allocations.
 #[allow(dead_code)] // Dead code justified: public API for CLI integration
 pub struct MemoryStore {
-    db: Database,
-    embedder: EmbeddingEngine,
-    config: Config,
+    pub(crate) db: Database,
+    pub(crate) embedder: EmbeddingEngine,
+    pub(crate) config: Config,
 }
 
 impl MemoryStore {
