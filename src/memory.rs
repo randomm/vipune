@@ -148,31 +148,12 @@ impl MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sqlite::Error as SqliteError;
-
-    /// Test utilities for creating test MemoryStore instances without loading real models.
-    ///
-    /// Uses a mock embedding engine that generates predictable test embeddings
-    /// based on text content, avoiding model download overhead.
-    struct MockEmbeddingEngine {
-        value: f32,
-    }
-
-    impl MockEmbeddingEngine {
-        fn new(value: f32) -> Self {
-            MockEmbeddingEngine { value }
-        }
-
-        fn embed(&mut self, _text: &str) -> Result<Vec<f32>, Error> {
-            Ok(vec![self.value; 384])
-        }
-    }
 
     #[test]
     fn test_memory_store_new() {
         use tempfile::TempDir;
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
+        let _path = dir.path().join("test.db");
 
         // Note: This test is ignored because it requires downloading the model
         // Use `cargo test -- --ignored` to run it
