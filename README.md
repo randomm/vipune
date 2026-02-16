@@ -1,8 +1,15 @@
-# vipune
+# vipune `/ˈʋi.pu.ne/`
+
+```
+██╗   ██╗██╗██████╗ ██╗   ██╗███╗   ██╗███████╗
+██║   ██║██║██╔══██╗██║   ██║████╗  ██║██╔════╝
+██║   ██║██║██████╔╝██║   ██║██╔██╗ ██║█████╗  
+╚██╗ ██╔╝██║██╔═══╝ ██║   ██║██║╚██╗██║██╔══╝  
+ ╚████╔╝ ██║██║     ╚██████╔╝██║ ╚████║███████╗
+  ╚═══╝  ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═══╝╚══════╝
+```
 
 A minimal memory layer for AI agents.
-
-**Pronunciation: vee-poo-neh** (Finnish: Vipunen, minus the last syllable)
 
 In Finnish mythology, Antero Vipunen is a giant who sleeps underground, holding all the world's knowledge and ancient songs. vipune is your agent's sleeping giant — a local knowledge store that remembers everything.
 
