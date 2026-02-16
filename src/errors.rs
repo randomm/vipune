@@ -55,4 +55,26 @@ pub enum Error {
     /// ndarray shape error.
     #[error("Array shape error: {0}")]
     Shape(String),
+
+    /// Memory not found.
+    #[error("Memory not found: {0}")]
+    NotFound(String),
+
+    /// SQLite module error (from sqlite::Error).
+    #[error("SQLite module error: {0}")]
+    SqliteModule(String),
+}
+
+impl From<crate::sqlite::Error> for Error {
+    fn from(err: crate::sqlite::Error) -> Self {
+        // Convert specific SQLite errors to NotFound when applicable
+        let err_str = err.to_string();
+        if err_str.contains("No memory found with id:") {
+            if let Some(id) = err_str.split("No memory found with id: ").nth(1) {
+                return Error::NotFound(id.trim().to_string());
+            }
+            return Error::NotFound("unknown".to_string());
+        }
+        Error::SqliteModule(err_str)
+    }
 }
