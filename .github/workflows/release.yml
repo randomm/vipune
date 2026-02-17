@@ -9,14 +9,33 @@ permissions:
   contents: write
 
 jobs:
-  build-macos-arm64:
-    name: Build macOS ARM64
-    runs-on: macos-14  # Apple Silicon runner
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            name: macos-arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            name: macos-intel
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            name: linux-arm64
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Validate tag format
         run: |
+          echo "Tag: ${GITHUB_REF_NAME}"
           if ! [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
             echo "Error: Tag ${GITHUB_REF_NAME} does not follow semver format (vx.y.z or vx.y.z-prerelease)"
             exit 1
@@ -25,33 +44,88 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Note about Linux ARM64 cross-compilation risk
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          echo "Note: Linux ARM64 requires ONNX Runtime prebuilt binaries for aarch64-unknown-linux-gnu"
+          echo "The ort crate at version 2.0.0-rc.10 may not have prebuilt binaries for this platform"
+          echo "If this build fails, it's because ort cannot download the required .so/.dylib/.dll"
+          echo "Test this workflow with a test tag (e.g., v0.0.1-test) before the first real release"
 
       - name: Build release
-        run: cargo build --release --target aarch64-apple-darwin
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Run tests
-        run: cargo test --release --target aarch64-apple-darwin
+      - name: Run tests (ARM64 cross-compile skip)
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        run: cargo test --release --target ${{ matrix.target }}
 
-      - name: Verify binary exists and is executable
+      - name: Verify binary exists
         run: |
-          if [ ! -f "target/aarch64-apple-darwin/release/vipune" ]; then
-            echo "Error: Binary vipune not found at target/aarch64-apple-darwin/release/vipune"
+          if [ ! -f "target/${{ matrix.target }}/release/vipune" ]; then
+            echo "Error: Binary vipune not found at target/${{ matrix.target }}/release/vipune"
             exit 1
           fi
-          if [ ! -x "target/aarch64-apple-darwin/release/vipune" ]; then
-            echo "Error: Binary vipune is not executable"
+
+      - name: Verify binary architecture
+        run: |
+          file target/${{ matrix.target }}/release/vipune
+
+      - name: Validate binary size
+        run: |
+          if [ "$(uname)" = "Darwin" ]; then
+            size=$(stat -f%z target/${{ matrix.target }}/release/vipune)
+          else
+            size=$(stat -c%s target/${{ matrix.target }}/release/vipune)
+          fi
+          if [ "$size" -lt 100 ]; then
+            echo "Error: Binary too small ($size bytes), likely corrupted"
             exit 1
           fi
+          echo "Binary size: $size bytes"
 
       - name: Package
         run: |
-          cd target/aarch64-apple-darwin/release
-          tar czf ../../../vipune-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz vipune
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../vipune-${{ matrix.target }}.tar.gz vipune
           cd ../../..
-          # macOS uses shasum, use sha256sum for Linux builds when extending support
-          shasum -a 256 vipune-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz > vipune-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz.sha256
+          if [ "$(uname)" = "Darwin" ]; then
+            shasum -a 256 vipune-${{ matrix.target }}.tar.gz > vipune-${{ matrix.target }}.tar.gz.sha256
+          else
+            sha256sum vipune-${{ matrix.target }}.tar.gz > vipune-${{ matrix.target }}.tar.gz.sha256
+          fi
+          if [ ! -s "vipune-${{ matrix.target }}.tar.gz.sha256" ]; then
+            echo "Error: Checksum file is empty or missing"
+            exit 1
+          fi
+          if ! grep -qE "^[0-9a-f]{64}" vipune-${{ matrix.target }}.tar.gz.sha256; then
+            echo "Error: Checksum file does not contain valid SHA256 hash"
+            exit 1
+          fi
 
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vipune-${{ matrix.target }}
+          path: |
+            vipune-${{ matrix.target }}.tar.gz
+            vipune-${{ matrix.target }}.tar.gz.sha256
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
       - name: Detect prerelease
         id: prerelease_check
         run: |
@@ -61,12 +135,46 @@ jobs:
             echo "is_prerelease=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          files: |
-            vipune-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
-            vipune-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz.sha256
-          fail_on_unmatched_files: true
-          prerelease: ${{ steps.prerelease_check.outputs.is_prerelease }}
-          generate_release_notes: true
+          path: artifacts
+
+      - name: List downloaded artifacts
+        run: |
+          echo "=== Downloaded files ==="
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \)
+
+      - name: Validate all artifacts exist
+        run: |
+          expected_targz=$(find artifacts -name "*.tar.gz" | wc -l)
+          expected_sha256=$(find artifacts -name "*.sha256" | wc -l)
+          echo "Found $expected_targz tar.gz files and $expected_sha256 sha256 files"
+          if [ "$expected_targz" -ne 4 ] || [ "$expected_sha256" -ne 4 ]; then
+            echo "Error: Expected 4 tar.gz and 4 sha256 files, found $expected_targz tar.gz and $expected_sha256 sha256"
+            exit 1
+          fi
+
+      - name: Create GitHub Release with auto-generated notes
+        run: |
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \) | sort > artifact-files.txt
+          echo "Attaching files to release:"
+          cat artifact-files.txt
+          FILES=$(cat artifact-files.txt | sed 's/^/--attach /' | tr '\n' ' ')
+          if [ -z "$FILES" ]; then
+            echo "Error: No artifacts to attach"
+            exit 1
+          fi
+          while IFS= read -r file; do
+            if [ ! -f "$file" ]; then
+              echo "Error: Artifact file not found: $file"
+              exit 1
+            fi
+          done < artifact-files.txt
+          gh release create "${GITHUB_REF_NAME}" \
+            --prerelease ${{ steps.prerelease_check.outputs.is_prerelease }} \
+            --generate-notes \
+            $FILES
+          rm artifact-files.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
