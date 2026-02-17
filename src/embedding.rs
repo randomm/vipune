@@ -21,6 +21,7 @@ pub const EMBEDDING_DIMS: usize = 384;
 pub struct EmbeddingEngine {
     session: Session,
     tokenizer: Tokenizer,
+    requires_token_type_ids: bool,
 }
 
 impl EmbeddingEngine {
@@ -53,7 +54,17 @@ impl EmbeddingEngine {
             .with_optimization_level(GraphOptimizationLevel::Level1)?
             .commit_from_file(&model_path)?;
 
-        Ok(EmbeddingEngine { session, tokenizer })
+        // Check if model requires token_type_ids input
+        let requires_token_type_ids = session
+            .inputs
+            .iter()
+            .any(|input| input.name == "token_type_ids");
+
+        Ok(EmbeddingEngine {
+            session,
+            tokenizer,
+            requires_token_type_ids,
+        })
     }
 
     /// Generate embedding for a single text.
@@ -90,10 +101,22 @@ impl EmbeddingEngine {
         let input_ids_tensor = Tensor::from_array(([1usize, seq_len], input_ids_vec))?;
         let attention_mask_tensor = Tensor::from_array(([1usize, seq_len], attention_mask_vec))?;
 
-        let outputs = self.session.run(inputs![
-            "input_ids" => input_ids_tensor,
-            "attention_mask" => attention_mask_tensor
-        ])?;
+        // Only include token_type_ids if the model requires it
+        let outputs = if self.requires_token_type_ids {
+            let token_type_ids_vec: Vec<i64> = vec![0i64; seq_len]; // Single sentence, all zeros
+            let token_type_ids_tensor =
+                Tensor::from_array(([1usize, seq_len], token_type_ids_vec))?;
+            self.session.run(inputs![
+                "input_ids" => input_ids_tensor,
+                "attention_mask" => attention_mask_tensor,
+                "token_type_ids" => token_type_ids_tensor
+            ])?
+        } else {
+            self.session.run(inputs![
+                "input_ids" => input_ids_tensor,
+                "attention_mask" => attention_mask_tensor
+            ])?
+        };
 
         let last_hidden_state = outputs
             .get("last_hidden_state")
@@ -194,9 +217,19 @@ mod tests {
 
     #[ignore]
     #[test]
+    fn test_integration_whitespace_only() {
+        let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
+        let embedding = engine.embed("   \t\n  ").expect("embed whitespace text");
+
+        // Whitespace-only input should produce a valid embedding
+        assert_eq!(embedding.len(), 384);
+        assert!(embedding.iter().all(|&x| x.is_finite()));
+    }
+
+    #[ignore]
+    #[test]
     fn test_integration_simple_text() {
-        let mut engine =
-            EmbeddingEngine::new("sentence-transformers/bge-small-en-v1.5").expect("load model");
+        let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
         let embedding = engine.embed("hello world").expect("embed text");
 
         assert_eq!(embedding.len(), 384);
@@ -213,8 +246,7 @@ mod tests {
     #[ignore]
     #[test]
     fn test_integration_empty_string() {
-        let mut engine =
-            EmbeddingEngine::new("sentence-transformers/bge-small-en-v1.5").expect("load model");
+        let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
         let embedding = engine.embed("").expect("embed empty text");
 
         assert_eq!(embedding.len(), 384);
@@ -224,8 +256,7 @@ mod tests {
     #[ignore]
     #[test]
     fn test_integration_long_text_truncation() {
-        let mut engine =
-            EmbeddingEngine::new("sentence-transformers/bge-small-en-v1.5").expect("load model");
+        let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
 
         let long_text = "This is a sentence. ".repeat(100);
         let embedding = engine.embed(&long_text).expect("embed long text");

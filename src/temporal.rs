@@ -6,10 +6,12 @@ use chrono::{DateTime, Utc};
 use chrono::Duration; // Only import in tests
 
 /// Decay function type.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DecayFunction {
     /// Exponential decay: e^(-λ × age_seconds)
     Exponential,
+    /// Linear decay: 1 - λ × age_days (scaled to [0,1])
+    Linear,
 }
 
 /// Configuration for temporal decay calculation.
@@ -17,7 +19,15 @@ pub enum DecayFunction {
 pub struct DecayConfig {
     /// Decay function to use.
     pub function: DecayFunction,
-    /// Decay rate (default: 1e-6, ~50% at 8 days).
+    /// Decay rate.
+    ///
+    /// **IMPORTANT:** Lambda ranges are function-specific:
+    /// - Exponential: λ in per-second (1e-10 to 1e-3, default: 1e-6 ~50% decay at 8 days)
+    /// - Linear: λ in per-day (1e-6 to 100.0)
+    ///
+    /// **WARNING:** If you change `function` from Exponential to Linear, you **must** also adjust `lambda`.
+    /// Default lambda=1e-6 is appropriate for Exponential but produces negligible decay for Linear.
+    /// For Linear decay, use lambda≥0.01 (1% decay per day minimum).
     pub lambda: f64,
     /// Grace period with no decay in days (default: 0.0).
     pub offset_days: f64,
@@ -30,6 +40,16 @@ impl Default for DecayConfig {
             lambda: 1e-6,
             offset_days: 0.0,
         }
+    }
+}
+
+impl DecayFunction {
+    /// Get all available decay functions.
+    ///
+    /// Returns an iterator over all decay function variants.
+    #[allow(dead_code)] // Used for validation and CLI completion
+    pub fn all() -> impl Iterator<Item = Self> {
+        [DecayFunction::Exponential, DecayFunction::Linear].into_iter()
     }
 }
 
@@ -51,9 +71,39 @@ impl DecayConfig {
                 self.lambda
             ));
         }
-        if self.lambda > 1e-3 {
-            return Err(format!("Lambda {} is too large (max: 1e-3)", self.lambda));
+
+        // Function-specific validation
+        match self.function {
+            DecayFunction::Exponential => {
+                if self.lambda > 1e-3 {
+                    return Err(format!(
+                        "Exponential decay lambda {} is too large (max: 1e-3)",
+                        self.lambda
+                    ));
+                }
+                if self.lambda < 1e-10 {
+                    return Err(format!(
+                        "Exponential decay lambda {} is too small (min: 1e-10)",
+                        self.lambda
+                    ));
+                }
+            }
+            DecayFunction::Linear => {
+                if self.lambda > 100.0 {
+                    return Err(format!(
+                        "Linear decay lambda {} is too large (max: 100.0)",
+                        self.lambda
+                    ));
+                }
+                if self.lambda < 1e-6 {
+                    return Err(format!(
+                        "Linear decay lambda {} is too small to be useful (min: 1e-6)",
+                        self.lambda
+                    ));
+                }
+            }
         }
+
         if self.offset_days < 0.0 {
             return Err(format!(
                 "Invalid offset_days: {} (must be >= 0)",
@@ -66,7 +116,16 @@ impl DecayConfig {
     /// Calculate decay factor for a memory created at `created_at`.
     ///
     /// Returns 1.0 for brand new, approaches 0.0 for very old.
+    ///
+    /// # Panics
+    ///
+    /// Panics if configuration is invalid. Use `validate()` to check before calling.
     pub fn calculate_decay(&self, created_at: &DateTime<Utc>) -> f64 {
+        // Defensive validation - catch configs constructed without validation
+        if let Err(e) = self.validate() {
+            panic!("Invalid decay configuration: {}", e);
+        }
+
         let now = Utc::now();
         let age = now.signed_duration_since(*created_at);
         let age_seconds = age.num_seconds().max(0) as f64;
@@ -91,6 +150,10 @@ impl DecayConfig {
                     return 1.0;
                 }
                 exponent.exp()
+            }
+            DecayFunction::Linear => {
+                let decay_rate = self.lambda * effective_age / 86400.0;
+                (1.0 - decay_rate).clamp(0.0, 1.0)
             }
         }
     }
@@ -283,6 +346,14 @@ mod tests {
         assert!(matches!(config.function, DecayFunction::Exponential));
         assert_eq!(config.lambda, 1e-6);
         assert_eq!(config.offset_days, 0.0);
+
+        // Also verify Linear variant exists
+        let linear_config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1.0 / 86400.0,
+            offset_days: 0.0,
+        };
+        assert!(matches!(linear_config.function, DecayFunction::Linear));
     }
 
     #[test]
@@ -365,5 +436,222 @@ mod tests {
             result
         );
         assert!(result > 0.3, "But still has some similarity contribution");
+    }
+
+    #[test]
+    fn test_linear_decay_brand_new() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1.0 / 86400.0, //decay 1 per day
+            offset_days: 0.0,
+        };
+        let now = Utc::now();
+        let decay = config.calculate_decay(&now);
+        assert!(
+            (decay - 1.0).abs() < 1e-10,
+            "Brand new should have decay ≈ 1.0"
+        );
+    }
+
+    #[test]
+    fn test_linear_decay_half_day() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1.0, // decay 1 per day
+            offset_days: 0.0,
+        };
+        let created_at = Utc::now() - Duration::seconds(43200); // 12 hours
+        let decay = config.calculate_decay(&created_at);
+        // 12 hours = 0.5 days, decay = 1 - 1 * 0.5 = 0.5
+        assert!(
+            (decay - 0.5).abs() < 1e-10,
+            "12 hours should have 50% decay, got {}",
+            decay
+        );
+    }
+
+    #[test]
+    fn test_linear_decay_full_day() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1.0, // decay 1 per day
+            offset_days: 0.0,
+        };
+        let created_at = Utc::now() - Duration::days(1);
+        let decay = config.calculate_decay(&created_at);
+        // 1 day, decay = 1 - 1 * 1 = 0
+        assert!(
+            (decay - 0.0).abs() < 1e-10,
+            "1 day should have 0% decay, got {}",
+            decay
+        );
+    }
+
+    #[test]
+    fn test_linear_decay_clamped() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1.0, // decay 1 per day
+            offset_days: 0.0,
+        };
+        let created_at = Utc::now() - Duration::days(5);
+        let decay = config.calculate_decay(&created_at);
+        // 5 days, decay would be 1 - 5 = -4, but clamped to 0
+        assert!(
+            (decay - 0.0).abs() < 1e-10,
+            "5 days should be clamped to 0 decay, got {}",
+            decay
+        );
+    }
+
+    #[test]
+    fn test_linear_decay_with_offset() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1.0,      // decay 1 per day
+            offset_days: 7.0, // no decay for 7 days
+        };
+        let created_at = Utc::now() - Duration::days(3);
+        let decay = config.calculate_decay(&created_at);
+        // Within offset period, should be 1.0
+        assert!(
+            (decay - 1.0).abs() < 1e-10,
+            "Within offset should have no decay"
+        );
+    }
+
+    #[test]
+    fn test_linear_decay_after_offset() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1.0, // decay 1 per day
+            offset_days: 7.0,
+        };
+        let created_at = Utc::now() - Duration::days(10); // 10 days total
+        let decay = config.calculate_decay(&created_at);
+        // 10 days - 7 days offset = 3 days effective age
+        // decay = 1 - 1 * 3 = -2, clamped to 0
+        assert!(
+            (decay - 0.0).abs() < 1e-10,
+            "After offset with excessive age should clamp to 0"
+        );
+    }
+
+    #[test]
+    fn test_decay_function_all() {
+        let functions: Vec<_> = DecayFunction::all().collect();
+        assert_eq!(functions.len(), 2);
+        assert!(functions.contains(&DecayFunction::Exponential));
+        assert!(functions.contains(&DecayFunction::Linear));
+    }
+
+    #[test]
+    fn test_linear_decay_validation_too_small_lambda() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1e-7, // Too small for Linear
+            offset_days: 0.0,
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too small to be useful"));
+    }
+
+    #[test]
+    fn test_linear_decay_validation_too_large_lambda() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 200.0, // Too large for Linear
+            offset_days: 0.0,
+        };
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("too large"));
+    }
+
+    #[test]
+    fn test_linear_decay_validation_valid_min() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1e-6, // Valid minimum
+            offset_days: 0.0,
+        };
+        let result = config.validate();
+        assert!(result.is_ok(), "Linear lambda 1e-6 should be valid");
+    }
+
+    #[test]
+    fn test_linear_decay_validation_valid_max() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 100.0, // Valid maximum
+            offset_days: 0.0,
+        };
+        let result = config.validate();
+        assert!(result.is_ok(), "Linear lambda 100.0 should be valid");
+    }
+
+    #[test]
+    fn test_linear_decay_actually_decays() {
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1.0, // 1 per day (reasonable value)
+            offset_days: 0.0,
+        };
+        let now = Utc::now();
+        let decay_now = config.calculate_decay(&now);
+        let decay_half_day = config.calculate_decay(&(now - Duration::seconds(43200)));
+        let decay_one_day = config.calculate_decay(&(now - Duration::days(1)));
+
+        assert!(
+            decay_now > decay_half_day,
+            "Linear decay should decrease over time"
+        );
+        assert!(
+            decay_half_day > decay_one_day,
+            "Linear decay should decrease over time"
+        );
+        assert!(
+            (decay_now - 1.0).abs() < 1e-10 && (decay_half_day - 0.5).abs() < 1e-1,
+            "Linear decay with lambda=1.0 should produce meaningful values"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid decay configuration")]
+    fn test_defensive_validation_catches_invalid_linear_lambda() {
+        // Construct config directly without validation (should panic on calculate_decay)
+        let config = DecayConfig {
+            function: DecayFunction::Linear,
+            lambda: 1e-7, // Too small for Linear
+            offset_days: 0.0,
+        };
+        let now = Utc::now();
+        config.calculate_decay(&now); // Should panic
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid decay configuration")]
+    fn test_defensive_validation_catches_invalid_exponential_lambda() {
+        // Construct config directly without validation (should panic on calculate_decay)
+        let config = DecayConfig {
+            function: DecayFunction::Exponential,
+            lambda: 1e-2, // Too large for Exponential
+            offset_days: 0.0,
+        };
+        let now = Utc::now();
+        config.calculate_decay(&now); // Should panic
+    }
+
+    #[test]
+    #[should_panic(expected = "must be positive")]
+    fn test_defensive_validation_catches_negative_lambda() {
+        let config = DecayConfig {
+            function: DecayFunction::Exponential,
+            lambda: -1e-6,
+            offset_days: 0.0,
+        };
+        let now = Utc::now();
+        config.calculate_decay(&now); // Should panic
     }
 }

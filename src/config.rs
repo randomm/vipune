@@ -37,7 +37,7 @@ impl Default for Config {
 
         Self {
             database_path: data_dir.join("vipune/memories.db"),
-            embedding_model: "sentence-transformers/bge-small-en-v1.5".to_string(),
+            embedding_model: "BAAI/bge-small-en-v1.5".to_string(),
             model_cache: cache_dir.join("vipune/models"),
             similarity_threshold: 0.85,
             recency_weight: 0.3,
@@ -292,10 +292,7 @@ mod tests {
         let config = Config::default();
 
         assert!(config.database_path.ends_with("vipune/memories.db"));
-        assert_eq!(
-            config.embedding_model,
-            "sentence-transformers/bge-small-en-v1.5"
-        );
+        assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
         assert!(config.model_cache.ends_with("vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
         assert_eq!(config.recency_weight, 0.3);
@@ -309,10 +306,7 @@ mod tests {
         let config = Config::load().unwrap();
 
         assert!(config.database_path.ends_with("vipune/memories.db"));
-        assert_eq!(
-            config.embedding_model,
-            "sentence-transformers/bge-small-en-v1.5"
-        );
+        assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
         assert_eq!(config.similarity_threshold, 0.85);
     }
 
@@ -324,10 +318,7 @@ mod tests {
         let config = Config::load().unwrap();
 
         assert!(config.database_path.ends_with("vipune/memories.db"));
-        assert_eq!(
-            config.embedding_model,
-            "sentence-transformers/bge-small-en-v1.5"
-        );
+        assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
         assert!(config.model_cache.ends_with("vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
     }

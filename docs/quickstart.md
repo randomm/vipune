@@ -153,7 +153,7 @@ Create `~/.config/vipune/config.toml`:
 
 ```toml
 database_path = "~/.local/share/vipune/memories.db"
-embedding_model = "sentence-transformers/bge-small-en-v1.5"
+embedding_model = "BAAI/bge-small-en-v1.5"
 model_cache = "~/.cache/vipune/models"
 similarity_threshold = 0.85
 recency_weight = 0.3

@@ -261,7 +261,7 @@ fn insert_with_params(
     let id = Uuid::new_v4().to_string();
     let blob = vec_to_blob(embedding)?;
 
-    db.conn.execute(
+    db.conn().execute(
         r#"
         INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -378,7 +378,7 @@ mod tests {
             Path::new("/nonexistent/db.sqlite"),
             false,
             Path::new("/tmp/test.db"),
-            "sentence-transformers/bge-small-en-v1.5",
+            "BAAI/bge-small-en-v1.5",
             Config::default(),
         );
         assert!(matches!(result, Err(Error::FileNotFound(_))));
@@ -431,7 +431,7 @@ mod tests {
             &remory_db,
             true,
             &vipune_db,
-            "sentence-transformers/bge-small-en-v1.5",
+            "BAAI/bge-small-en-v1.5",
             Config::default(),
         )
         .unwrap();

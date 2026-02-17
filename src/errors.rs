@@ -52,6 +52,18 @@ pub enum Error {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    /// Invalid limit (for search operations).
+    #[error("Invalid limit: {0}")]
+    InvalidLimit(String),
+
+    /// Invalid timestamp in database record.
+    #[error("Invalid timestamp for memory {id}: {timestamp} ({error})")]
+    InvalidTimestamp {
+        id: String,
+        timestamp: String,
+        error: String,
+    },
+
     /// ndarray shape error.
     #[error("Array shape error: {0}")]
     Shape(String),

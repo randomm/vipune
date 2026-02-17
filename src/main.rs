@@ -8,6 +8,7 @@ mod memory;
 mod memory_types;
 mod output;
 mod project;
+mod rrf;
 mod sqlite;
 mod temporal;
 
@@ -65,6 +66,10 @@ enum Commands {
         /// Recency weight for search results (0.0 to 1.0)
         #[arg(long)]
         recency: Option<f64>,
+
+        /// Use hybrid search (semantic + BM25 with RRF fusion)
+        #[arg(long)]
+        hybrid: bool,
     },
     Get {
         /// Memory ID
@@ -188,10 +193,15 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
             query,
             limit,
             recency,
+            hybrid,
         } => {
             let recency_weight = recency.unwrap_or(config.recency_weight);
             temporal::validate_recency_weight(recency_weight)?;
-            let memories = store.search(&project_id, query, *limit, recency_weight)?;
+            let memories = if *hybrid {
+                store.search_hybrid(&project_id, query, *limit, recency_weight)?
+            } else {
+                store.search(&project_id, query, *limit, recency_weight)?
+            };
             if cli.json {
                 let results: Vec<SearchResultItem> = memories
                     .into_iter()
@@ -505,6 +515,46 @@ mod tests {
             Commands::Search {
                 query,
                 recency: None,
+                ..
+            } if query == "query"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_search_with_hybrid() {
+        let cli = Cli::parse_from(&["vipune", "search", "query", "--hybrid"]);
+        matches!(
+            cli.command,
+            Commands::Search {
+                query,
+                hybrid: true,
+                ..
+            } if query == "query"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_search_without_hybrid() {
+        let cli = Cli::parse_from(&["vipune", "search", "query"]);
+        matches!(
+            cli.command,
+            Commands::Search {
+                query,
+                hybrid: false,
+                ..
+            } if query == "query"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_search_with_hybrid_and_recency() {
+        let cli = Cli::parse_from(&["vipune", "search", "query", "--hybrid", "--recency", "0.5"]);
+        matches!(
+            cli.command,
+            Commands::Search {
+                query,
+                hybrid: true,
+                recency: Some(0.5),
                 ..
             } if query == "query"
         );

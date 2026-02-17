@@ -1,12 +1,19 @@
 # vipune `/ˈʋi.pu.ne/`
 
 ```
-██╗   ██╗██╗██████╗ ██╗   ██╗███╗   ██╗███████╗
-██║   ██║██║██╔══██╗██║   ██║████╗  ██║██╔════╝
-██║   ██║██║██████╔╝██║   ██║██╔██╗ ██║█████╗  
-╚██╗ ██╔╝██║██╔═══╝ ██║   ██║██║╚██╗██║██╔══╝  
- ╚████╔╝ ██║██║     ╚██████╔╝██║ ╚████║███████╗
-  ╚═══╝  ╚═╝╚═╝      ╚═════╝ ╚═╝  ╚═══╝╚══════╝
+
+              ███                                          
+             ░░░                                           
+ █████ █████ ████  ████████  █████ ████ ████████    ██████ 
+░░███ ░░███ ░░███ ░░███░░███░░███ ░███ ░░███░░███  ███░░███
+ ░███  ░███  ░███  ░███ ░███ ░███ ░███  ░███ ░███ ░███████ 
+ ░░███ ███   ░███  ░███ ░███ ░███ ░███  ░███ ░███ ░███░░░  
+  ░░█████    █████ ░███████  ░░████████ ████ █████░░██████ 
+   ░░░░░    ░░░░░  ░███░░░    ░░░░░░░░ ░░░░ ░░░░░  ░░░░░░  
+                   ░███                                    
+                   █████                                   
+                  ░░░░░                                    
+
 ```
 
 A minimal memory layer for AI agents.
@@ -150,7 +157,7 @@ vipune works with zero configuration. All paths use platform-standard XDG direct
 
 **Environment variables (override defaults):**
 - `VIPUNE_DATABASE_PATH` - SQLite database location
-- `VIPUNE_EMBEDDING_MODEL` - HuggingFace model ID (default: `sentence-transformers/bge-small-en-v1.5`)
+- `VIPUNE_EMBEDDING_MODEL` - HuggingFace model ID (default: `BAAI/bge-small-en-v1.5`)
 - `VIPUNE_MODEL_CACHE` - Model download cache directory
 - `VIPUNE_PROJECT` - Project identifier (overrides auto-detection)
 - `VIPUNE_SIMILARITY_THRESHOLD` - Conflict detection threshold, 0.0-1.0 (default: `0.85`)
@@ -159,7 +166,7 @@ vipune works with zero configuration. All paths use platform-standard XDG direct
 **Config file (`~/.config/vipune/config.toml`):**
 ```toml
 database_path = "/custom/path/memories.db"
-embedding_model = "sentence-transformers/bge-small-en-v1.5"
+embedding_model = "BAAI/bge-small-en-v1.5"
 model_cache = "~/.cache/vipune/models"
 similarity_threshold = 0.85
 recency_weight = 0.3
