@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             name: macos-arm64
           - os: macos-13
@@ -25,9 +25,11 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             name: linux-x86_64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            name: linux-arm64
+          # Temporarily disabled for v0.1.0: Linux ARM64 cross-compilation requires OpenSSL support
+          # Re-enable in v0.2.0 after investigating ort crate aarch64-unknown-linux-gnu support
+          # - os: ubuntu-latest
+          #   target: aarch64-unknown-linux-gnu
+          #   name: linux-arm64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,26 +48,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-
-      - name: Note about Linux ARM64 cross-compilation risk
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          echo "Note: Linux ARM64 requires ONNX Runtime prebuilt binaries for aarch64-unknown-linux-gnu"
-          echo "The ort crate at version 2.0.0-rc.10 may not have prebuilt binaries for this platform"
-          echo "If this build fails, it's because ort cannot download the required .so/.dylib/.dll"
-          echo "Test this workflow with a test tag (e.g., v0.0.1-test) before the first real release"
-
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Run tests (ARM64 cross-compile skip)
-        if: matrix.target != 'aarch64-unknown-linux-gnu'
+      - name: Run tests
         run: cargo test --release --target ${{ matrix.target }}
 
       - name: Verify binary exists
@@ -78,6 +64,31 @@ jobs:
       - name: Verify binary architecture
         run: |
           file target/${{ matrix.target }}/release/vipune
+
+      - name: Validate library dependencies
+        run: |
+          if [ "$(uname)" = "Darwin" ]; then
+            echo "=== macOS binary dependencies ==="
+            otool -L target/${{ matrix.target }}/release/vipune || true
+            echo "=== Checking for problematic dependencies ==="
+            # Check that no unexpected absolute paths are linked
+            if otool -L target/${{ matrix.target }}/release/vipune | grep -qE "(/usr/local|/opt/homebrew)"; then
+              echo "Error: Binary has hardcoded Homebrew paths - not portable"
+              echo "Binary will fail on systems without Homebrew at these locations"
+              otool -L target/${{ matrix.target }}/release/vipune
+              exit 1
+            fi
+          else
+            echo "=== Linux binary dependencies ==="
+            ldd target/${{ matrix.target }}/release/vipune || true
+            echo "=== Checking for missing dependencies ==="
+            # Check for missing library dependencies
+            if ldd target/${{ matrix.target }}/release/vipune 2>&1 | grep -q "not found"; then
+              echo "Error: Binary has missing library dependencies"
+              ldd target/${{ matrix.target }}/release/vipune
+              exit 1
+            fi
+          fi
 
       - name: Validate binary size
         run: |
@@ -147,13 +158,35 @@ jobs:
 
       - name: Validate all artifacts exist
         run: |
-          expected_targz=$(find artifacts -name "*.tar.gz" | wc -l)
-          expected_sha256=$(find artifacts -name "*.sha256" | wc -l)
-          echo "Found $expected_targz tar.gz files and $expected_sha256 sha256 files"
-          if [ "$expected_targz" -ne 4 ] || [ "$expected_sha256" -ne 4 ]; then
-            echo "Error: Expected 4 tar.gz and 4 sha256 files, found $expected_targz tar.gz and $expected_sha256 sha256"
-            exit 1
-          fi
+          echo "=== Validating expected artifacts ==="
+          
+          # Define expected artifacts
+          expected_artifacts=(
+            "vipune-aarch64-apple-darwin.tar.gz"
+            "vipune-aarch64-apple-darwin.tar.gz.sha256"
+            "vipune-x86_64-apple-darwin.tar.gz"
+            "vipune-x86_64-apple-darwin.tar.gz.sha256"
+            "vipune-x86_64-unknown-linux-gnu.tar.gz"
+            "vipune-x86_64-unknown-linux-gnu.tar.gz.sha256"
+          )
+          
+          # Check each expected artifact exists
+          for artifact in "${expected_artifacts[@]}"; do
+            if ! find artifacts -name "$artifact" | grep -q .; then
+              echo "Error: Missing artifact: $artifact"
+              echo "=== Available artifacts ==="
+              find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \)
+              exit 1
+            fi
+            echo "✅ Found: $artifact"
+          done
+          
+          # Count total artifacts
+          total_targz=$(find artifacts -name "*.tar.gz" | wc -l)
+          total_sha256=$(find artifacts -name "*.sha256" | wc -l)
+          echo "=== Summary ==="
+          echo "Found $total_targz tar.gz and $total_sha256 sha256 files (expected 3 each)"
+          echo "All expected artifacts validated successfully"
 
       - name: Create GitHub Release with auto-generated notes
         run: |

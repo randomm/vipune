@@ -74,12 +74,7 @@ tar xzf vipune-x86_64-unknown-linux-gnu.tar.gz
 sudo mv vipune /usr/local/bin/
 ```
 
-**Linux ARM64**
-```bash
-curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-unknown-linux-gnu.tar.gz
-tar xzf vipune-aarch64-unknown-linux-gnu.tar.gz
-sudo mv vipune /usr/local/bin/
-```
+**Note:** Linux ARM64 support is planned for v0.2.0. For now, build from source on ARM64 systems.
 
 ### Build from source
 
