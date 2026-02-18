@@ -56,7 +56,7 @@ jobs:
         run: |
           echo "=== macOS binary dependencies ==="
           file_output=$(file target/aarch64-apple-darwin/release/vipune)
-          if [[ ! "$file_output" =~ "Mach-O 64-bit executable" ]]; then
+          if [[ ! "$file_output" =~ Mach-O 64-bit.*executable ]]; then
             echo "Error: vipune is not an executable: $file_output"
             exit 1
           fi
@@ -154,7 +154,7 @@ jobs:
         run: |
           echo "=== Linux binary verification ==="
           file_output=$(file target/x86_64-unknown-linux-gnu/release/vipune)
-          if [[ ! "$file_output" =~ "ELF 64-bit LSB executable" ]]; then
+          if [[ ! "$file_output" =~ ELF 64-bit LSB.*executable ]]; then
             echo "Error: vipune is not an executable: $file_output"
             exit 1
           fi
