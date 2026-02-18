@@ -9,24 +9,9 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubicloud-standard-4
-            target: aarch64-apple-darwin
-            name: macos-arm64
-          - os: ubicloud-standard-4
-            target: x86_64-unknown-linux-gnu
-            name: linux-x86_64
-          # Temporarily disabled for v0.1.0: Linux ARM64 cross-compilation requires OpenSSL support
-          # Re-enable in v0.2.0 after investigating ort crate aarch64-unknown-linux-gnu support
-          # - os: ubuntu-latest
-          #   target: aarch64-unknown-linux-gnu
-          #   name: linux-arm64
+  build-macos:
+    name: Build macOS ARM64
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,101 +20,205 @@ jobs:
       - name: Validate tag format
         run: |
           echo "Tag: ${GITHUB_REF_NAME}"
-          if ! [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+          if ! [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[-0-9A-Za-z]+(\.[-0-9A-Za-z]+)*)?$ ]]; then
             echo "Error: Tag ${GITHUB_REF_NAME} does not follow semver format (vx.y.z or vx.y.z-prerelease)"
+            exit 1
+          fi
+          # Reject build metadata in version tags (not allowed in release tags)
+          if [[ "${GITHUB_REF_NAME}" == *"+"* ]]; then
+            echo "Error: Tag ${GITHUB_REF_NAME} contains build metadata (+) which is not allowed in version tags"
             exit 1
           fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
 
-      - name: Build release
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build macOS ARM64
+        run: cargo build --release --target aarch64-apple-darwin
 
       - name: Run tests
-        run: cargo test --release --target ${{ matrix.target }}
+        run: cargo test --release --target aarch64-apple-darwin
 
       - name: Verify binary exists
         run: |
-          if [ ! -f "target/${{ matrix.target }}/release/vipune" ]; then
-            echo "Error: Binary vipune not found at target/${{ matrix.target }}/release/vipune"
+          if [ ! -f "target/aarch64-apple-darwin/release/vipune" ]; then
+            echo "Error: Binary vipune not found at target/aarch64-apple-darwin/release/vipune"
             exit 1
           fi
 
       - name: Verify binary architecture
         run: |
-          file target/${{ matrix.target }}/release/vipune
+          file target/aarch64-apple-darwin/release/vipune
 
-      - name: Validate library dependencies
+      - name: Validate macOS library dependencies
         run: |
-          if [ "$(uname)" = "Darwin" ]; then
-            echo "=== macOS binary dependencies ==="
-            otool -L target/${{ matrix.target }}/release/vipune || true
-            echo "=== Checking for problematic dependencies ==="
-            # Check that no unexpected absolute paths are linked
-            if otool -L target/${{ matrix.target }}/release/vipune | grep -qE "(/usr/local|/opt/homebrew)"; then
-              echo "Error: Binary has hardcoded Homebrew paths - not portable"
-              echo "Binary will fail on systems without Homebrew at these locations"
-              otool -L target/${{ matrix.target }}/release/vipune
-              exit 1
-            fi
-          else
-            echo "=== Linux binary dependencies ==="
-            ldd target/${{ matrix.target }}/release/vipune || true
-            echo "=== Checking for missing dependencies ==="
-            # Check for missing library dependencies
-            if ldd target/${{ matrix.target }}/release/vipune 2>&1 | grep -q "not found"; then
-              echo "Error: Binary has missing library dependencies"
-              ldd target/${{ matrix.target }}/release/vipune
-              exit 1
-            fi
+          echo "=== macOS binary dependencies ==="
+          file_output=$(file target/aarch64-apple-darwin/release/vipune)
+          if [[ ! "$file_output" =~ "Mach-O 64-bit executable" ]]; then
+            echo "Error: vipune is not an executable: $file_output"
+            exit 1
+          fi
+          otool -L target/aarch64-apple-darwin/release/vipune
+          echo "=== Checking for problematic dependencies ==="
+          # Check that no unexpected absolute paths are linked
+          if otool -L target/aarch64-apple-darwin/release/vipune | grep -qE "(/usr/local|/opt/homebrew)"; then
+            echo "Error: Binary has hardcoded Homebrew paths - not portable"
+            echo "Binary will fail on systems without Homebrew at these locations"
+            otool -L target/aarch64-apple-darwin/release/vipune
+            exit 1
           fi
 
       - name: Validate binary size
         run: |
-          if [ "$(uname)" = "Darwin" ]; then
-            size=$(stat -f%z target/${{ matrix.target }}/release/vipune)
-          else
-            size=$(stat -c%s target/${{ matrix.target }}/release/vipune)
-          fi
-          if [ "$size" -lt 100 ]; then
-            echo "Error: Binary too small ($size bytes), likely corrupted"
+          size=$(stat -f%z target/aarch64-apple-darwin/release/vipune)
+          if [ "$size" -lt 1000000 ]; then
+            echo "Error: Binary too small ($size bytes), expected >1MB for Rust release"
             exit 1
           fi
           echo "Binary size: $size bytes"
 
-      - name: Package
+      - name: Package macOS
         run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../vipune-${{ matrix.target }}.tar.gz vipune
+          cd target/aarch64-apple-darwin/release
+          tar czf ../../../vipune-aarch64-apple-darwin.tar.gz vipune
           cd ../../..
-          if [ "$(uname)" = "Darwin" ]; then
-            shasum -a 256 vipune-${{ matrix.target }}.tar.gz > vipune-${{ matrix.target }}.tar.gz.sha256
-          else
-            sha256sum vipune-${{ matrix.target }}.tar.gz > vipune-${{ matrix.target }}.tar.gz.sha256
-          fi
-          if [ ! -s "vipune-${{ matrix.target }}.tar.gz.sha256" ]; then
+          shasum -a 256 vipune-aarch64-apple-darwin.tar.gz > vipune-aarch64-apple-darwin.tar.gz.sha256
+          if [ ! -s "vipune-aarch64-apple-darwin.tar.gz.sha256" ]; then
             echo "Error: Checksum file is empty or missing"
             exit 1
           fi
-          if ! grep -qE "^[0-9a-f]{64}" vipune-${{ matrix.target }}.tar.gz.sha256; then
+          if ! grep -qE "^[0-9a-f]{64}" vipune-aarch64-apple-darwin.tar.gz.sha256; then
             echo "Error: Checksum file does not contain valid SHA256 hash"
             exit 1
           fi
+          # Validate checksum format (hash + two spaces + filename)
+          if ! grep -qE "^[0-9a-f]{64}  " vipune-aarch64-apple-darwin.tar.gz.sha256; then
+            echo "Error: Checksum file has invalid format (expected: HASH  filename)"
+            exit 1
+          fi
 
-      - name: Upload artifacts
+      - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: vipune-${{ matrix.target }}
+          name: macos-arm64
           path: |
-            vipune-${{ matrix.target }}.tar.gz
-            vipune-${{ matrix.target }}.tar.gz.sha256
+            vipune-aarch64-apple-darwin.tar.gz
+            vipune-aarch64-apple-darwin.tar.gz.sha256
+
+  build-linux:
+    name: Build Linux x86_64
+    runs-on: ubicloud-standard-4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag format
+        run: |
+          echo "Tag: ${GITHUB_REF_NAME}"
+          if ! [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[-0-9A-Za-z]+(\.[-0-9A-Za-z]+)*)?$ ]]; then
+            echo "Error: Tag ${GITHUB_REF_NAME} does not follow semver format (vx.y.z or vx.y.z-prerelease)"
+            exit 1
+          fi
+          # Reject build metadata in version tags (not allowed in release tags)
+          if [[ "${GITHUB_REF_NAME}" == *"+"* ]]; then
+            echo "Error: Tag ${GITHUB_REF_NAME} contains build metadata (+) which is not allowed in version tags"
+            exit 1
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build Linux x86_64
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Run tests
+        run: cargo test --release --target x86_64-unknown-linux-gnu
+
+      - name: Verify binary exists
+        run: |
+          if [ ! -f "target/x86_64-unknown-linux-gnu/release/vipune" ]; then
+            echo "Error: Binary vipune not found at target/x86_64-unknown-linux-gnu/release/vipune"
+            exit 1
+          fi
+
+      - name: Verify binary architecture
+        run: |
+          file target/x86_64-unknown-linux-gnu/release/vipune
+
+      - name: Validate Linux library dependencies
+        run: |
+          echo "=== Linux binary verification ==="
+          file_output=$(file target/x86_64-unknown-linux-gnu/release/vipune)
+          if [[ ! "$file_output" =~ "ELF 64-bit LSB executable" ]]; then
+            echo "Error: vipune is not an executable: $file_output"
+            exit 1
+          fi
+          echo "=== Linux binary dependencies ==="
+          if ! ldd target/x86_64-unknown-linux-gnu/release/vipune 2>&1; then
+            echo "Warning: ldd failed, may be static binary or corrupted"
+            # Continue but flag as warning
+          fi
+          echo "=== Checking for missing dependencies ==="
+          # Check for missing library dependencies
+          if ldd target/x86_64-unknown-linux-gnu/release/vipune 2>&1 | grep -q "not found"; then
+            echo "Error: Binary has missing library dependencies"
+            ldd target/x86_64-unknown-linux-gnu/release/vipune
+            exit 1
+          fi
+          echo "=== Checking for non-standard library paths ==="
+          # Check that no non-standard paths are linked
+          if ldd target/x86_64-unknown-linux-gnu/release/vipune | grep -qE "(/opt|/usr/local)"; then
+            echo "Error: Binary has non-standard library paths - not portable"
+            echo "Binary will fail on systems without these paths"
+            ldd target/x86_64-unknown-linux-gnu/release/vipune
+            exit 1
+          fi
+
+      - name: Validate binary size
+        run: |
+          size=$(stat -c%s target/x86_64-unknown-linux-gnu/release/vipune)
+          if [ "$size" -lt 1000000 ]; then
+            echo "Error: Binary too small ($size bytes), expected >1MB for Rust release"
+            exit 1
+          fi
+          echo "Binary size: $size bytes"
+
+      - name: Package Linux
+        run: |
+          cd target/x86_64-unknown-linux-gnu/release
+          tar czf ../../../vipune-x86_64-unknown-linux-gnu.tar.gz vipune
+          cd ../../..
+          sha256sum vipune-x86_64-unknown-linux-gnu.tar.gz > vipune-x86_64-unknown-linux-gnu.tar.gz.sha256
+          if [ ! -s "vipune-x86_64-unknown-linux-gnu.tar.gz.sha256" ]; then
+            echo "Error: Checksum file is empty or missing"
+            exit 1
+          fi
+          if ! grep -qE "^[0-9a-f]{64}" vipune-x86_64-unknown-linux-gnu.tar.gz.sha256; then
+            echo "Error: Checksum file does not contain valid SHA256 hash"
+            exit 1
+          fi
+          # Validate checksum format (hash + two spaces + filename)
+          if ! grep -qE "^[0-9a-f]{64}  " vipune-x86_64-unknown-linux-gnu.tar.gz.sha256; then
+            echo "Error: Checksum file has invalid format (expected: HASH  filename)"
+            exit 1
+          fi
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: |
+            vipune-x86_64-unknown-linux-gnu.tar.gz
+            vipune-x86_64-unknown-linux-gnu.tar.gz.sha256
 
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build-macos, build-linux]
     runs-on: ubicloud-standard-4
     permissions:
       contents: write
@@ -137,7 +226,7 @@ jobs:
       - name: Detect prerelease
         id: prerelease_check
         run: |
-          if [[ "${GITHUB_REF_NAME}" =~ - ]]; then
+          if [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z-] ]]; then
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
           else
             echo "is_prerelease=false" >> $GITHUB_OUTPUT
@@ -148,15 +237,42 @@ jobs:
         with:
           path: artifacts
 
-      - name: List downloaded artifacts
+      - name: Validate artifact count
         run: |
-          echo "=== Downloaded files ==="
-          find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \)
+          expected_files=4
+          actual_files=$(find artifacts \( -name "*.tar.gz" -o -name "*.sha256" \) | wc -l)
+          echo "Expected $expected_files artifacts, found $actual_files"
+          if [ "$actual_files" -ne "$expected_files" ]; then
+            echo "Error: Expected $expected_files artifacts, found $actual_files"
+            echo "=== Downloaded files ==="
+            find artifacts \( -name "*.tar.gz" -o -name "*.sha256" \)
+            exit 1
+          fi
+          echo "✅ All expected artifacts downloaded"
+
+      - name: Detect artifact name collisions
+        run: |
+          echo "=== Checking for filename collisions ==="
+          find artifacts \( -name "*.tar.gz" -o -name "*.sha256" \) -printf "%f\n" | sort | uniq -d > duplicates.txt
+          if [ -s duplicates.txt ]; then
+            echo "Error: Found duplicate artifact names (collision risk):"
+            cat duplicates.txt
+            exit 1
+          fi
+          echo "✅ No filename collisions detected"
+          rm -f duplicates.txt
+
+      - name: Move artifacts to root for release
+        run: |
+          find artifacts -name "*.tar.gz" -exec cp {} . \;
+          find artifacts -name "*.sha256" -exec cp {} . \;
+          echo "=== Files ready for release ==="
+          ls -la *.tar.gz *.sha256
 
       - name: Validate all artifacts exist
         run: |
           echo "=== Validating expected artifacts ==="
-          
+
           # Define expected artifacts
           expected_artifacts=(
             "vipune-aarch64-apple-darwin.tar.gz"
@@ -164,45 +280,80 @@ jobs:
             "vipune-x86_64-unknown-linux-gnu.tar.gz"
             "vipune-x86_64-unknown-linux-gnu.tar.gz.sha256"
           )
-          
+
           # Check each expected artifact exists
           for artifact in "${expected_artifacts[@]}"; do
-            if ! find artifacts -name "$artifact" | grep -q .; then
+            if [ ! -f "$artifact" ]; then
               echo "Error: Missing artifact: $artifact"
               echo "=== Available artifacts ==="
-              find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \)
+              ls -la *.tar.gz *.sha256
               exit 1
             fi
             echo "✅ Found: $artifact"
           done
-          
+
           # Count total artifacts
-          total_targz=$(find artifacts -name "*.tar.gz" | wc -l)
-          total_sha256=$(find artifacts -name "*.sha256" | wc -l)
+          total_targz=$(ls -1 *.tar.gz 2>/dev/null | wc -l)
+          total_sha256=$(ls -1 *.sha256 2>/dev/null | wc -l)
           echo "=== Summary ==="
           echo "Found $total_targz tar.gz and $total_sha256 sha256 files (expected 2 each)"
           echo "All expected artifacts validated successfully"
 
-      - name: Create GitHub Release with auto-generated notes
+      - name: Verify checksums
         run: |
-          find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \) | sort > artifact-files.txt
-          echo "Attaching files to release:"
-          cat artifact-files.txt
-          FILES=$(cat artifact-files.txt | sed 's/^/--attach /' | tr '\n' ' ')
-          if [ -z "$FILES" ]; then
-            echo "Error: No artifacts to attach"
-            exit 1
-          fi
-          while IFS= read -r file; do
-            if [ ! -f "$file" ]; then
-              echo "Error: Artifact file not found: $file"
+          for sha_file in *.sha256; do
+            # Validate filename is safe (no path traversal)
+            if [[ "$sha_file" =~ ^[./] ]] || [[ "$sha_file" =~ \.\/ ]] || [[ "$sha_file" =~ \.\.\/ ]]; then
+              echo "Error: Unsafe filename detected: $sha_file"
               exit 1
             fi
-          done < artifact-files.txt
+            tar_file="${sha_file%.sha256}"
+            if [ ! -f "$tar_file" ]; then
+              echo "Error: Checksum file exists but tarball missing: $sha_file"
+              exit 1
+            fi
+            # Extract the checksum line for our specific tarball (first match only)
+            checksum_line=$(grep -P "^\S+\s+$(basename "$tar_file")$" "$sha_file" | head -n 1)
+            if [ -z "$checksum_line" ]; then
+              echo "Error: Checksum file doesn't contain hash for tarball: $tar_file"
+              exit 1
+            fi
+            # Create a temporary checksum file with just our entry (secure mktemp)
+            tmp_file=$(mktemp) || exit 1
+            echo "$checksum_line" > "$tmp_file"
+            echo "Verifying checksum for $tar_file"
+            if ! sha256sum -c "$tmp_file" > /dev/null 2>&1; then
+              echo "Error: Checksum verification failed for $tar_file"
+              rm -f "$tmp_file"
+              exit 1
+            fi
+            rm -f "$tmp_file"
+            echo "✅ Checksum valid for $tar_file"
+          done
+
+      - name: Create GitHub Release with auto-generated notes
+        run: |
+          echo "=== Validating files for release ==="
+          # Define expected artifacts
+          expected_artifacts=(
+            "vipune-aarch64-apple-darwin.tar.gz"
+            "vipune-aarch64-apple-darwin.tar.gz.sha256"
+            "vipune-x86_64-unknown-linux-gnu.tar.gz"
+            "vipune-x86_64-unknown-linux-gnu.tar.gz.sha256"
+          )
+          for artifact in "${expected_artifacts[@]}"; do
+            if [ ! -f "$artifact" ]; then
+              echo "Error: Artifact not found: $artifact"
+              exit 1
+            fi
+            echo "✅ Found: $artifact"
+          done
           gh release create "${GITHUB_REF_NAME}" \
             --prerelease ${{ steps.prerelease_check.outputs.is_prerelease }} \
             --generate-notes \
-            $FILES
-          rm artifact-files.txt
+            --attach vipune-aarch64-apple-darwin.tar.gz \
+            --attach vipune-aarch64-apple-darwin.tar.gz.sha256 \
+            --attach vipune-x86_64-unknown-linux-gnu.tar.gz \
+            --attach vipune-x86_64-unknown-linux-gnu.tar.gz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
