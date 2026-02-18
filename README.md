@@ -60,13 +60,6 @@ mv vipune ~/.local/bin/
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-**macOS Intel (x86_64)**
-```bash
-curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-x86_64-apple-darwin.tar.gz
-tar xzf vipune-x86_64-apple-darwin.tar.gz
-sudo mv vipune /usr/local/bin/
-```
-
 **Linux x86_64**
 ```bash
 curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-x86_64-unknown-linux-gnu.tar.gz
