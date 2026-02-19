@@ -35,18 +35,18 @@ This will:
 
 ```bash
 # Map UUIDs to git-URL project IDs
-sqlite3 "$HOME/Library/Application Support/vipune/memories.db" "UPDATE memories SET project_id = 'randomm/fiona' WHERE project_id = 'ed11c8dc-2a40-5593-87a0-d66eb55a1190';"
-sqlite3 "$HOME/Library/Application Support/vipune/memories.db" "UPDATE memories SET project_id = 'randomm/fiona' WHERE project_id = 'a9e91972-3b42-53dc-83e5-994e91edbbc7';"
-sqlite3 "$HOME/Library/Application Support/vipune/memories.db" "UPDATE memories SET project_id = 'randomm/fiona' WHERE project_id = '812cf80f-5cc1-5305-b984-69db1563a22b';"
+sqlite3 "$HOME/.vipune/memories.db" "UPDATE memories SET project_id = 'randomm/fiona' WHERE project_id = 'ed11c8dc-2a40-5593-87a0-d66eb55a1190';"
+sqlite3 "$HOME/.vipune/memories.db" "UPDATE memories SET project_id = 'randomm/fiona' WHERE project_id = 'a9e91972-3b42-53dc-83e5-994e91edbbc7';"
+sqlite3 "$HOME/.vipune/memories.db" "UPDATE memories SET project_id = 'randomm/fiona' WHERE project_id = '812cf80f-5cc1-5305-b984-69db1563a22b';"
 
-sqlite3 "$HOME/Library/Application Support/vipune/memories.db" "UPDATE memories SET project_id = 'randomm/vipune' WHERE project_id = 'c0c3f980-d339-5d2b-8506-8b912a462e88';"
+sqlite3 "$HOME/.vipune/memories.db" "UPDATE memories SET project_id = 'randomm/vipune' WHERE project_id = 'c0c3f980-d339-5d2b-8506-8b912a462e88';"
 
-sqlite3 "$HOME/Library/Application Support/vipune/memories.db" "UPDATE memories SET project_id = 'randomm/remory' WHERE project_id = 'dfe10a20-0016-5357-95dd-b9fe842e403a';"
+sqlite3 "$HOME/.vipune/memories.db" "UPDATE memories SET project_id = 'randomm/remory' WHERE project_id = 'dfe10a20-0016-5357-95dd-b9fe842e403a';"
 
-sqlite3 "$HOME/Library/Application Support/vipune/memories.db" "UPDATE memories SET project_id = 'randomm/oh-my-singularity' WHERE project_id = 'e381fac2-3bde-5de9-8b1f-1bbc6b75f791';"
+sqlite3 "$HOME/.vipune/memories.db" "UPDATE memories SET project_id = 'randomm/oh-my-singularity' WHERE project_id = 'e381fac2-3bde-5de9-8b1f-1bbc6b75f791';"
 
-sqlite3 "$HOME/Library/Application Support/vipune/memories.db" "UPDATE memories SET project_id = 'randomm/opencode' WHERE project_id = 'e18fc021-6f0b-53ca-bbe4-f29071108c89';"
-sqlite3 "$HOME/Library/Application Support/vipune/memories.db" "UPDATE memories SET project_id = 'randomm/opencode' WHERE project_id = 'b76438ab-9949-5822-a40e-8d565abfa71e';"
+sqlite3 "$HOME/.vipune/memories.db" "UPDATE memories SET project_id = 'randomm/opencode' WHERE project_id = 'e18fc021-6f0b-53ca-bbe4-f29071108c89';"
+sqlite3 "$HOME/.vipune/memories.db" "UPDATE memories SET project_id = 'randomm/opencode' WHERE project_id = 'b76438ab-9949-5822-a40e-8d565abfa71e';"
 ```
 
 ### Step 3: Verify

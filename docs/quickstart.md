@@ -15,7 +15,7 @@ cargo build --release
 cargo install --path .
 ```
 
-**First run:** vipune will automatically download the ONNX model (~400MB) to `~/.cache/vipune/models/`. This happens once and takes 30-60 seconds depending on your connection.
+**First run:** vipune will automatically download the ONNX model (~400MB) to `~/.vipune/models/`. This happens once and takes 30-60 seconds depending on your connection.
 
 ## Step 2: Add Your First Memory
 
@@ -98,8 +98,8 @@ vipune works with zero configuration. Customize only if needed.
 ### Check Current Database Path
 
 ```bash
-# See where memories are stored (default: ~/.local/share/vipune/memories.db)
-ls ~/.local/share/vipune/memories.db
+# See where memories are stored (default: ~/.vipune/memories.db)
+ls ~/.vipune/memories.db
 ```
 
 ### Override Database Path
@@ -152,9 +152,9 @@ export VIPUNE_RECENCY_WEIGHT="0.5"
 Create `~/.config/vipune/config.toml`:
 
 ```toml
-database_path = "~/.local/share/vipune/memories.db"
+database_path = "~/.vipune/memories.db"
 embedding_model = "BAAI/bge-small-en-v1.5"
-model_cache = "~/.cache/vipune/models"
+model_cache = "~/.vipune/models"
 similarity_threshold = 0.85
 recency_weight = 0.3
 ```
@@ -290,7 +290,7 @@ If the first run fails to download the model:
 
 ```bash
 # Clear cache and retry
-rm -rf ~/.cache/vipune/models/
+rm -rf ~/.vipune/models/
 vipune add "Test"  # Will re-download
 ```
 

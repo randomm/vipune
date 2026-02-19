@@ -103,7 +103,11 @@ rm ~/.local/bin/vipune
 cargo uninstall vipune
 
 # Clear data (optional)
-rm -rf ~/.local/share/vipune ~/.cache/vipune ~/.config/vipune
+rm -rf ~/.vipune ~/.config/vipune
+
+# If migrating from vipune < 0.2, also remove legacy paths:
+rm -rf ~/.local/share/vipune ~/.cache/vipune            # Linux
+rm -rf ~/Library/Application\ Support/vipune             # macOS
 ```
 
 ## Quick Start
@@ -136,11 +140,11 @@ vipune add "Auth uses JWT tokens" --metadata '{"topic": "authentication"}'
 
 ## Configuration
 
-vipune works with zero configuration. All paths use platform-standard XDG directories:
+vipune works with zero configuration. All paths use the user's home directory:
 
 **Default paths:**
-- Database: `~/.local/share/vipune/memories.db`
-- Model cache: `~/.cache/vipune/models/`
+- Database: `~/.vipune/memories.db`
+- Model cache: `~/.vipune/models/`
 - Config file: `~/.config/vipune/config.toml`
 
 **Environment variables (override defaults):**
@@ -153,12 +157,30 @@ vipune works with zero configuration. All paths use platform-standard XDG direct
 
 **Config file (`~/.config/vipune/config.toml`):**
 ```toml
-database_path = "/custom/path/memories.db"
+database_path = "~/.vipune/memories.db"
 embedding_model = "BAAI/bge-small-en-v1.5"
-model_cache = "~/.cache/vipune/models"
+model_cache = "~/.vipune/models"
 similarity_threshold = 0.85
 recency_weight = 0.3
 ```
+
+## Migration from Earlier Versions
+
+If you're upgrading from vipune < v0.2, your existing memories are automatically detected in the old locations. No action required — vipune will continue using your existing database.
+
+To migrate to the new `~/.vipune/` paths manually:
+
+```bash
+# Linux users (if memories are in XDG directories)
+mkdir -p ~/.vipune
+mv ~/.local/share/vipune/memories.db ~/.vipune/memories.db 2>/dev/null || true
+
+# macOS users (if memories are in Application Support)
+mkdir -p ~/.vipune
+mv ~/Library/Application\ Support/vipune/memories.db ~/.vipune/memories.db 2>/dev/null || true
+```
+
+After migration, you can remove old directories to save space (see [Uninstall](#uninstall) section).
 
 ## Agent Integration
 

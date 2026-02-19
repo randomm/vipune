@@ -31,14 +31,18 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let data_dir = dirs::data_local_dir().unwrap_or_else(|| home.join(".local/share"));
-        let cache_dir = dirs::cache_dir().unwrap_or_else(|| home.join(".cache"));
+        // Use home directory with sensible fallback for systems without HOME
+        let home = dirs::home_dir().unwrap_or_else(|| {
+            std::env::var("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("."))
+        });
+        let vipune_dir = home.join(".vipune");
 
         Self {
-            database_path: data_dir.join("vipune/memories.db"),
+            database_path: vipune_dir.join("memories.db"),
             embedding_model: "BAAI/bge-small-en-v1.5".to_string(),
-            model_cache: cache_dir.join("vipune/models"),
+            model_cache: vipune_dir.join("models"),
             similarity_threshold: 0.85,
             recency_weight: 0.3,
         }
@@ -46,6 +50,44 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Find old database path for backward compatibility (pre-v0.2 migrations).
+    fn find_legacy_database_path() -> Option<PathBuf> {
+        let home = dirs::home_dir()?;
+
+        // Check macOS Application Support
+        let macos_path = home.join("Library/Application Support/vipune/memories.db");
+        if macos_path.exists() {
+            return Some(macos_path);
+        }
+
+        // Check Linux XDG data directory
+        let linux_path = home.join(".local/share/vipune/memories.db");
+        if linux_path.exists() {
+            return Some(linux_path);
+        }
+
+        None
+    }
+
+    /// Find old model cache path for backward compatibility (pre-v0.2 migrations).
+    fn find_legacy_model_cache_path() -> Option<PathBuf> {
+        let home = dirs::home_dir()?;
+
+        // Check macOS Caches directory
+        let macos_cache = home.join("Library/Caches/vipune/models");
+        if macos_cache.exists() {
+            return Some(macos_cache);
+        }
+
+        // Check Linux XDG cache directory
+        let linux_cache = home.join(".cache/vipune/models");
+        if linux_cache.exists() {
+            return Some(linux_cache);
+        }
+
+        None
+    }
+
     fn apply_env_overrides(&mut self) -> Result<(), Error> {
         if let Ok(val) = std::env::var("VIPUNE_DATABASE_PATH") {
             if val.trim().is_empty() {
@@ -109,8 +151,7 @@ impl Config {
     #[allow(dead_code)] // Dead code justified: public API for CLI integration (issue #5)
     pub fn load() -> Result<Self, Error> {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let data_local = dirs::data_local_dir().unwrap_or_else(|| home.join(".local/share"));
-        let config_dir = dirs::config_dir().unwrap_or_else(|| data_local.join(".config"));
+        let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
 
         let config_path = config_dir.join("vipune/config.toml");
 
@@ -138,6 +179,20 @@ impl Config {
         };
 
         let mut config = Config::default();
+
+        // Check for legacy database path (pre-v0.2) if new default doesn't exist
+        if !config.database_path.exists() {
+            if let Some(legacy_path) = Self::find_legacy_database_path() {
+                config.database_path = legacy_path;
+            }
+        }
+
+        // Check for legacy model cache path (pre-v0.2) if new default doesn't exist
+        if !config.model_cache.exists() {
+            if let Some(legacy_cache) = Self::find_legacy_model_cache_path() {
+                config.model_cache = legacy_cache;
+            }
+        }
 
         if let Some(file) = file_config {
             config.merge_from_file(file);
@@ -291,9 +346,9 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
 
-        assert!(config.database_path.ends_with("vipune/memories.db"));
+        assert!(config.database_path.ends_with(".vipune/memories.db"));
         assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
-        assert!(config.model_cache.ends_with("vipune/models"));
+        assert!(config.model_cache.ends_with(".vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
         assert_eq!(config.recency_weight, 0.3);
     }
@@ -305,7 +360,16 @@ mod tests {
 
         let config = Config::load().unwrap();
 
-        assert!(config.database_path.ends_with("vipune/memories.db"));
+        // Config should use new default path, or legacy path if it exists (backward compat)
+        assert!(
+            config.database_path.ends_with(".vipune/memories.db")
+                || config
+                    .database_path
+                    .ends_with("Application Support/vipune/memories.db")
+                || config
+                    .database_path
+                    .ends_with(".local/share/vipune/memories.db")
+        );
         assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
         assert_eq!(config.similarity_threshold, 0.85);
     }
@@ -317,9 +381,23 @@ mod tests {
 
         let config = Config::load().unwrap();
 
-        assert!(config.database_path.ends_with("vipune/memories.db"));
+        // Config should use new default path, or legacy path if it exists (backward compat)
+        assert!(
+            config.database_path.ends_with(".vipune/memories.db")
+                || config
+                    .database_path
+                    .ends_with("Application Support/vipune/memories.db")
+                || config
+                    .database_path
+                    .ends_with(".local/share/vipune/memories.db")
+        );
         assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
-        assert!(config.model_cache.ends_with("vipune/models"));
+        // Model cache should use new default path, or legacy path if it exists (backward compat)
+        assert!(
+            config.model_cache.ends_with(".vipune/models")
+                || config.model_cache.ends_with("Caches/vipune/models")
+                || config.model_cache.ends_with(".cache/vipune/models")
+        );
         assert_eq!(config.similarity_threshold, 0.85);
     }
 
