@@ -216,9 +216,124 @@ jobs:
             vipune-x86_64-unknown-linux-gnu.tar.gz
             vipune-x86_64-unknown-linux-gnu.tar.gz.sha256
 
+  build-linux-arm64:
+    name: Build Linux ARM64
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag format
+        run: |
+          echo "Tag: ${GITHUB_REF_NAME}"
+          if ! [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[-0-9A-Za-z]+(\.[-0-9A-Za-z]+)*)?$ ]]; then
+            echo "Error: Tag ${GITHUB_REF_NAME} does not follow semver format (vx.y.z or vx.y.z-prerelease)"
+            exit 1
+          fi
+          # Reject build metadata in version tags (not allowed in release tags)
+          if [[ "${GITHUB_REF_NAME}" == *"+"* ]]; then
+            echo "Error: Tag ${GITHUB_REF_NAME} contains build metadata (+) which is not allowed in version tags"
+            exit 1
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Build Linux ARM64
+        run: cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Run tests
+        run: cargo test --release --target aarch64-unknown-linux-gnu
+
+      - name: Verify binary exists
+        run: |
+          if [ ! -f "target/aarch64-unknown-linux-gnu/release/vipune" ]; then
+            echo "Error: Binary vipune not found at target/aarch64-unknown-linux-gnu/release/vipune"
+            exit 1
+          fi
+
+      - name: Verify binary architecture
+        run: |
+          file target/aarch64-unknown-linux-gnu/release/vipune
+
+      - name: Validate Linux library dependencies
+        run: |
+          echo "=== Linux ARM64 binary verification ==="
+          file_output=$(file target/aarch64-unknown-linux-gnu/release/vipune)
+          if [[ "$file_output" != *"ELF 64-bit"*executable* ]]; then
+            echo "Error: vipune is not an executable: $file_output"
+            exit 1
+          fi
+          # Verify this is actually an ARM64 binary, not x86_64
+          if ! ( echo "$file_output" | grep -qE "aarch64|arm64" ); then
+            echo "Error: vipune is not an ARM64 executable: $file_output"
+            echo "Binary appears to be wrong architecture (expected aarch64/arm64)"
+            exit 1
+          fi
+          echo "=== Linux binary dependencies ==="
+          if ! ldd target/aarch64-unknown-linux-gnu/release/vipune 2>&1; then
+            echo "Warning: ldd failed, may be static binary or corrupted"
+            # Continue but flag as warning
+          fi
+          echo "=== Checking for missing dependencies ==="
+          # Check for missing library dependencies
+          if ldd target/aarch64-unknown-linux-gnu/release/vipune 2>&1 | grep -q "not found"; then
+            echo "Error: Binary has missing library dependencies"
+            ldd target/aarch64-unknown-linux-gnu/release/vipune
+            exit 1
+          fi
+          echo "=== Checking for non-standard library paths ==="
+          # Check that no non-standard paths are linked
+          if ldd target/aarch64-unknown-linux-gnu/release/vipune | grep -qE "(/opt|/usr/local)"; then
+            echo "Error: Binary has non-standard library paths - not portable"
+            echo "Binary will fail on systems without these paths"
+            ldd target/aarch64-unknown-linux-gnu/release/vipune
+            exit 1
+          fi
+
+      - name: Validate binary size
+        run: |
+          size=$(stat -c%s target/aarch64-unknown-linux-gnu/release/vipune)
+          if [ "$size" -lt 1000000 ]; then
+            echo "Error: Binary too small ($size bytes), expected >1MB for Rust release"
+            exit 1
+          fi
+          echo "Binary size: $size bytes"
+
+      - name: Package Linux ARM64
+        run: |
+          cd target/aarch64-unknown-linux-gnu/release
+          tar czf ../../../vipune-aarch64-unknown-linux-gnu.tar.gz vipune
+          cd ../../..
+          sha256sum vipune-aarch64-unknown-linux-gnu.tar.gz > vipune-aarch64-unknown-linux-gnu.tar.gz.sha256
+          if [ ! -s "vipune-aarch64-unknown-linux-gnu.tar.gz.sha256" ]; then
+            echo "Error: Checksum file is empty or missing"
+            exit 1
+          fi
+          if ! grep -qE "^[0-9a-f]{64}" vipune-aarch64-unknown-linux-gnu.tar.gz.sha256; then
+            echo "Error: Checksum file does not contain valid SHA256 hash"
+            exit 1
+          fi
+          # Validate checksum format (hash + two spaces + filename)
+          if ! grep -qE "^[0-9a-f]{64}  " vipune-aarch64-unknown-linux-gnu.tar.gz.sha256; then
+            echo "Error: Checksum file has invalid format (expected: HASH  filename)"
+            exit 1
+          fi
+
+      - name: Upload Linux ARM64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: |
+            vipune-aarch64-unknown-linux-gnu.tar.gz
+            vipune-aarch64-unknown-linux-gnu.tar.gz.sha256
+
   release:
     name: Create GitHub Release
-    needs: [build-macos, build-linux]
+    needs: [build-macos, build-linux, build-linux-arm64]
     runs-on: ubicloud-standard-4
     permissions:
       contents: write
@@ -226,7 +341,7 @@ jobs:
       - name: Detect prerelease
         id: prerelease_check
         run: |
-          if [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z-] ]]; then
+          if [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[-0-9A-Za-z]+(\.[-0-9A-Za-z]+)*) ]]; then
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
           else
             echo "is_prerelease=false" >> $GITHUB_OUTPUT
@@ -239,7 +354,7 @@ jobs:
 
       - name: Validate artifact count
         run: |
-          expected_files=4
+          expected_files=6
           actual_files=$(find artifacts \( -name "*.tar.gz" -o -name "*.sha256" \) | wc -l)
           echo "Expected $expected_files artifacts, found $actual_files"
           if [ "$actual_files" -ne "$expected_files" ]; then
@@ -279,6 +394,8 @@ jobs:
             "vipune-aarch64-apple-darwin.tar.gz.sha256"
             "vipune-x86_64-unknown-linux-gnu.tar.gz"
             "vipune-x86_64-unknown-linux-gnu.tar.gz.sha256"
+            "vipune-aarch64-unknown-linux-gnu.tar.gz"
+            "vipune-aarch64-unknown-linux-gnu.tar.gz.sha256"
           )
 
           # Check each expected artifact exists
@@ -296,7 +413,7 @@ jobs:
           total_targz=$(ls -1 *.tar.gz 2>/dev/null | wc -l)
           total_sha256=$(ls -1 *.sha256 2>/dev/null | wc -l)
           echo "=== Summary ==="
-          echo "Found $total_targz tar.gz and $total_sha256 sha256 files (expected 2 each)"
+          echo "Found $total_targz tar.gz and $total_sha256 sha256 files (expected 3 each)"
           echo "All expected artifacts validated successfully"
 
       - name: Verify checksums
@@ -340,6 +457,8 @@ jobs:
             "vipune-aarch64-apple-darwin.tar.gz.sha256"
             "vipune-x86_64-unknown-linux-gnu.tar.gz"
             "vipune-x86_64-unknown-linux-gnu.tar.gz.sha256"
+            "vipune-aarch64-unknown-linux-gnu.tar.gz"
+            "vipune-aarch64-unknown-linux-gnu.tar.gz.sha256"
           )
           for artifact in "${expected_artifacts[@]}"; do
             if [ ! -f "$artifact" ]; then
@@ -349,11 +468,14 @@ jobs:
             echo "✅ Found: $artifact"
           done
           gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
             --prerelease ${{ steps.prerelease_check.outputs.is_prerelease }} \
             --generate-notes \
-            --attach vipune-aarch64-apple-darwin.tar.gz \
-            --attach vipune-aarch64-apple-darwin.tar.gz.sha256 \
-            --attach vipune-x86_64-unknown-linux-gnu.tar.gz \
-            --attach vipune-x86_64-unknown-linux-gnu.tar.gz.sha256
+            vipune-aarch64-apple-darwin.tar.gz \
+            vipune-aarch64-apple-darwin.tar.gz.sha256 \
+            vipune-x86_64-unknown-linux-gnu.tar.gz \
+            vipune-x86_64-unknown-linux-gnu.tar.gz.sha256 \
+            vipune-aarch64-unknown-linux-gnu.tar.gz \
+            vipune-aarch64-unknown-linux-gnu.tar.gz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
