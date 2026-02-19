@@ -3,7 +3,7 @@
 use crate::config::Config;
 use crate::errors::Error;
 use crate::memory::MemoryStore;
-use crate::sqlite::Database;
+use crate::sqlite::{blob_to_vec, vec_to_blob, Database};
 use chrono::Utc;
 use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
@@ -70,7 +70,7 @@ pub fn import_from_sqlite(
 
     let mut stmt = src_conn.prepare(
         r#"
-        SELECT id, data, user_id, metadata, embedding, created_at, updated_at
+        SELECT id, content, project_id, user_id, metadata, embedding, created_at, updated_at
         FROM memories
         "#,
     )?;
@@ -81,79 +81,82 @@ pub fn import_from_sqlite(
             row.get::<_, String>(1)?,
             row.get::<_, Option<String>>(2)?,
             row.get::<_, Option<String>>(3)?,
-            row.get::<_, Option<Vec<u8>>>(4)?,
-            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<Vec<u8>>>(5)?,
             row.get::<_, Option<String>>(6)?,
+            row.get::<_, Option<String>>(7)?,
         ))
     })?;
 
-    let mut store = if !dry_run {
-        Some(MemoryStore::new(vipune_db, model_id, config)?)
-    } else {
-        None
-    };
+    // Create a single store instance for duplicate checking and import
+    // (used in both dry-run and normal modes)
+    let mut store = MemoryStore::new(vipune_db, model_id, config.clone())?;
 
     for row_result in rows {
-        let (id, data, user_id, metadata, embedding, created_at, updated_at) =
+        let (id, content, project_id, user_id, metadata, embedding, created_at, updated_at) =
             row_result.map_err(Error::SQLite)?;
 
         stats.total_memories += 1;
 
-        let project_id: String = user_id.unwrap_or_else(|| "default".to_string());
+        let project_id: String = project_id
+            .or(user_id)
+            .unwrap_or_else(|| "default".to_string());
         stats.projects.insert(project_id.clone());
 
+        // Check for duplicates in all modes (before actual import)
+        if is_duplicate(&mut store, &project_id, &content)? {
+            stats.skipped_duplicates += 1;
+            continue;
+        }
+
         if !dry_run {
-            if let Some(st) = store.as_mut() {
-                if is_duplicate(st, &project_id, &data)? {
-                    stats.skipped_duplicates += 1;
-                    continue;
-                }
+            // Provide fallback timestamps for nullable columns
+            let now = Utc::now().to_rfc3339();
+            let created = created_at.as_ref().unwrap_or(&now).clone();
+            let updated = updated_at.as_ref().unwrap_or(&now).clone();
 
-                let embedding_vec = match embedding {
-                    Some(blob) => match blob_to_vec(&blob) {
-                        Ok(vec) => vec,
-                        Err(_) => {
-                            eprintln!(
-                                "Warning: corrupted embedding for memory '{}', re-embedding",
-                                id.as_ref().unwrap_or(&"unknown".to_string())
-                            );
-                            st.embedder.embed(&data)?
-                        }
-                    },
-                    None => {
+            let embedding_vec = match embedding {
+                Some(blob) => match blob_to_vec(&blob) {
+                    Ok(vec) => vec,
+                    Err(e) => {
                         eprintln!(
-                            "Warning: missing embedding for memory '{}', re-embedding",
-                            id.as_ref().unwrap_or(&"unknown".to_string())
+                            "Warning: corrupted embedding for memory '{}': {} - re-embedding",
+                            id.as_ref().unwrap_or(&"unknown".to_string()),
+                            e
                         );
-                        st.embedder.embed(&data)?
+                        store.embedder.embed(&content)?
                     }
-                };
-
-                let now = Utc::now().to_rfc3339();
-                let created = created_at.as_ref().unwrap_or(&now).clone();
-                let updated = updated_at.as_ref().unwrap_or(&now).clone();
-
-                if let Err(e) = insert_with_params(
-                    &st.db,
-                    &project_id,
-                    &data,
-                    &embedding_vec,
-                    metadata.as_deref(),
-                    &created,
-                    &updated,
-                ) {
+                },
+                None => {
                     eprintln!(
-                        "Warning: failed to import memory '{}': {}",
-                        id.as_ref().unwrap_or(&"unknown".to_string()),
-                        e
+                        "Warning: missing embedding for memory '{}', re-embedding",
+                        id.as_ref().unwrap_or(&"unknown".to_string())
                     );
-                    stats.skipped_corrupted += 1;
-                    continue;
+                    store.embedder.embed(&content)?
                 }
+            };
 
-                stats.imported_memories += 1;
+            if let Err(e) = insert_with_params(
+                &store.db,
+                &project_id,
+                &content,
+                &embedding_vec,
+                metadata.as_deref(),
+                &created,
+                &updated,
+            ) {
+                eprintln!(
+                    "Warning: failed to import memory '{}': {}",
+                    id.as_ref().unwrap_or(&"unknown".to_string()),
+                    e
+                );
+                stats.skipped_corrupted += 1;
+                continue;
             }
+
+            stats.imported_memories += 1;
         } else {
+            // In dry-run mode, count what would have been imported (passed duplicate check)
             stats.imported_memories += 1;
         }
     }
@@ -272,81 +275,10 @@ fn insert_with_params(
     Ok(id)
 }
 
-fn blob_to_vec(blob: &[u8]) -> Result<Vec<f32>, Error> {
-    const EMBEDDING_DIMS: usize = 384;
-    const EMBEDDING_BLOB_SIZE: usize = EMBEDDING_DIMS * 4;
-
-    if blob.len() != EMBEDDING_BLOB_SIZE {
-        return Err(Error::SqliteModule(format!(
-            "Invalid embedding BLOB size: expected {} bytes, got {} bytes",
-            EMBEDDING_BLOB_SIZE,
-            blob.len()
-        )));
-    }
-
-    let mut vec = Vec::with_capacity(EMBEDDING_DIMS);
-    for chunk in blob.chunks_exact(4) {
-        let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        vec.push(val);
-    }
-    Ok(vec)
-}
-
-fn vec_to_blob(vec: &[f32]) -> Result<Vec<u8>, Error> {
-    const EMBEDDING_DIMS: usize = 384;
-
-    if vec.len() != EMBEDDING_DIMS {
-        return Err(Error::SqliteModule(format!(
-            "Invalid embedding dimensions: expected {} dimensions, got {} dimensions",
-            EMBEDDING_DIMS,
-            vec.len()
-        )));
-    }
-
-    Ok(vec.iter().flat_map(|&x| x.to_le_bytes()).collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    #[test]
-    fn test_blob_to_vec_valid() {
-        let mut blob = vec![0u8; 1536];
-        blob[0] = 0x00;
-        blob[1] = 0x00;
-        blob[2] = 0x80;
-        blob[3] = 0x3F;
-        let result = blob_to_vec(&blob);
-        assert!(result.is_ok());
-        let vec = result.unwrap();
-        assert_eq!(vec.len(), 384);
-        assert_eq!(vec[0], 1.0f32);
-    }
-
-    #[test]
-    fn test_blob_to_vec_invalid_size() {
-        let blob = vec![0u8; 100];
-        let result = blob_to_vec(&blob);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_vec_to_blob_valid() {
-        let vec = vec![0.5f32; 384];
-        let result = vec_to_blob(&vec);
-        assert!(result.is_ok());
-        let blob = result.unwrap();
-        assert_eq!(blob.len(), 1536);
-    }
-
-    #[test]
-    fn test_vec_to_blob_invalid_dimensions() {
-        let vec = vec![0.5f32; 100];
-        let result = vec_to_blob(&vec);
-        assert!(result.is_err());
-    }
 
     #[test]
     fn test_import_stats_default() {
@@ -393,39 +325,39 @@ mod tests {
         let conn = Connection::open(&remory_db).unwrap();
         conn.execute(
             r#"
-            CREATE TABLE memories (
-                id TEXT PRIMARY KEY,
-                data TEXT NOT NULL,
-                hash TEXT NOT NULL,
-                user_id TEXT,
-                metadata TEXT,
-                embedding BLOB,
-                created_at TEXT,
-                updated_at TEXT
-            )
-            "#,
+              CREATE TABLE memories (
+                  id TEXT PRIMARY KEY,
+                  content TEXT NOT NULL,
+                  project_id TEXT,
+                  user_id TEXT,
+                  metadata TEXT,
+                  embedding BLOB,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+              )
+              "#,
             [],
         )
         .unwrap();
 
         let embedding_blob = vec_to_blob(&vec![0.5f32; 384]).unwrap();
         conn.execute(
-            r#"
-            INSERT INTO memories (id, data, hash, user_id, metadata, embedding, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-            "#,
-            rusqlite::params![
-                "test-id-1",
-                "test content",
-                "hash1",
-                "test-project",
-                r#"{"key":"value"}"#,
-                embedding_blob,
-                "2024-01-01T00:00:00Z",
-                "2024-01-01T00:00:00Z"
-            ],
-        )
-        .unwrap();
+              r#"
+              INSERT INTO memories (id, content, project_id, user_id, metadata, embedding, created_at, updated_at)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+              "#,
+              rusqlite::params![
+                  "test-id-1",
+                  "test content",
+                  "test-project",
+                  None::<String>,
+                  r#"{"key":"value"}"#,
+                  embedding_blob,
+                  "2024-01-01T00:00:00Z",
+                  "2024-01-01T00:00:00Z"
+              ],
+          )
+          .unwrap();
 
         let stats = import_from_sqlite(
             &remory_db,
