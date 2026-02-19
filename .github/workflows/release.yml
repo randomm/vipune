@@ -467,9 +467,13 @@ jobs:
             fi
             echo "✅ Found: $artifact"
           done
+          PRERELEASE_FLAG=""
+          if [[ "${{ steps.prerelease_check.outputs.is_prerelease }}" == "true" ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
-            --prerelease ${{ steps.prerelease_check.outputs.is_prerelease }} \
+            $PRERELEASE_FLAG \
             --generate-notes \
             vipune-aarch64-apple-darwin.tar.gz \
             vipune-aarch64-apple-darwin.tar.gz.sha256 \
