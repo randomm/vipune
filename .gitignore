@@ -3,3 +3,8 @@
 *.swo
 .DS_Store
 .worktrees/
+__pycache__/
+_reference/
+*.db
+*.tar.gz
+*.sha256
