@@ -23,7 +23,7 @@ ort = { version = "=2.0.0-rc.10", features = ["ndarray"] }
 
 # HuggingFace tokenizers and model download
 tokenizers = "0.22.0"
-hf-hub = { version = "0.4.3", default-features = false, features = ["ureq"] }
+hf-hub = { version = "0.5.0", default-features = false, features = ["ureq"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
