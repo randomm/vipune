@@ -26,15 +26,15 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- Remove migration from remory section from README ([#37](https://github.com/randomm/randomm-vipune-dev/pull/37))
-- Add temporary remory-to-vipune migration guide ([#38](https://github.com/randomm/randomm-vipune-dev/pull/38))
+- Remove migration from remory section from README ([#37](https://github.com/randomm/vipune/pull/37))
+- Add temporary remory-to-vipune migration guide ([#38](https://github.com/randomm/vipune/pull/38))
 
 ### Miscellaneous
 
 - Initialize dev repo with configuration files
 - Add remory as reference submodule
 - Add .worktrees/ to .gitignore
-- Sync Cargo.toml version to v0.1.1 (already released) ([#49](https://github.com/randomm/randomm-vipune-dev/pull/49))
+- Sync Cargo.toml version to v0.1.1 (already released) ([#49](https://github.com/randomm/vipune/pull/49))
 
 
 ### Features

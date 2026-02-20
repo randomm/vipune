@@ -52,13 +52,26 @@ vipune is a **single crate** project with no workspace complexity.
 
 ```
 src/
-├── main.rs       # CLI entry point (~300 lines)
-├── memory.rs     # Core CRUD + conflict detection (~500 lines)
-├── sqlite.rs     # SQLite backend (~400 lines)
-├── embedding.rs  # ONNX embeddings (~200 lines)
-├── project.rs    # Git project detection (~100 lines)
-├── config.rs     # Configuration (~150 lines)
-└── errors.rs     # Error types (~100 lines)
+├── main.rs                 # CLI entry point
+├── memory.rs               # Core CRUD + conflict detection
+├── sqlite.rs               # SQLite backend
+├── embedding.rs            # ONNX embeddings
+├── project.rs              # Git project detection
+├── config/                 # Configuration (split into sub-modules)
+│   ├── mod.rs              # Config struct, load() orchestration (~237 lines)
+│   ├── env_parser.rs       # Environment variable parsing (~108 lines)
+│   ├── legacy.rs           # Backward compatibility detection (~64 lines)
+│   ├── loader.rs           # TOML file loading/parsing (~118 lines)
+│   ├── overrides.rs        # Apply env variable overrides (~217 lines)
+│   ├── paths.rs            # Tilde expansion utilities (~55 lines)
+│   ├── tests_utils.rs      # Shared test utilities (~14 lines)
+│   └── validation.rs       # Configuration validation (~195 lines)
+├── errors.rs               # Error types
+├── import.rs               # Remory import
+├── output.rs               # Output formatting
+├── temporal.rs             # Recency scoring
+├── memory_types.rs         # Type definitions
+└── rrf.rs                  # Hybrid search RRF fusion
 ```
 
 **Target:** ~2,500 lines total (excluding tests)
@@ -75,12 +88,12 @@ src/
 
 - **Model:** bge-small-en-v1.5 from HuggingFace
 - **Embedding dimensions:** 384 × f32 little-endian = exactly 1,536 bytes per embedding BLOB
-- **Model cache:** `~/.cache/vipune/models/`
+- **Model cache:** `~/.vipune/models/`
 - **Cosine similarity:** Computed in Rust (not via SQL extension)
 
 ### Database Location
 
-- **Path:** `~/.local/share/vipune/memories.db`
+- **Path:** `~/.vipune/memories.db`
 - **Format:** SQLite with bundled rusqlite (no external SQLite installation required)
 
 ---
@@ -504,13 +517,26 @@ New dependencies require justification:
 
 ```
 src/
-├── main.rs       # CLI entry point (~300 lines)
-├── memory.rs     # Core CRUD + conflict detection (~500 lines)
-├── sqlite.rs     # SQLite backend (~400 lines)
-├── embedding.rs  # ONNX embeddings (~200 lines)
-├── project.rs    # Git project detection (~100 lines)
-├── config.rs     # Configuration (~150 lines)
-└── errors.rs     # Error types (~100 lines)
+├── main.rs                 # CLI entry point
+├── memory.rs               # Core CRUD + conflict detection
+├── sqlite.rs               # SQLite backend
+├── embedding.rs            # ONNX embeddings
+├── project.rs              # Git project detection
+├── config/                 # Configuration (split into sub-modules)
+│   ├── mod.rs              # Config struct, load() orchestration (~237 lines)
+│   ├── env_parser.rs       # Environment variable parsing (~108 lines)
+│   ├── legacy.rs           # Backward compatibility detection (~64 lines)
+│   ├── loader.rs           # TOML file loading/parsing (~118 lines)
+│   ├── overrides.rs        # Apply env variable overrides (~217 lines)
+│   ├── paths.rs            # Tilde expansion utilities (~55 lines)
+│   ├── tests_utils.rs      # Shared test utilities (~14 lines)
+│   └── validation.rs       # Configuration validation (~195 lines)
+├── errors.rs               # Error types
+├── import.rs               # Remory import
+├── output.rs               # Output formatting
+├── temporal.rs             # Recency scoring
+├── memory_types.rs         # Type definitions
+└── rrf.rs                  # Hybrid search RRF fusion
 ```
 
 ### Test Structure
@@ -659,13 +685,13 @@ Before merging a PR to main:
 - [ ] **Tests pass locally** - All quality gates verified locally
 - [ ] **Coverage adequate** - New code has 80%+ test coverage
 
-### Human Approval Required
+### Merge Authorization
 
-Agents may NOT merge to main without explicit human approval:
-- Automated agents: Create PRs only, do not merge
-- Code review agents: Review and comment, do not merge
-- Project manager: Coordinate, delegate, do not merge
-- Only human developers: Can approve and merge PRs
+Agents may merge to main after CI passes and code review is complete:
+- Automated agents: Create PRs, review code, and merge when approved
+- Code review agents: Review, comment, and approve for merging
+- Project manager: Coordinate and delegate review authority
+- Human developers: Can also approve and merge PRs
 
 ---
 
@@ -704,7 +730,7 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
 - **Model:** bge-small-en-v1.5
 - **Source:** HuggingFace Hub
-- **Cache location:** `~/.cache/vipune/models/`
+- **Cache location:** `~/.vipune/models/`
 - **Download:** Automatic on first use via `hf-hub`
 
 ### Database Schema

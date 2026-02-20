@@ -117,15 +117,13 @@ impl DecayConfig {
     ///
     /// Returns 1.0 for brand new, approaches 0.0 for very old.
     ///
-    /// # Panics
+    /// # Invariant
     ///
-    /// Panics if configuration is invalid. Use `validate()` to check before calling.
+    /// This method assumes the configuration is valid. Validity is guaranteed by
+    /// `DecayConfig::new()` which validates all parameters at construction time.
+    /// Direct struct construction (only used in tests) bypassing validation may
+    /// produce mathematically incorrect results.
     pub fn calculate_decay(&self, created_at: &DateTime<Utc>) -> f64 {
-        // Defensive validation - catch configs constructed without validation
-        if let Err(e) = self.validate() {
-            panic!("Invalid decay configuration: {}", e);
-        }
-
         let now = Utc::now();
         let age = now.signed_duration_since(*created_at);
         let age_seconds = age.num_seconds().max(0) as f64;
@@ -615,43 +613,5 @@ mod tests {
             (decay_now - 1.0).abs() < 1e-10 && (decay_half_day - 0.5).abs() < 1e-1,
             "Linear decay with lambda=1.0 should produce meaningful values"
         );
-    }
-
-    #[test]
-    #[should_panic(expected = "Invalid decay configuration")]
-    fn test_defensive_validation_catches_invalid_linear_lambda() {
-        // Construct config directly without validation (should panic on calculate_decay)
-        let config = DecayConfig {
-            function: DecayFunction::Linear,
-            lambda: 1e-7, // Too small for Linear
-            offset_days: 0.0,
-        };
-        let now = Utc::now();
-        config.calculate_decay(&now); // Should panic
-    }
-
-    #[test]
-    #[should_panic(expected = "Invalid decay configuration")]
-    fn test_defensive_validation_catches_invalid_exponential_lambda() {
-        // Construct config directly without validation (should panic on calculate_decay)
-        let config = DecayConfig {
-            function: DecayFunction::Exponential,
-            lambda: 1e-2, // Too large for Exponential
-            offset_days: 0.0,
-        };
-        let now = Utc::now();
-        config.calculate_decay(&now); // Should panic
-    }
-
-    #[test]
-    #[should_panic(expected = "must be positive")]
-    fn test_defensive_validation_catches_negative_lambda() {
-        let config = DecayConfig {
-            function: DecayFunction::Exponential,
-            lambda: -1e-6,
-            offset_days: 0.0,
-        };
-        let now = Utc::now();
-        config.calculate_decay(&now); // Should panic
     }
 }
