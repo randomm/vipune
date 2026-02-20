@@ -17,7 +17,7 @@ impl MemoryStore {
     /// * `project_id` - Project identifier (e.g., git repo URL or user-defined)
     /// * `content` - Text content to store
     /// * `metadata` - Optional JSON metadata string
-    #[allow(dead_code)] // Dead code justified: public API for CLI integration (currently using add_with_conflict)
+    #[cfg(test)]
     pub fn add(
         &mut self,
         project_id: &str,

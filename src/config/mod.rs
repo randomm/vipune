@@ -19,7 +19,6 @@ pub use loader::ConfigFile;
 
 /// Configuration values with priority: defaults < config file < env vars.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // Dead code justified: public API for CLI integration (issue #5)
 pub struct Config {
     /// Path to the SQLite database.
     #[serde(default)]
@@ -64,7 +63,6 @@ impl Default for Config {
 
 impl Config {
     /// Load configuration with defaults, file values, and environment overrides.
-    #[allow(dead_code)] // Dead code justified: public API for CLI integration (issue #5)
     pub fn load() -> Result<Self, Error> {
         let file_config = loader::load_from_file()?;
 
@@ -117,7 +115,6 @@ impl Config {
     }
 
     /// Ensure parent directories for database and cache paths exist.
-    #[allow(dead_code)] // Dead code justified: public API for CLI integration (issue #5)
     pub fn ensure_directories(&self) -> Result<(), Error> {
         if let Some(parent) = self.database_path.parent() {
             if !parent.as_os_str().is_empty() {

@@ -23,12 +23,12 @@ pub struct ConfigFile {
     pub recency_weight: f64,
 }
 
-#[allow(dead_code)] // Dead code justified: used in ConfigFile serde default
+#[allow(dead_code)]
 fn default_threshold() -> f64 {
     0.85
 }
 
-#[allow(dead_code)] // Dead code justified: used in ConfigFile serde default
+#[allow(dead_code)]
 fn default_recency_weight() -> f64 {
     0.3
 }

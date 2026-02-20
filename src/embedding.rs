@@ -13,11 +13,9 @@ use crate::errors::Error;
 use tokenizers::TruncationParams;
 
 /// Embedding dimensions for bge-small-en-v1.5 model.
-#[allow(dead_code)] // Dead code justified: public API constant for CLI integration
 pub const EMBEDDING_DIMS: usize = 384;
 
 /// ONNX embedding engine for synchronous text-to-vector conversion.
-#[allow(dead_code)] // Dead code justified: public API for CLI integration
 pub struct EmbeddingEngine {
     session: Session,
     tokenizer: Tokenizer,
@@ -32,7 +30,6 @@ impl EmbeddingEngine {
     /// Uses `hf_hub::api::sync::Api` with ureq feature for blocking I/O.
     /// This approach is fully synchronous, matching vipune's no-async policy.
     /// Files are cached locally in HF Hub cache, only downloaded once.
-    #[allow(dead_code)] // Dead code justified: public API for CLI integration
     pub fn new(model_id: &str) -> Result<Self, Error> {
         let api = Api::new()?;
         let repo = api.model(model_id.to_string());
@@ -79,7 +76,6 @@ impl EmbeddingEngine {
     /// # Token Truncation
     ///
     /// Texts exceeding 512 tokens are silently truncated via tokenizer truncation.
-    #[allow(dead_code)] // Dead code justified: public API for CLI integration
     pub fn embed(&mut self, text: &str) -> Result<Vec<f32>, Error> {
         if text.is_empty() {
             return Ok(vec![0.0f32; EMBEDDING_DIMS]);
@@ -172,7 +168,6 @@ impl EmbeddingEngine {
     }
 }
 
-#[allow(dead_code)] // Dead code justified: public API function for CLI integration
 fn l2_normalize(vec: &[f32]) -> Vec<f32> {
     let norm: f32 = vec.iter().map(|&x| x * x).sum::<f32>().sqrt();
     let norm = norm.max(1e-9);

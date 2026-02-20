@@ -49,14 +49,6 @@ pub struct ListItem {
     pub created_at: String,
 }
 
-/// Version response (reserved for future use).
-#[derive(Serialize)]
-#[allow(dead_code)] // Dead code justified: available for future CLI enhancement
-pub struct VersionResponse {
-    pub status: String,
-    pub id: String,
-}
-
 /// Response for successful memory deletion.
 #[derive(Serialize)]
 pub struct DeleteResponse {

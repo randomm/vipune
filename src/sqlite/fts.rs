@@ -16,7 +16,6 @@ impl Database {
     /// # Errors
     ///
     /// Returns error if migration fails or consistency check detects data loss.
-    #[allow(dead_code)] // FTS5 feature for Issue #40 hybrid search
     pub fn initialize_fts(&self) -> Result<()> {
         // Check if FTS5 table exists with correct schema
         let fts_exists: bool = self
@@ -122,7 +121,6 @@ impl Database {
     /// # Errors
     ///
     /// Returns error if the FTS5 search fails.
-    #[allow(dead_code)] // FTS5 feature for Issue #40 hybrid search
     pub fn search_bm25(&self, query: &str, project_id: &str, limit: usize) -> Result<Vec<Memory>> {
         super::search::validate_limit(limit)?;
 

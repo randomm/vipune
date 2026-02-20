@@ -34,7 +34,6 @@ use std::process::Command;
 /// let project = detect_project(None);
 /// println!("Detected project: {}", project);
 /// ```
-#[allow(dead_code)] // Public API for future CLI integration
 pub fn detect_project(explicit: Option<&str>) -> String {
     // 1. Explicit override takes priority (must be non-empty)
     if let Some(project) = explicit {

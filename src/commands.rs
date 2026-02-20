@@ -25,7 +25,7 @@ pub enum Commands {
         #[arg(short = 'm', long)]
         metadata: Option<String>,
 
-        /// Force add (no-op until #6)
+        /// Bypass conflict detection and store the memory unconditionally.
         #[arg(long)]
         force: bool,
     },

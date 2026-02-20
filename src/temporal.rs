@@ -47,7 +47,7 @@ impl DecayFunction {
     /// Get all available decay functions.
     ///
     /// Returns an iterator over all decay function variants.
-    #[allow(dead_code)] // Used for validation and CLI completion
+    #[allow(dead_code)]
     pub fn all() -> impl Iterator<Item = Self> {
         [DecayFunction::Exponential, DecayFunction::Linear].into_iter()
     }

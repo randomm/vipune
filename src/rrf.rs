@@ -11,7 +11,6 @@ use std::collections::HashMap;
 
 /// RRF fusion configuration
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // Dead code justified: public API for future hybrid search integration
 pub struct RrfConfig {
     /// The k parameter for RRF formula (default: 25.0)
     /// Prevents division by very small numbers and gives diminishing returns for top ranks
@@ -55,7 +54,6 @@ impl Default for RrfConfig {
 /// // memory_b appears in both lists → gets highest RRF score
 /// assert_eq!(fused[0].id, memory_b.id);
 /// ```
-#[allow(dead_code)] // Dead code justified: public API for future hybrid search integration (Phase 3 of Issue #40)
 pub fn rrf_fusion(
     result_lists: Vec<Vec<Memory>>,
     config: Option<RrfConfig>,

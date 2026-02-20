@@ -19,6 +19,9 @@ clap = { version = "4.5", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 # ONNX Runtime for embeddings (CPU-only, auto-downloads shared library)
+# Pinned to RC 10: Stable 2.0.0 not released (latest stable: 1.18.0 with API incompatibilities).
+# RC 11+ has breaking API changes (.inputs field → .inputs() method).
+# RC 10 is the latest compatible version with our Session::inputs field access.
 ort = { version = "=2.0.0-rc.10", features = ["ndarray"] }
 
 # HuggingFace tokenizers and model download

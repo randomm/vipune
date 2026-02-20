@@ -6,10 +6,10 @@ use thiserror::Error;
 
 /// Main error type for vipune operations.
 #[derive(Error, Debug)]
-#[allow(dead_code)] // Dead code justified: public API for CLI integration
 pub enum Error {
     /// File not found.
     #[error("File not found: {0}")]
+    #[allow(dead_code)]
     FileNotFound(PathBuf),
 
     /// I/O error.
@@ -54,6 +54,7 @@ pub enum Error {
 
     /// Invalid limit (for search operations).
     #[error("Invalid limit: {0}")]
+    #[allow(dead_code)]
     InvalidLimit(String),
 
     /// Invalid timestamp in database record.
@@ -66,6 +67,7 @@ pub enum Error {
 
     /// ndarray shape error.
     #[error("Array shape error: {0}")]
+    #[allow(dead_code)]
     Shape(String),
 
     /// Memory not found.
