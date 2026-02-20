@@ -302,103 +302,6 @@ Updated memory: 123e4567-e89b-12d3-a456-426614174000
 
 ---
 
-### import
-
-Import memories from a remory SQLite database or JSON file.
-
-```
-vipune import <source> [--dry-run] [--format <format>]
-```
-
-**Arguments:**
-- `source` - Path to remory SQLite database or JSON file (required)
-
-**Flags:**
-- `--dry-run` - Preview what would be imported without actually importing
-- `-f, --format <format>` - Import format: `sqlite` (default) or `json`
-
-**Behavior:**
-- Reads memories from remory SQLite database or JSON export
-- Generates new embeddings for all memories
-- Skips duplicates based on content similarity
-- Preserves original timestamps when possible
-
-**Exit codes:**
-- `0` - Import complete (or dry run complete)
-- `1` - Error (file not found, invalid format, database error)
-
-**SQLite import (remory database):**
-```bash
-# Preview import from remory SQLite
-vipune import ~/.local/share/remory/memories.db --dry-run
-
-# Actually perform the import
-vipune import ~/.local/share/remory/memories.db
-```
-
-**JSON import:**
-```bash
-# Import from JSON file (no dry-run support for JSON)
-vipune import export.json --format json
-```
-
-**Dry run output:**
-```
-Dry run: would import from /path/to/remory.db
-Total memories: 150
-Imported: 0
-Skipped duplicates: 0
-Skipped corrupted: 0
-Projects: 3
-  - git@github.com:user/repo1.git
-  - git@github.com:user/repo2.git
-  - default
-```
-
-**Import output:**
-```
-Imported from /path/to/remory.db
-Total memories: 150
-Imported: 142
-Skipped duplicates: 8
-Skipped corrupted: 0
-Projects: 3
-  - git@github.com:user/repo1.git
-  - git@github.com:user/repo2.git
-  - default
-```
-
-**JSON output (dry run):**
-```json
-{
-  "status": "dry_run",
-  "total_memories": 150,
-  "imported": 0,
-  "skipped_duplicates": 0,
-  "skipped_corrupted": 0,
-  "projects": 3
-}
-```
-
-**JSON output (imported):**
-```json
-{
-  "status": "imported",
-  "total_memories": 150,
-  "imported": 142,
-  "skipped_duplicates": 8,
-  "skipped_corrupted": 0,
-  "projects": 3
-}
-```
-
-**Limitations:**
-- JSON import does not support `--dry-run`
-- Only remory SQLite format and vipune JSON export format are supported
-- Duplicate detection uses semantic similarity, not exact string matching
-
----
-
 ### version
 
 Display version information.
@@ -456,7 +359,6 @@ All commands return exit code `1` on error, with error message to stderr or JSON
 - Invalid metadata (not valid JSON)
 - Database errors (permissions, disk full)
 - Missing or invalid configuration
-- Invalid import format or file not found
 
 ---
 
@@ -485,15 +387,6 @@ vipune search "authentication architecture" --recency 0.0
 **Force add despite conflicts:**
 ```bash
 vipune add "Duplicate memory" --force
-```
-
-**Batch import from remory:**
-```bash
-# Preview first
-vipune import ~/.local/share/remory/memories.db --dry-run
-
-# Then import
-vipune import ~/.local/share/remory/memories.db
 ```
 
 **Batch import (loop in shell):**

@@ -1,7 +1,6 @@
 //! Configuration system for vipune.
 
 mod env_parser;
-mod legacy;
 mod loader;
 mod overrides;
 mod paths;
@@ -70,20 +69,6 @@ impl Config {
         let file_config = loader::load_from_file()?;
 
         let mut config = Config::default();
-
-        // Check for legacy database path (pre-v0.2) if new default doesn't exist
-        if !config.database_path.exists() {
-            if let Some(legacy_path) = legacy::find_legacy_database_path() {
-                config.database_path = legacy_path;
-            }
-        }
-
-        // Check for legacy model cache path (pre-v0.2) if new default doesn't exist
-        if !config.model_cache.exists() {
-            if let Some(legacy_cache) = legacy::find_legacy_model_cache_path() {
-                config.model_cache = legacy_cache;
-            }
-        }
 
         if let Some(mut file) = file_config {
             paths::expand_tilde(&mut file.database_path);
@@ -194,16 +179,7 @@ mod tests {
 
         let config = Config::load().unwrap();
 
-        // Config should use new default path, or legacy path if it exists (backward compat)
-        assert!(
-            config.database_path.ends_with(".vipune/memories.db")
-                || config
-                    .database_path
-                    .ends_with("Application Support/vipune/memories.db")
-                || config
-                    .database_path
-                    .ends_with(".local/share/vipune/memories.db")
-        );
+        assert!(config.database_path.ends_with(".vipune/memories.db"));
         assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
         assert_eq!(config.similarity_threshold, 0.85);
     }
@@ -215,23 +191,9 @@ mod tests {
 
         let config = Config::load().unwrap();
 
-        // Config should use new default path, or legacy path if it exists (backward compat)
-        assert!(
-            config.database_path.ends_with(".vipune/memories.db")
-                || config
-                    .database_path
-                    .ends_with("Application Support/vipune/memories.db")
-                || config
-                    .database_path
-                    .ends_with(".local/share/vipune/memories.db")
-        );
+        assert!(config.database_path.ends_with(".vipune/memories.db"));
         assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
-        // Model cache should use new default path, or legacy path if it exists (backward compat)
-        assert!(
-            config.model_cache.ends_with(".vipune/models")
-                || config.model_cache.ends_with("Caches/vipune/models")
-                || config.model_cache.ends_with(".cache/vipune/models")
-        );
+        assert!(config.model_cache.ends_with(".vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
     }
 }

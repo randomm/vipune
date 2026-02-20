@@ -159,52 +159,6 @@ similarity_threshold = 0.85
 recency_weight = 0.3
 ```
 
-## Step 6: Migration from remory (Optional)
-
-If you're migrating from remory, import your existing memories directly:
-
-```bash
-# Preview what would be imported
-vipune import ~/.local/share/remory/memories.db --dry-run
-
-# Output:
-# Dry run: would import from /home/user/.local/share/remory/memories.db
-# Total memories: 150
-# Imported: 0
-# Skipped duplicates: 0
-# Skipped corrupted: 0
-# Projects: 3
-#   - git@github.com:user/repo1.git
-#   - git@github.com:user/repo2.git
-#   - default
-
-# Perform the actual import
-vipune import ~/.local/share/remory/memories.db
-
-# Output:
-# Imported from /home/user/.local/share/remory/memories.db
-# Total memories: 150
-# Imported: 142
-# Skipped duplicates: 8
-# Skipped corrupted: 0
-# Projects: 3
-#   - git@github.com:user/repo1.git
-#   - git@github.com:user/repo2.git
-#   - default
-```
-
-Import formats:
-- **SQLite (default):** remory database format
-- **JSON:** vipune JSON export format
-
-```bash
-# Import from remory SQLite
-vipune import ~/.local/share/remory/memories.db --format sqlite
-
-# Import from JSON export
-vipune import export.json --format json
-```
-
 ## Common Workflows
 
 ### Storing Code Knowledge

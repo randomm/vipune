@@ -1,9 +1,9 @@
 //! CLI entry point for vipune memory layer.
 
+mod commands;
 mod config;
 mod embedding;
 mod errors;
-mod import;
 mod memory;
 mod memory_types;
 mod output;
@@ -12,13 +12,12 @@ mod rrf;
 mod sqlite;
 mod temporal;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use commands::Commands;
 use errors::Error;
 use memory::MemoryStore;
-use memory_types::AddResult;
-use output::*;
+use output::{print_json, ErrorResponse};
 use project::detect_project;
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// vipune - A minimal memory layer for AI agents
@@ -39,70 +38,6 @@ struct Cli {
 
     #[command(subcommand)]
     command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    Add {
-        /// Memory text content
-        text: String,
-
-        /// Optional JSON metadata
-        #[arg(short = 'm', long)]
-        metadata: Option<String>,
-
-        /// Force add (no-op until #6)
-        #[arg(long)]
-        force: bool,
-    },
-    Search {
-        /// Search query text
-        query: String,
-
-        /// Maximum number of results (default: 5)
-        #[arg(short = 'l', long, default_value = "5")]
-        limit: usize,
-
-        /// Recency weight for search results (0.0 to 1.0)
-        #[arg(long)]
-        recency: Option<f64>,
-
-        /// Use hybrid search (semantic + BM25 with RRF fusion)
-        #[arg(long)]
-        hybrid: bool,
-    },
-    Get {
-        /// Memory ID
-        id: String,
-    },
-    List {
-        /// Maximum number of results (default: 10)
-        #[arg(short = 'l', long, default_value = "10")]
-        limit: usize,
-    },
-    Delete {
-        /// Memory ID
-        id: String,
-    },
-    Update {
-        /// Memory ID
-        id: String,
-        /// New content
-        text: String,
-    },
-    Version,
-    Import {
-        /// Path to remory database or JSON file
-        source: String,
-
-        /// Dry run (show what would be imported)
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Import format (default: sqlite)
-        #[arg(short = 'f', long, default_value = "sqlite")]
-        format: String,
-    },
 }
 
 fn main() -> ExitCode {
@@ -139,243 +74,7 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
         config.clone(),
     )?;
 
-    match &cli.command {
-        Commands::Add {
-            text,
-            metadata,
-            force,
-        } => match store.add_with_conflict(&project_id, text, metadata.as_deref(), *force)? {
-            AddResult::Added { id } => {
-                if cli.json {
-                    print_json(&AddResponse {
-                        status: "added".to_string(),
-                        id,
-                    });
-                } else {
-                    println!("Added memory: {}", id);
-                }
-                Ok(ExitCode::SUCCESS)
-            }
-            AddResult::Conflicts {
-                proposed,
-                conflicts,
-            } => {
-                if cli.json {
-                    let conflict_responses: Vec<ConflictMemoryResponse> = conflicts
-                        .into_iter()
-                        .map(|c| ConflictMemoryResponse {
-                            id: c.id,
-                            content: c.content,
-                            similarity: c.similarity,
-                        })
-                        .collect();
-                    print_json(&ConflictsResponse {
-                        status: "conflicts".to_string(),
-                        proposed,
-                        conflicts: conflict_responses,
-                    });
-                } else {
-                    println!(
-                        "Conflicts detected: {} similar memory/memories found",
-                        conflicts.len()
-                    );
-                    println!("Proposed: {}", proposed);
-                    println!("Use --force to add anyway");
-                    for conflict in conflicts {
-                        println!("  {} (similarity: {:.3})", conflict.id, conflict.similarity);
-                        println!("    {}", conflict.content);
-                    }
-                }
-                Ok(ExitCode::from(2))
-            }
-        },
-        Commands::Search {
-            query,
-            limit,
-            recency,
-            hybrid,
-        } => {
-            let recency_weight = recency.unwrap_or(config.recency_weight);
-            temporal::validate_recency_weight(recency_weight)?;
-            let memories = if *hybrid {
-                store.search_hybrid(&project_id, query, *limit, recency_weight)?
-            } else {
-                store.search(&project_id, query, *limit, recency_weight)?
-            };
-            if cli.json {
-                let results: Vec<SearchResultItem> = memories
-                    .into_iter()
-                    .map(|m| SearchResultItem {
-                        id: m.id,
-                        content: m.content,
-                        similarity: m.similarity.unwrap_or(0.0),
-                        created_at: m.created_at,
-                    })
-                    .collect();
-                print_json(&SearchResponse { results });
-            } else {
-                for memory in memories {
-                    let score = memory.similarity.unwrap_or(0.0);
-                    println!(
-                        "{} [score: {:.2}]\n  {}\n",
-                        memory.id, score, memory.content
-                    );
-                }
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        Commands::Get { id } => {
-            let memory = store.get(id)?.ok_or_else(|| Error::NotFound(id.clone()))?;
-            if cli.json {
-                print_json(&GetResponse {
-                    id: memory.id.clone(),
-                    content: memory.content.clone(),
-                    project_id: memory.project_id,
-                    metadata: memory.metadata,
-                    created_at: memory.created_at,
-                    updated_at: memory.updated_at,
-                });
-            } else {
-                println!("ID: {}", memory.id);
-                println!("Content: {}", memory.content);
-                println!("Project: {}", memory.project_id);
-                if let Some(meta) = &memory.metadata {
-                    println!("Metadata: {}", meta);
-                }
-                println!("Created: {}", memory.created_at);
-                println!("Updated: {}", memory.updated_at);
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        Commands::List { limit } => {
-            let memories = store.list(&project_id, *limit)?;
-            if cli.json {
-                let items: Vec<ListItem> = memories
-                    .into_iter()
-                    .map(|m| ListItem {
-                        id: m.id,
-                        content: m.content,
-                        created_at: m.created_at,
-                    })
-                    .collect();
-                print_json(&ListResponse { memories: items });
-            } else {
-                for memory in memories {
-                    println!("{}: {}", memory.id, memory.content);
-                }
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        Commands::Delete { id } => {
-            let deleted = store.delete(id)?;
-            if deleted {
-                if cli.json {
-                    print_json(&DeleteResponse {
-                        status: "deleted".to_string(),
-                        id: id.clone(),
-                    });
-                } else {
-                    println!("Deleted memory: {}", id);
-                }
-                Ok(ExitCode::SUCCESS)
-            } else {
-                Err(Error::NotFound(id.clone()))
-            }
-        }
-        Commands::Update { id, text } => {
-            store.update(id, text)?;
-            if cli.json {
-                print_json(&UpdateResponse {
-                    status: "updated".to_string(),
-                    id: id.clone(),
-                });
-            } else {
-                println!("Updated memory: {}", id);
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        Commands::Version => {
-            if cli.json {
-                print_json(&serde_json::json!({
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "name": env!("CARGO_PKG_NAME")
-                }));
-            } else {
-                println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-        Commands::Import {
-            source,
-            dry_run,
-            format,
-        } => {
-            let source_path = PathBuf::from(&source);
-
-            let stats = match format.as_str() {
-                "sqlite" => import::import_from_sqlite(
-                    &source_path,
-                    *dry_run,
-                    &config.database_path,
-                    &config.embedding_model,
-                    config.clone(),
-                )?,
-                "json" => {
-                    if *dry_run {
-                        return Err(Error::InvalidInput(
-                            "Dry run not supported for JSON import".to_string(),
-                        ));
-                    }
-                    import::import_from_json(
-                        &source_path,
-                        &config.database_path,
-                        &config.embedding_model,
-                        config.clone(),
-                    )?
-                }
-                _ => {
-                    return Err(Error::InvalidInput(format!(
-                        "Invalid format '{}': must be 'sqlite' or 'json'",
-                        format
-                    )));
-                }
-            };
-
-            if cli.json {
-                print_json(&ImportResponse {
-                    status: if *dry_run {
-                        "dry_run".to_string()
-                    } else {
-                        "imported".to_string()
-                    },
-                    total_memories: stats.total_memories,
-                    imported: stats.imported_memories,
-                    skipped_duplicates: stats.skipped_duplicates,
-                    skipped_corrupted: stats.skipped_corrupted,
-                    projects: stats.projects.len(),
-                });
-            } else {
-                if *dry_run {
-                    println!("Dry run: would import from {}", source);
-                } else {
-                    println!("Imported from {}", source);
-                }
-                println!("Total memories: {}", stats.total_memories);
-                println!("Imported: {}", stats.imported_memories);
-                if stats.skipped_duplicates > 0 {
-                    println!("Skipped duplicates: {}", stats.skipped_duplicates);
-                }
-                if stats.skipped_corrupted > 0 {
-                    println!("Skipped corrupted: {}", stats.skipped_corrupted);
-                }
-                println!("Projects: {}", stats.projects.len());
-                for project in &stats.projects {
-                    println!("  - {}", project);
-                }
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-    }
+    commands::execute(&cli.command, &mut store, project_id, &config, cli.json)
 }
 
 #[cfg(test)]
@@ -453,45 +152,6 @@ mod tests {
     fn test_cli_parse_with_db_path() {
         let cli = Cli::parse_from(&["vipune", "--db-path", "/custom/path.db", "add", "test"]);
         assert_eq!(cli.db_path, Some("/custom/path.db".to_string()));
-    }
-
-    #[test]
-    fn test_cli_parse_import_sqlite() {
-        let cli = Cli::parse_from(&["vipune", "import", "/path/to/db.sqlite"]);
-        matches!(
-            cli.command,
-            Commands::Import {
-                source,
-                dry_run: false,
-                format
-            } if source == "/path/to/db.sqlite" && format == "sqlite"
-        );
-    }
-
-    #[test]
-    fn test_cli_parse_import_dry_run() {
-        let cli = Cli::parse_from(&["vipune", "import", "/path/to/db.sqlite", "--dry-run"]);
-        matches!(
-            cli.command,
-            Commands::Import {
-                source,
-                dry_run: true,
-                ..
-            } if source == "/path/to/db.sqlite"
-        );
-    }
-
-    #[test]
-    fn test_cli_parse_import_json() {
-        let cli = Cli::parse_from(&["vipune", "import", "export.json", "--format", "json"]);
-        matches!(
-            cli.command,
-            Commands::Import {
-                source,
-                dry_run: false,
-                format
-            } if source == "export.json" && format == "json"
-        );
     }
 
     #[test]

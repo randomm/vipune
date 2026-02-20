@@ -133,7 +133,6 @@ vipune add "Auth uses JWT tokens" --metadata '{"topic": "authentication"}'
 | `vipune list` | List all memories |
 | `vipune delete <id>` | Delete a memory |
 | `vipune update <id> <text>` | Update a memory's content |
-| `vipune import <source>` | Import memories from SQLite or JSON |
 | `vipune version` | Show version |
 
 [Complete CLI reference](docs/cli-reference.md) • [Quickstart guide](docs/quickstart.md)

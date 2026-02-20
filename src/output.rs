@@ -71,18 +71,7 @@ pub struct UpdateResponse {
     pub id: String,
 }
 
-/// Response for import operations.
-#[derive(Serialize)]
-pub struct ImportResponse {
-    pub status: String,
-    pub total_memories: usize,
-    pub imported: usize,
-    pub skipped_duplicates: usize,
-    pub skipped_corrupted: usize,
-    pub projects: usize,
-}
-
-/// Response for errors.
+/// Response for error cases.
 #[derive(Serialize)]
 pub struct ErrorResponse {
     pub error: String,
@@ -143,21 +132,5 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"results\""));
         assert!(json.contains("\"similarity\":0.95"));
-    }
-
-    #[test]
-    fn test_serialize_import_response() {
-        let response = ImportResponse {
-            status: "imported".to_string(),
-            total_memories: 100,
-            imported: 95,
-            skipped_duplicates: 4,
-            skipped_corrupted: 1,
-            projects: 2,
-        };
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("\"imported\":95"));
-        assert!(json.contains("\"skipped_duplicates\":4"));
-        assert!(json.contains("\"projects\":2"));
     }
 }
