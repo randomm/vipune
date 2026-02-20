@@ -1,6 +1,6 @@
 # Vipune Query Guide
 
-Based on comprehensive testing with 22 queries across 7 categories on the fiona project (5,150 memories).
+Based on comprehensive testing with 22 queries across 7 categories on a typical project (5,150 memories).
 
 ## Query Categories Tested
 
@@ -11,7 +11,7 @@ Based on comprehensive testing with 22 queries across 7 categories on the fiona 
 |-------|-----------|---------|
 | "ConversationGraph" | 0.81 | Exact matches |
 | "handler" | 0.81 | All relevant |
-| "Telegram" | 0.81 | Domain-specific |
+| "MessageHandler" | 0.81 | Domain-specific |
 
 **Verdict**: Use specific technical terms directly.
 
@@ -20,7 +20,7 @@ Based on comprehensive testing with 22 queries across 7 categories on the fiona 
 
 | Query | Top Score | Quality | Notes |
 |-------|-----------|---------|-------|
-| "Telegram bot" | 0.80 | Excellent | Domain-specific pairing |
+| "message handler" | 0.80 | Excellent | Domain-specific pairing |
 | "message handling" | 0.79 | Very Good | Action-oriented phrase |
 | "user authentication" | 0.78 | Good | Standard concept |
 | "API endpoint" | 0.75 | Good | Common architecture term |
@@ -32,7 +32,7 @@ Based on comprehensive testing with 22 queries across 7 categories on the fiona 
 
 | Query | Top Score | Quality | Why it works |
 |-------|-----------|---------|--------------|
-| "How does the Telegram bot work?" | 0.74 | Fair | "Telegram bot" is strong |
+| "How does the message handler work?" | 0.74 | Fair | "message handler" is strong |
 | "What is the architecture of this system?" | 0.70 | Fair | Generic architecture terms |
 | "How do users authenticate?" | 0.68 | Fair | "authenticate" is specific |
 | "Where is the database schema?" | 0.63 | Fair | Multiple relevant terms |
@@ -44,7 +44,7 @@ Based on comprehensive testing with 22 queries across 7 categories on the fiona 
 
 | Query | Top Score | Quality | Examples |
 |-------|-----------|---------|-----------|
-| "code for sending messages" | 0.81 | Excellent | Action + object |
+| "code for processing events" | 0.81 | Excellent | Action + object |
 | "user login implementation" | 0.79 | Very Good | Specific feature + implementation |
 | "database connection setup" | 0.77 | Good | Component + action |
 | "error handling in handlers" | 0.75 | Good | Cross-cutting concern + location |
@@ -59,7 +59,7 @@ Good results (Python project, Python queries):
 |-------|-----------|---------|
 | "def send_message" | 0.79 | Good | Python function syntax |
 | "class UserHandler" | 0.76 | Good | Python class syntax |
-| "import telegram" | 0.73 | Good | Python import statement |
+| "import asyncio" | 0.73 | Good | Python import statement |
 
 Poor results (Rust syntax in Python project):
 | Query | Top Score | Quality |
@@ -87,7 +87,7 @@ Poor results (Rust syntax in Python project):
 
 | Query | Top Score | Quality | Composition |
 |-------|-----------|---------|-------------|
-| "Telegram bot message handler" | 0.81 | Excellent | Domain + component + action |
+| "event processor message handler" | 0.81 | Excellent | Domain + component + action |
 | "user authentication database schema" | 0.80 | Excellent | Feature + component + architecture |
 | "API request error handling" | 0.79 | Very Good | Interface + event + pattern |
 | "database connection pooling configuration" | 0.78 | Good | Component + pattern + configuration |
@@ -139,7 +139,7 @@ Based on the 22 test cases, these patterns consistently score well:
 
 ## Testing Methodology
 
-- **Project**: Fiona (Python, Telegram bot framework)
+- **Project**: A typical Python application
 - **Memory Count**: 5,150 memories indexed
 - **Queries Tested**: 22 queries across 7 categories
 - **Model**: bge-small-en-v1.5 (384 dimensions)
@@ -149,7 +149,7 @@ Based on the 22 test cases, these patterns consistently score well:
 
 Vipune's semantic search excels with **technical specificity**. The model understands:
 
-- Domain-specific terminology (Telegram, handler, ConversationGraph)
+- Domain-specific terminology (handler, ConversationGraph, MessageHandler)
 - Architectural concepts (authentication, schema, pooling)
 - Action-component relationships (message handling, user login)
 - Problem contexts (timeout, crash, errors)

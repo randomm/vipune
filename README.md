@@ -67,7 +67,12 @@ tar xzf vipune-x86_64-unknown-linux-gnu.tar.gz
 sudo mv vipune /usr/local/bin/
 ```
 
-**Note:** Linux ARM64 support is planned for v0.2.0. For now, build from source on ARM64 systems.
+**Linux ARM64**
+```bash
+curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-unknown-linux-gnu.tar.gz
+tar xzf vipune-aarch64-unknown-linux-gnu.tar.gz
+sudo mv vipune /usr/local/bin/
+```
 
 ### Build from source
 
@@ -104,10 +109,6 @@ cargo uninstall vipune
 
 # Clear data (optional)
 rm -rf ~/.vipune ~/.config/vipune
-
-# If migrating from vipune < 0.2, also remove legacy paths:
-rm -rf ~/.local/share/vipune ~/.cache/vipune            # Linux
-rm -rf ~/Library/Application\ Support/vipune             # macOS
 ```
 
 ## Quick Start
@@ -162,24 +163,6 @@ model_cache = "~/.vipune/models"
 similarity_threshold = 0.85
 recency_weight = 0.3
 ```
-
-## Migration from Earlier Versions
-
-If you're upgrading from vipune < v0.2, your existing memories are automatically detected in the old locations. No action required — vipune will continue using your existing database.
-
-To migrate to the new `~/.vipune/` paths manually:
-
-```bash
-# Linux users (if memories are in XDG directories)
-mkdir -p ~/.vipune
-mv ~/.local/share/vipune/memories.db ~/.vipune/memories.db 2>/dev/null || true
-
-# macOS users (if memories are in Application Support)
-mkdir -p ~/.vipune
-mv ~/Library/Application\ Support/vipune/memories.db ~/.vipune/memories.db 2>/dev/null || true
-```
-
-After migration, you can remove old directories to save space (see [Uninstall](#uninstall) section).
 
 ## Agent Integration
 

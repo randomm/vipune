@@ -84,7 +84,7 @@ Use --force to add anyway
 Find memories by semantic similarity.
 
 ```
-vipune search <query> [--limit <n>] [--recency <weight>]
+vipune search <query> [--limit <n>] [--recency <weight>] [--hybrid]
 ```
 
 **Arguments:**
@@ -93,6 +93,7 @@ vipune search <query> [--limit <n>] [--recency <weight>]
 **Flags:**
 - `-l, --limit <n>` - Maximum results to return (default: `5`)
 - `--recency <weight>` - Recency bias for scoring, 0.0 to 1.0 (default: from config, typically `0.3`)
+- `--hybrid` - Enables hybrid search combining semantic similarity with FTS5 full-text search using Reciprocal Rank Fusion (RRF)
 
 **Behavior:**
 - Generates embedding for query
