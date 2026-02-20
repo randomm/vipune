@@ -40,7 +40,7 @@ jobs:
           cat dist-manifest.json
           echo "manifest=$(cat dist-manifest.json | jq -c .)" >> "$GITHUB_OUTPUT"
       - name: Upload dist-manifest.json
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: artifacts-plan-dist-manifest
           path: dist-manifest.json
@@ -68,7 +68,7 @@ jobs:
       - name: Build
         run: ${{ matrix.build_local }}
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: artifacts-${{ matrix.display_name }}
           path: dist/artifacts
