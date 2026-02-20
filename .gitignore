@@ -1,0 +1,8 @@
+/target
+*.swp
+*.swo
+.DS_Store
+.worktrees/
+*.db
+*.tar.gz
+*.sha256

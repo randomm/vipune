@@ -1,0 +1,66 @@
+[package]
+name = "vipune"
+version = "0.1.1"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/randomm/vipune"
+homepage = "https://github.com/randomm/vipune"
+keywords = ["ai", "memory", "embeddings", "semantic-search", "cli"]
+categories = ["command-line-utilities", "database"]
+readme = "README.md"
+authors = ["Janni Turunen"]
+description = "A minimal memory layer for AI agents"
+
+[dependencies]
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# ONNX Runtime for embeddings (CPU-only, auto-downloads shared library)
+# Pinned to RC 10: Stable 2.0.0 not released (latest stable: 1.18.0 with API incompatibilities).
+# RC 11+ has breaking API changes (.inputs field → .inputs() method).
+# RC 10 is the latest compatible version with our Session::inputs field access.
+ort = { version = "=2.0.0-rc.10", features = ["ndarray"] }
+
+# HuggingFace tokenizers and model download
+tokenizers = "0.22.0"
+hf-hub = { version = "0.4.3", default-features = false, features = ["ureq"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+toml = "0.8"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3.13"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+strip = true
+
+# Config for 'dist'
+[workspace.metadata.dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.30.4"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = []
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
+# Which actions to run on pull requests
+pr-run-mode = "upload"
