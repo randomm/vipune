@@ -166,36 +166,11 @@ recency_weight = 0.3
 
 ## Agent Integration
 
-vipune is designed for AI agents to maintain persistent memory across tasks.
+vipune works with any agent that can run shell commands — no plugins, adapters, or API keys required. Configure your agent with a few lines of instructions, grant shell command permissions, and the agent can use `vipune search` and `vipune add` to maintain persistent memory across tasks.
 
-**Conflict detection workflow:**
+**[→ See Agent Integration Guide](docs/agent-integration.md)** for per-tool setup instructions (Claude Code, Cursor, Windsurf, Cline, Roo Code, GitHub Copilot, Goose, Aider, OpenCode, Zed, and more).
 
-```bash
-# Agent attempts to add memory
-vipune add "Authentication uses OAuth2"
-
-# If similar memory exists, exit code 2 and JSON output:
-{
-  "status": "conflicts",
-  "proposed": "Authentication uses OAuth2",
-  "conflicts": [
-    {
-      "id": "123e4567-e89b-12d3-a456-426614174000",
-      "content": "Auth system uses OAuth2 for login",
-      "similarity": 0.94
-    }
-  ]
-}
-
-# Agent can then:
-# 1. Skip dupe (exit code 2)
-# 2. Force add to bypass conflict detection
-vipune add "Authentication uses OAuth2" --force
-# 3. Update existing memory
-vipune update 123e4567-e89b-12d3-a456-426614174000 "Auth system uses OAuth2 for login"
-```
-
-**Exit codes:**
+**Exit codes for agent workflows:**
 - `0` - Success
 - `1` - Error (missing file, invalid input, etc.)
 - `2` - Conflicts detected (similar memories found)
