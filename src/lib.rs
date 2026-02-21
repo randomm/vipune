@@ -19,10 +19,12 @@
 //! // Detect project ID
 //! let project_id = detect_project(None);
 //!
-//! // Add a memory
-//! let result = store.add(&project_id, "Alice works at Microsoft", None);
+//! // Add a memory with conflict detection
+//! let result = store.add_with_conflict(&project_id, "Alice works at Microsoft", None, false);
 //! match result {
-//!     Ok(id) => println!("Added memory: {}", id),
+//!     Ok(vipune::AddResult::Added { id }) => println!("Added memory: {}", id),
+//!     Ok(vipune::AddResult::Conflicts { .. }) => println!("Conflict detected"),
+//!     Err(e) => eprintln!("Error: {}", e),
 //!     Err(e) => eprintln!("Error: {}", e),
 //! }
 //!

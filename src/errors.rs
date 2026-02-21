@@ -57,9 +57,8 @@ pub enum Error {
     },
 
     /// Invalid timestamp in database record.
-    #[error("Invalid timestamp for memory {id}: {timestamp} ({error})")]
+    #[error("Invalid timestamp format: {timestamp} ({error})")]
     InvalidTimestamp {
-        id: String,
         timestamp: String,
         error: String,
     },
@@ -80,12 +79,10 @@ pub enum Error {
 impl From<crate::sqlite::Error> for Error {
     fn from(err: crate::sqlite::Error) -> Self {
         // Convert specific SQLite errors to NotFound when applicable
+        // Sanitize: don't leak memory IDs in error messages to library consumers
         let err_str = err.to_string();
         if err_str.contains("No memory found with id:") {
-            if let Some(id) = err_str.split("No memory found with id: ").nth(1) {
-                return Error::NotFound(id.trim().to_string());
-            }
-            return Error::NotFound("unknown".to_string());
+            return Error::NotFound("memory not found".to_string());
         }
         Error::SqliteModule(err_str)
     }

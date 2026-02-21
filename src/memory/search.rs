@@ -5,12 +5,13 @@ use crate::rrf;
 use crate::sqlite::Memory;
 use crate::temporal::{apply_recency_weight, validate_recency_weight, DecayConfig};
 
-use super::store::{MemoryStore, MAX_SEARCH_LIMIT};
+use super::store::{MemoryStore, validate_limit};
 
 /// Maximum allowed candidate pool size for hybrid search to prevent DoS.
 const MAX_CANDIDATE_POOL: usize = 10_000;
 
 impl MemoryStore {
+    #[must_use = "handle the error or results may be lost"]
     /// Search memories by semantic similarity.
     ///
     /// Generates an embedding for the query and finds memories with highest
@@ -45,15 +46,7 @@ impl MemoryStore {
         recency_weight: f64,
     ) -> Result<Vec<Memory>, Error> {
         // Validate limit to prevent resource exhaustion
-        if limit == 0 {
-            return Err(Error::InvalidInput("Limit must be greater than 0".to_string()));
-        }
-        if limit > MAX_SEARCH_LIMIT {
-            return Err(Error::InvalidInput(format!(
-                "Limit {} exceeds maximum allowed ({})",
-                limit, MAX_SEARCH_LIMIT
-            )));
-        }
+        validate_limit(limit)?;
 
         // Validate query before processing
         let query = query.trim();
@@ -70,7 +63,6 @@ impl MemoryStore {
                     .created_at
                     .parse::<chrono::DateTime<chrono::Utc>>()
                     .map_err(|e| Error::InvalidTimestamp {
-                        id: memory.id.clone(),
                         timestamp: memory.created_at.clone(),
                         error: e.to_string(),
                     })?;
@@ -94,6 +86,7 @@ impl MemoryStore {
         Ok(memories)
     }
 
+    #[must_use = "handle the error or results may be lost"]
     /// Search memories using hybrid search (semantic + BM25 fused with RRF).
     ///
     /// Combines semantic embedding search and BM25 full-text search using
@@ -133,17 +126,7 @@ impl MemoryStore {
         validate_recency_weight(recency_weight).map_err(Error::Validation)?;
 
         // Validate limit before proceeding
-        if limit == 0 {
-            return Err(Error::InvalidInput(
-                "Limit must be greater than 0".to_string(),
-            ));
-        }
-        if limit > MAX_SEARCH_LIMIT {
-            return Err(Error::InvalidInput(format!(
-                "Limit {} exceeds maximum allowed ({})",
-                limit, MAX_SEARCH_LIMIT
-            )));
-        }
+        validate_limit(limit)?;
 
         // 1. Encode query for semantic search
         let embedding = self.embedder.embed(query)?;
@@ -170,7 +153,6 @@ impl MemoryStore {
                     timestamp
                         .parse::<chrono::DateTime<chrono::Utc>>()
                         .map_err(|e| Error::InvalidTimestamp {
-                            id: memory.id.clone(),
                             timestamp,
                             error: e.to_string(),
                         })?;

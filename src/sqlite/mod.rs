@@ -304,7 +304,7 @@ impl Database {
         )?;
 
         if rows == 0 {
-            return Err(Error::Sqlite(format!("No memory found with id: {}", id)));
+            return Err(Error::Sqlite("No memory found".to_string()));
         }
 
         Ok(())

@@ -353,7 +353,7 @@ All commands return exit code `1` on error, with error message to stderr or JSON
 **JSON error format:**
 ```json
 {
-  "error": "Memory not found: 123e4567-e89b-12d3-a456-426614174000"
+  "error": "Memory not found"
 }
 ```
 

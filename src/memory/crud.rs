@@ -7,37 +7,7 @@ use crate::sqlite::Memory;
 use super::store::MemoryStore;
 
 impl MemoryStore {
-    #[allow(dead_code)]
-    /// Add a memory to the store (simple method without conflict detection).
-    ///
-    /// Generates an embedding for the content and stores it in SQLite.
-    /// Returns the generated memory ID (UUID).
-    ///
-    /// # Arguments
-    ///
-    /// * `project_id` - Project identifier (e.g., git repo URL or user-defined)
-    /// * `content` - Text content to store (1 to 100,000 characters)
-    /// * `metadata` - Optional JSON metadata string
-    ///
-    /// # Errors
-    ///
-    /// Returns error if:
-    /// - Input is empty
-    /// - Input exceeds 100,000 characters
-    /// - Embedding generation fails
-    /// - Database insertion fails
-    pub fn add(
-        &mut self,
-        project_id: &str,
-        content: &str,
-        metadata: Option<&str>,
-    ) -> Result<String, Error> {
-        Self::validate_input_length(content)?;
-
-        let embedding = self.embedder.embed(content)?;
-        Ok(self.db.insert(project_id, content, &embedding, metadata)?)
-    }
-
+    #[must_use = "handle the error or results may be lost"]
     /// Add a memory with conflict detection.
     ///
     /// Checks for similar existing memories before adding. If conflicts are found
@@ -100,6 +70,7 @@ impl MemoryStore {
         }
     }
 
+    #[must_use = "handle the error or results may be lost"]
     /// Get a specific memory by ID.
     ///
     /// Returns `None` if the memory doesn't exist.
@@ -107,6 +78,7 @@ impl MemoryStore {
         Ok(self.db.get(id)?)
     }
 
+    #[must_use = "handle the error or results may be lost"]
     /// List all memories for a project.
     ///
     /// Returns memories ordered by creation time (newest first).
@@ -122,22 +94,12 @@ impl MemoryStore {
     /// - Limit is 0
     /// - Limit exceeds MAX_SEARCH_LIMIT
     pub fn list(&self, project_id: &str, limit: usize) -> Result<Vec<Memory>, Error> {
-        use super::store::MAX_SEARCH_LIMIT;
-
-        if limit == 0 {
-            return Err(Error::InvalidInput(
-                "Limit must be greater than 0".to_string(),
-            ));
-        }
-        if limit > MAX_SEARCH_LIMIT {
-            return Err(Error::InvalidInput(format!(
-                "Limit {} exceeds maximum allowed ({})",
-                limit, MAX_SEARCH_LIMIT
-            )));
-        }
+        use super::store::validate_limit;
+        validate_limit(limit)?;
         Ok(self.db.list(project_id, limit)?)
     }
 
+    #[must_use = "handle the error or results may be lost"]
     /// Update a memory's content.
     ///
     /// Generates a new embedding for the updated content and persists it.
@@ -157,6 +119,7 @@ impl MemoryStore {
         Ok(self.db.update(id, content, &embedding)?)
     }
 
+    #[must_use = "handle the error or results may be lost"]
     /// Delete a memory.
     ///
     /// # Returns

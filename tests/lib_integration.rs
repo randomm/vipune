@@ -8,7 +8,7 @@ use vipune::errors::Error;
 
 /// Test basic memory add and search operations.
 #[test]
-fn test_memory_store_add_and_search() {
+fn test_memory_store_add_then_search_returns_matching_memory() {
     // Create a temporary database
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
@@ -23,9 +23,13 @@ fn test_memory_store_add_and_search() {
 
     // Add a memory
     let project_id = "test-project";
-    let memory_id = store
-        .add(project_id, "Alice works at Microsoft", None)
-        .expect("Failed to add memory");
+    let memory_id = match store
+        .add_with_conflict(project_id, "Alice works at Microsoft", None, false)
+        .expect("Failed to add memory")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
 
     assert!(!memory_id.is_empty());
 
@@ -44,7 +48,7 @@ fn test_memory_store_add_and_search() {
 
 /// Test that path traversal strings are rejected by MemoryStore::new().
 #[test]
-fn test_memory_store_path_traversal_rejected() {
+fn test_memory_store_new_with_path_traversal_returns_error() {
     let config = Config::default();
 
     // Try to create a store with path traversal
@@ -61,7 +65,7 @@ fn test_memory_store_path_traversal_rejected() {
 
 /// Test that empty input is rejected by add().
 #[test]
-fn test_input_validation_add_empty() {
+fn test_add_with_empty_input_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -69,7 +73,7 @@ fn test_input_validation_add_empty() {
     let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
         .expect("Failed to create store");
 
-    let result = store.add("test", "", None);
+    let result = store.add_with_conflict("test", "", None, false);
     assert!(result.is_err());
     if !matches!(result.as_ref().unwrap_err(), Error::EmptyInput) {
         panic!("Expected EmptyInput error");
@@ -80,7 +84,7 @@ fn test_input_validation_add_empty() {
 
 /// Test that oversized input is rejected by add().
 #[test]
-fn test_input_validation_add_too_long() {
+fn test_add_with_oversized_input_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -90,7 +94,7 @@ fn test_input_validation_add_too_long() {
 
     // Create input longer than MAX_INPUT_LENGTH
     let long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.add("test", &long_text, None);
+    let result = store.add_with_conflict("test", &long_text, None, false);
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -108,7 +112,7 @@ fn test_input_validation_add_too_long() {
 
 /// Test that empty input is rejected by search().
 #[test]
-fn test_input_validation_search_empty() {
+fn test_search_with_empty_input_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -127,7 +131,7 @@ fn test_input_validation_search_empty() {
 
 /// Test that oversized input is rejected by search().
 #[test]
-fn test_input_validation_search_too_long() {
+fn test_search_with_oversized_input_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -155,7 +159,7 @@ fn test_input_validation_search_too_long() {
 
 /// Test that Config::default() works without environment variables.
 #[test]
-fn test_config_default_no_env() {
+fn test_config_default_with_no_env_vars_returns_valid_config() {
     // Clear environment variables that might affect config
     env::remove_var("VIPUNE_DATABASE_PATH");
     env::remove_var("VIPUNE_EMBEDDING_MODEL");
@@ -174,7 +178,7 @@ fn test_config_default_no_env() {
 
 /// Test that detect_project returns a non-empty string.
 #[test]
-fn test_detect_project() {
+fn test_detect_project_in_git_repo_returns_project_id() {
     let project_id = detect_project(None);
     assert!(!project_id.is_empty());
 
@@ -185,7 +189,7 @@ fn test_detect_project() {
 
 /// Test that Memory::fields are accessible.
 #[test]
-fn test_memory_struct_fields() {
+fn test_memory_with_stored_content_returns_expected_fields() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -194,13 +198,18 @@ fn test_memory_struct_fields() {
         .expect("Failed to create store");
 
     // Add memory with metadata
-    let memory_id = store
-        .add(
+    let memory_id = match store
+        .add_with_conflict(
             "test-project",
             "Test content",
             Some(r#"{"key": "value"}"#),
+            false,
         )
-        .expect("Failed to add memory");
+        .expect("Failed to add memory")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
 
     // Get the memory
     let memory = store
@@ -222,7 +231,7 @@ fn test_memory_struct_fields() {
 
 /// Test hybrid search functionality.
 #[test]
-fn test_hybrid_search() {
+fn test_search_hybrid_with_test_memories_returns_fused_results() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -233,12 +242,20 @@ fn test_hybrid_search() {
     let project_id = "test-hybrid";
 
     // Add multiple memories
-    store
-        .add(project_id, "Authentication uses JWT tokens", None)
-        .expect("Failed to add memory 1");
-    store
-        .add(project_id, "User management system", None)
-        .expect("Failed to add memory 2");
+    match store
+        .add_with_conflict(project_id, "Authentication uses JWT tokens", None, false)
+        .expect("Failed to add memory 1")
+    {
+        vipune::AddResult::Added { .. } => {}
+        _ => panic!("Expected AddResult::Added"),
+    }
+    match store
+        .add_with_conflict(project_id, "User management system", None, false)
+        .expect("Failed to add memory 2")
+    {
+        vipune::AddResult::Added { .. } => {}
+        _ => panic!("Expected AddResult::Added"),
+    }
 
     // Search using hybrid
     let results = store
@@ -253,7 +270,7 @@ fn test_hybrid_search() {
 
 /// Test that update() validates empty input.
 #[test]
-fn test_update_empty_input() {
+fn test_update_with_empty_input_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -261,9 +278,13 @@ fn test_update_empty_input() {
     let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
         .expect("Failed to create store");
 
-    let memory_id = store
-        .add("test", "Original content", None)
-        .expect("Failed to add memory");
+    let memory_id = match store
+        .add_with_conflict("test", "Original content", None, false)
+        .expect("Failed to add memory")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
 
     // Try to update with empty string
     let result = store.update(&memory_id, "");
@@ -277,7 +298,7 @@ fn test_update_empty_input() {
 
 /// Test that update() validates oversized input.
 #[test]
-fn test_update_too_long_input() {
+fn test_update_with_oversized_input_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -285,9 +306,13 @@ fn test_update_too_long_input() {
     let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
         .expect("Failed to create store");
 
-    let memory_id = store
-        .add("test", "Original content", None)
-        .expect("Failed to add memory");
+    let memory_id = match store
+        .add_with_conflict("test", "Original content", None, false)
+        .expect("Failed to add memory")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
 
     // Try to update with oversized content
     let long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
@@ -309,7 +334,7 @@ fn test_update_too_long_input() {
 
 /// Test that search() validates limit=0.
 #[test]
-fn test_search_limit_zero() {
+fn test_search_with_zero_limit_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -331,7 +356,7 @@ fn test_search_limit_zero() {
 
 /// Test that search() validates limit maximum.
 #[test]
-fn test_search_limit_too_large() {
+fn test_search_with_limit_over_max_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -353,7 +378,7 @@ fn test_search_limit_too_large() {
 
 /// Test that whitespace-only input is rejected.
 #[test]
-fn test_whitespace_only_input() {
+fn test_add_with_whitespace_only_input_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -362,7 +387,7 @@ fn test_whitespace_only_input() {
         .expect("Failed to create store");
 
     // Try to add whitespace-only content
-    let result = store.add("test", "   ", None);
+    let result = store.add_with_conflict("test", "   ", None, false);
     assert!(result.is_err());
     assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
 
@@ -377,7 +402,7 @@ fn test_whitespace_only_input() {
 /// Test that symlink pointing outside temp dir is handled correctly.
 #[cfg(unix)]
 #[test]
-fn test_symlink_path_traversal_rejected() {
+fn test_memory_store_new_with_symlink_traversal_returns_error() {
     use std::os::unix::fs;
 
     let temp_dir = env::temp_dir();
@@ -392,7 +417,7 @@ fn test_symlink_path_traversal_rejected() {
     fs::symlink(&target_path, &symlink_path).expect("Failed to create symlink");
 
     // Try to create store with symlink path
-    // This will fail because SQLite tries to open the symlink which points to an inaccessible location
+    // Path traversal guard rejects paths with parent-dir components before any filesystem access
     let result = MemoryStore::new(&symlink_path, &config.embedding_model, config.clone());
 
     // Clean up (always runs even if assertion fails)
@@ -405,7 +430,7 @@ fn test_symlink_path_traversal_rejected() {
 
 /// Test that path with parent-dir component is rejected.
 #[test]
-fn test_windows_style_path_component_rejected() {
+fn test_memory_store_new_with_parent_dir_component_returns_error() {
     let config = Config::default();
 
     // Use a path with parent-dir component
@@ -433,13 +458,13 @@ fn test_windows_style_path_component_rejected() {
 
 /// Test that MAX_SEARCH_LIMIT constant is accessible from library API.
 #[test]
-fn test_max_search_limit_constant() {
+fn test_constant_max_search_limit_is_accessible() {
     assert_eq!(MAX_SEARCH_LIMIT, 10_000);
 }
 
 /// Test that list() validates limit=0.
 #[test]
-fn test_list_limit_zero() {
+fn test_list_with_zero_limit_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -461,7 +486,7 @@ fn test_list_limit_zero() {
 
 /// Test that list() validates limit maximum.
 #[test]
-fn test_list_limit_too_large() {
+fn test_list_with_limit_over_max_returns_error() {
     let temp_dir = env::temp_dir();
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
@@ -476,6 +501,96 @@ fn test_list_limit_too_large() {
         assert!(msg.contains("exceeds maximum allowed"));
     } else {
         panic!("Expected InvalidInput error");
+    }
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that add() succeeds at exactly MAX_INPUT_LENGTH.
+#[test]
+fn test_add_at_exactly_max_input_length_returns_success() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    // Create input exactly at MAX_INPUT_LENGTH
+    let exact_text = "x".repeat(MAX_INPUT_LENGTH);
+    let result = store.add_with_conflict("test", &exact_text, None, false);
+    assert!(result.is_ok(), "Should accept input at exactly MAX_INPUT_LENGTH");
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that add() rejects input one character over MAX_INPUT_LENGTH.
+#[test]
+fn test_add_one_over_max_input_length_returns_error() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    // Create input one character over MAX_INPUT_LENGTH
+    let too_long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
+    let result = store.add_with_conflict("test", &too_long_text, None, false);
+    assert!(result.is_err());
+    if let Error::InputTooLong {
+        max_length,
+        actual_length,
+    } = &result.as_ref().unwrap_err()
+    {
+        assert_eq!(*max_length, MAX_INPUT_LENGTH);
+        assert_eq!(*actual_length, MAX_INPUT_LENGTH + 1);
+    } else {
+        panic!("Expected InputTooLong error");
+    }
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that search_hybrid() validates empty input.
+#[test]
+fn test_search_hybrid_with_empty_input_returns_error() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let result = store.search_hybrid("test", "", 10, 0.0);
+    assert!(result.is_err());
+    assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that search_hybrid() validates oversized input.
+#[test]
+fn test_search_hybrid_with_oversized_input_returns_error() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let long_query = "x".repeat(MAX_INPUT_LENGTH + 1);
+    let result = store.search_hybrid("test", &long_query, 10, 0.0);
+    assert!(result.is_err());
+    if let Error::InputTooLong {
+        max_length,
+        actual_length,
+    } = &result.as_ref().unwrap_err()
+    {
+        assert_eq!(*max_length, MAX_INPUT_LENGTH);
+        assert_eq!(*actual_length, MAX_INPUT_LENGTH + 1);
+    } else {
+        panic!("Expected InputTooLong error");
     }
 
     std::fs::remove_file(db_path).ok();
