@@ -5,7 +5,7 @@
 
 mod crud;
 mod search;
-mod store;
+pub mod store;
 
 pub use store::MemoryStore;
 

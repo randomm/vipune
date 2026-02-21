@@ -1,10 +1,9 @@
 //! Semantic search and similarity operations.
 
 use super::{embedding, Database, Error, Memory};
+use crate::memory::store::MAX_SEARCH_LIMIT;
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-const MAX_SEARCH_LIMIT: usize = 10_000;
 
 /// Validate search limit is within acceptable bounds.
 pub fn validate_limit(limit: usize) -> Result<()> {

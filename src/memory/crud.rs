@@ -7,7 +7,8 @@ use crate::sqlite::Memory;
 use super::store::MemoryStore;
 
 impl MemoryStore {
-    /// Add a memory to the store (legacy method without conflict detection).
+    #[allow(dead_code)]
+    /// Add a memory to the store (simple method without conflict detection).
     ///
     /// Generates an embedding for the content and stores it in SQLite.
     /// Returns the generated memory ID (UUID).
@@ -15,15 +16,24 @@ impl MemoryStore {
     /// # Arguments
     ///
     /// * `project_id` - Project identifier (e.g., git repo URL or user-defined)
-    /// * `content` - Text content to store
+    /// * `content` - Text content to store (1 to 100,000 characters)
     /// * `metadata` - Optional JSON metadata string
-    #[cfg(test)]
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Input is empty
+    /// - Input exceeds 100,000 characters
+    /// - Embedding generation fails
+    /// - Database insertion fails
     pub fn add(
         &mut self,
         project_id: &str,
         content: &str,
         metadata: Option<&str>,
     ) -> Result<String, Error> {
+        Self::validate_input_length(content)?;
+
         let embedding = self.embedder.embed(content)?;
         Ok(self.db.insert(project_id, content, &embedding, metadata)?)
     }
@@ -36,7 +46,7 @@ impl MemoryStore {
     /// # Arguments
     ///
     /// * `project_id` - Project identifier (e.g., git repo URL or user-defined)
-    /// * `content` - Text content to store
+    /// * `content` - Text content to store (1 to 100,000 characters)
     /// * `metadata` - Optional JSON metadata string
     /// * `force` - If true, bypass conflict detection and add regardless
     ///
@@ -44,6 +54,14 @@ impl MemoryStore {
     ///
     /// * `Ok(AddResult::Added { id })` if no conflicts or force=true
     /// * `Ok(AddResult::Conflicts { proposed, conflicts })` if conflicts found
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Input is empty
+    /// - Input exceeds 100,000 characters
+    /// - Embedding generation fails
+    /// - Database operations fail
     pub fn add_with_conflict(
         &mut self,
         project_id: &str,
@@ -51,6 +69,7 @@ impl MemoryStore {
         metadata: Option<&str>,
         force: bool,
     ) -> Result<AddResult, Error> {
+        Self::validate_input_length(content)?;
         if force {
             let embedding = self.embedder.embed(content)?;
             let id = self.db.insert(project_id, content, &embedding, metadata)?;
@@ -96,7 +115,26 @@ impl MemoryStore {
     ///
     /// * `project_id` - Project identifier
     /// * `limit` - Maximum number of results to return
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Limit is 0
+    /// - Limit exceeds MAX_SEARCH_LIMIT
     pub fn list(&self, project_id: &str, limit: usize) -> Result<Vec<Memory>, Error> {
+        use super::store::MAX_SEARCH_LIMIT;
+
+        if limit == 0 {
+            return Err(Error::InvalidInput(
+                "Limit must be greater than 0".to_string(),
+            ));
+        }
+        if limit > MAX_SEARCH_LIMIT {
+            return Err(Error::InvalidInput(format!(
+                "Limit {} exceeds maximum allowed ({})",
+                limit, MAX_SEARCH_LIMIT
+            )));
+        }
         Ok(self.db.list(project_id, limit)?)
     }
 
@@ -114,6 +152,7 @@ impl MemoryStore {
     ///
     /// Returns error if the memory doesn't exist.
     pub fn update(&mut self, id: &str, content: &str) -> Result<(), Error> {
+        Self::validate_input_length(content)?;
         let embedding = self.embedder.embed(content)?;
         Ok(self.db.update(id, content, &embedding)?)
     }

@@ -144,6 +144,43 @@ vipune add "Auth uses JWT tokens" --metadata '{"topic": "authentication"}'
 
 [Complete CLI reference](docs/cli-reference.md) • [Quickstart guide](docs/quickstart.md)
 
+## Library Usage
+
+vipune can also be used as a Rust crate for programmatic integration:
+
+```toml
+# Cargo.toml
+[dependencies]
+vipune = "0.1"
+```
+
+```rust
+use vipune::{Config, MemoryStore, detect_project};
+
+// Initialize memory store
+let config = Config::default();
+let mut store = MemoryStore::new(
+    config.database_path.as_path(),
+    &config.embedding_model,
+    config.clone()
+).expect("Failed to initialize store");
+
+// Add a memory
+let project_id = "my-project";
+let memory_id = store.add(&project_id, "Alice works at Microsoft", None)
+    .expect("Failed to add memory");
+
+// Search memories
+let results = store.search(&project_id, "where does alice work", 10, 0.0)
+    .expect("Failed to search");
+
+for memory in results {
+    println!("{:.2}: {}", memory.similarity.unwrap_or(0.0), memory.content);
+}
+```
+
+**See the crate documentation at [docs.rs](https://docs.rs/vipune) for complete API reference.**
+
 ## Configuration
 
 vipune works with zero configuration. All paths use the user's home directory:

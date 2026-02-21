@@ -6,7 +6,7 @@ license = "Apache-2.0"
 repository = "https://github.com/randomm/vipune"
 homepage = "https://github.com/randomm/vipune"
 keywords = ["ai", "memory", "embeddings", "semantic-search", "cli"]
-categories = ["command-line-utilities", "database"]
+categories = ["command-line-utilities", "database", "api-bindings"]
 readme = "README.md"
 authors = ["Janni Turunen"]
 description = "A minimal memory layer for AI agents"
@@ -38,6 +38,14 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 toml = "0.8"
 dirs = "6"
+
+[lib]
+name = "vipune"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vipune"
+path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = "3.13"
