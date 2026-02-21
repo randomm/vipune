@@ -19,7 +19,10 @@ use uuid::Uuid;
 pub use self::embedding::vec_to_blob;
 
 /// A single memory record with metadata and optional similarity score.
-#[derive(Clone)]
+///
+/// Contains the stored memory content, metadata, and timestamps. The similarity
+/// field is populated only during search operations.
+#[derive(Clone, Debug)]
 pub struct Memory {
     /// Unique identifier for this memory.
     pub id: String,
@@ -301,7 +304,7 @@ impl Database {
         )?;
 
         if rows == 0 {
-            return Err(Error::Sqlite(format!("No memory found with id: {}", id)));
+            return Err(Error::Sqlite("No memory found".to_string()));
         }
 
         Ok(())

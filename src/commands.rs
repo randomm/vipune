@@ -201,7 +201,7 @@ fn handle_search(
 fn handle_get(store: &mut MemoryStore, id: &str, json: bool) -> Result<ExitCode, Error> {
     let memory = store
         .get(id)?
-        .ok_or_else(|| Error::NotFound(id.to_string()))?;
+        .ok_or_else(|| Error::NotFound("memory not found".to_string()))?;
     if json {
         print_json(&GetResponse {
             id: memory.id.clone(),
@@ -262,7 +262,7 @@ fn handle_delete(store: &mut MemoryStore, id: &str, json: bool) -> Result<ExitCo
         }
         Ok(ExitCode::SUCCESS)
     } else {
-        Err(Error::NotFound(id.to_string()))
+        Err(Error::NotFound("memory not found".to_string()))
     }
 }
 

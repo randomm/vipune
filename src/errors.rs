@@ -1,23 +1,16 @@
 //! Error types for vipune.
 
-use std::path::PathBuf;
-
 use thiserror::Error;
 
 /// Main error type for vipune operations.
 #[derive(Error, Debug)]
 pub enum Error {
-    /// File not found.
-    #[error("File not found: {0}")]
-    #[allow(dead_code)]
-    FileNotFound(PathBuf),
-
     /// I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
     /// SQLite error.
-    #[error("SQLite error: {0}")]
+    #[error("Database error")]
     SQLite(#[from] rusqlite::Error),
 
     /// ONNX inference error.
@@ -52,30 +45,27 @@ pub enum Error {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
-    /// Invalid limit (for search operations).
-    #[error("Invalid limit: {0}")]
-    #[allow(dead_code)]
-    InvalidLimit(String),
+    /// Empty input cannot be processed.
+    #[error("Input cannot be empty")]
+    EmptyInput,
 
-    /// Invalid timestamp in database record.
-    #[error("Invalid timestamp for memory {id}: {timestamp} ({error})")]
-    InvalidTimestamp {
-        id: String,
-        timestamp: String,
-        error: String,
+    /// Input exceeds maximum allowed length.
+    #[error("Input too long: {actual_length} characters (max: {max_length})")]
+    InputTooLong {
+        max_length: usize,
+        actual_length: usize,
     },
 
-    /// ndarray shape error.
-    #[error("Array shape error: {0}")]
-    #[allow(dead_code)]
-    Shape(String),
+    /// Invalid timestamp in database record.
+    #[error("Invalid timestamp format: {timestamp} ({error})")]
+    InvalidTimestamp { timestamp: String, error: String },
 
     /// Memory not found.
     #[error("Memory not found: {0}")]
     NotFound(String),
 
     /// SQLite module error (from sqlite::Error).
-    #[error("SQLite module error: {0}")]
+    #[error("Database error")]
     SqliteModule(String),
 
     /// Validation error (for parameter validation).
@@ -86,12 +76,10 @@ pub enum Error {
 impl From<crate::sqlite::Error> for Error {
     fn from(err: crate::sqlite::Error) -> Self {
         // Convert specific SQLite errors to NotFound when applicable
+        // Sanitize: don't leak memory IDs in error messages to library consumers
         let err_str = err.to_string();
         if err_str.contains("No memory found with id:") {
-            if let Some(id) = err_str.split("No memory found with id: ").nth(1) {
-                return Error::NotFound(id.trim().to_string());
-            }
-            return Error::NotFound("unknown".to_string());
+            return Error::NotFound("memory not found".to_string());
         }
         Error::SqliteModule(err_str)
     }

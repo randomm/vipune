@@ -1,7 +1,12 @@
 //! Memory store data types.
 
+use serde::Serialize;
+
 /// Result type for conflict-aware add operations.
-#[derive(Debug, serde::Serialize)]
+///
+/// Returned by `MemoryStore::add_with_conflict()` to indicate whether
+/// a memory was successfully added or conflicts were detected.
+#[derive(Debug, Serialize)]
 pub enum AddResult {
     /// Memory was successfully added.
     Added { id: String },
@@ -13,7 +18,10 @@ pub enum AddResult {
 }
 
 /// Details about a conflicting memory.
-#[derive(Debug, serde::Serialize)]
+///
+/// Provides information about memories that are similar to a proposed addition,
+/// including their IDs, content, and similarity scores.
+#[derive(Debug, Serialize)]
 pub struct ConflictMemory {
     /// Unique identifier of the conflicting memory.
     pub id: String,

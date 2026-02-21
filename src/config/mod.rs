@@ -18,6 +18,18 @@ use std::path::PathBuf;
 pub use loader::ConfigFile;
 
 /// Configuration values with priority: defaults < config file < env vars.
+///
+/// Provides configuration options for the memory store, including database paths,
+/// embedding model selection, and search parameters.
+///
+/// # Example
+///
+/// ```
+/// use vipune::Config;
+///
+/// let config = Config::default();
+/// println!("Database path: {:?}", config.database_path);
+/// ```
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     /// Path to the SQLite database file (e.g., `~/.vipune/memories.db`).

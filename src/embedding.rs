@@ -13,9 +13,20 @@ use crate::errors::Error;
 use tokenizers::TruncationParams;
 
 /// Embedding dimensions for bge-small-en-v1.5 model.
+///
+/// All generated embeddings are 384-dimensional vectors.
 pub const EMBEDDING_DIMS: usize = 384;
 
 /// ONNX embedding engine for synchronous text-to-vector conversion.
+///
+/// Uses the bge-small-en-v1.5 model to generate 384-dimensional embeddings
+/// with mean pooling and L2 normalization. All methods are synchronous,
+/// matching vipune's no-async policy.
+///
+/// # Mutability Requirements
+///
+/// The `embed()` method requires `&mut self` because ONNX internally mutates
+/// state for tensor allocations during inference.
 pub struct EmbeddingEngine {
     session: Session,
     tokenizer: Tokenizer,

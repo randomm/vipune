@@ -215,9 +215,13 @@ fn test_integration_add_search_roundtrip() {
 
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", config).unwrap();
 
-    let id = store
-        .add("test-project", "semantic search is useful", None)
-        .unwrap();
+    let id = match store
+        .add_with_conflict("test-project", "semantic search is useful", None, false)
+        .unwrap()
+    {
+        crate::memory_types::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
 
     let results = store
         .search("test-project", "finding information", 5, 0.0)
@@ -240,7 +244,13 @@ fn test_integration_update_changes_embedding() {
 
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", config).unwrap();
 
-    let id = store.add("test-project", "original content", None).unwrap();
+    let id = match store
+        .add_with_conflict("test-project", "original content", None, false)
+        .unwrap()
+    {
+        crate::memory_types::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
 
     store.update(&id, "completely different content").unwrap();
 

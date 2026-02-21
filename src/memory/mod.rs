@@ -5,7 +5,9 @@
 
 mod crud;
 mod search;
-mod store;
+
+// pub(crate): module internals hidden; public items re-exported explicitly via lib.rs
+pub(crate) mod store;
 
 pub use store::MemoryStore;
 
