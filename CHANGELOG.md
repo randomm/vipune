@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-02-21
+
+### Features
+
+- Initial release of vipune v0.1.1
+
+
 ## [0.1.1] - 2026-02-19
 
 ### Features
