@@ -69,7 +69,8 @@ impl MemoryStore {
         for component in db_path.components() {
             if matches!(component, Component::ParentDir) {
                 return Err(Error::Config(
-                    "Invalid database path: contains '..' which may escape the intended directory".to_string(),
+                    "Invalid database path: contains '..' which may escape the intended directory"
+                        .to_string(),
                 ));
             }
         }
@@ -85,9 +86,9 @@ impl MemoryStore {
             })?
         } else {
             // For non-existent paths, canonicalize parent and reconstruct
-            let parent = db_path
-                .parent()
-                .ok_or_else(|| Error::Config("Invalid database path: no parent directory".to_string()))?;
+            let parent = db_path.parent().ok_or_else(|| {
+                Error::Config("Invalid database path: no parent directory".to_string())
+            })?;
             let canonical_parent = std::fs::canonicalize(parent).map_err(|e| {
                 Error::Config(format!(
                     "Invalid database path: parent directory not accessible: {}",

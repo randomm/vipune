@@ -3,8 +3,8 @@
 use std::env;
 use std::path::PathBuf;
 
-use vipune::{Config, MemoryStore, detect_project, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
 use vipune::errors::Error;
+use vipune::{detect_project, Config, MemoryStore, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
 
 /// Test basic memory add and search operations.
 #[test]
@@ -14,12 +14,8 @@ fn test_memory_store_add_then_search_returns_matching_memory() {
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
     let config = Config::default();
-    let mut store = MemoryStore::new(
-        db_path.as_path(),
-        &config.embedding_model,
-        config.clone(),
-    )
-    .expect("Failed to create store");
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
 
     // Add a memory
     let project_id = "test-project";
@@ -54,11 +50,7 @@ fn test_memory_store_new_with_path_traversal_returns_error() {
     // Try to create a store with path traversal
     let traversal_path = PathBuf::from("../../../etc/passwd");
 
-    let result = MemoryStore::new(
-        &traversal_path,
-        &config.embedding_model,
-        config.clone(),
-    );
+    let result = MemoryStore::new(&traversal_path, &config.embedding_model, config.clone());
 
     assert!(result.is_err());
 }
@@ -425,7 +417,10 @@ fn test_memory_store_new_with_symlink_traversal_returns_error() {
     std::fs::remove_dir(&test_dir).ok();
 
     // Should fail (path traversal prevention or database open failure)
-    assert!(result.is_err(), "MemoryStore creation should fail for inaccessible symlink");
+    assert!(
+        result.is_err(),
+        "MemoryStore creation should fail for inaccessible symlink"
+    );
 }
 
 /// Test that path with parent-dir component is rejected.
@@ -448,7 +443,10 @@ fn test_memory_store_new_with_parent_dir_component_returns_error() {
             );
         }
         Err(e) => {
-            panic!("Expected Config error with parent dir rejection, got: {}", e);
+            panic!(
+                "Expected Config error with parent dir rejection, got: {}",
+                e
+            );
         }
         Ok(_) => {
             panic!("MemoryStore creation should fail for path with parent directory component");
@@ -519,7 +517,10 @@ fn test_add_at_exactly_max_input_length_returns_success() {
     // Create input exactly at MAX_INPUT_LENGTH
     let exact_text = "x".repeat(MAX_INPUT_LENGTH);
     let result = store.add_with_conflict("test", &exact_text, None, false);
-    assert!(result.is_ok(), "Should accept input at exactly MAX_INPUT_LENGTH");
+    assert!(
+        result.is_ok(),
+        "Should accept input at exactly MAX_INPUT_LENGTH"
+    );
 
     std::fs::remove_file(db_path).ok();
 }

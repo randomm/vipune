@@ -47,15 +47,15 @@ pub mod memory;
 pub mod memory_types;
 pub mod project;
 mod rrf;
-mod temporal;
 mod sqlite;
+mod temporal;
 
 // Re-export public API
 pub use config::Config;
 pub use embedding::{EmbeddingEngine, EMBEDDING_DIMS};
 pub use errors::Error;
-pub use memory::MemoryStore;
 pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
+pub use memory::MemoryStore;
 pub use memory_types::{AddResult, ConflictMemory};
 pub use project::detect_project;
 pub use sqlite::Memory;

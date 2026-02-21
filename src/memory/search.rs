@@ -5,7 +5,7 @@ use crate::rrf;
 use crate::sqlite::Memory;
 use crate::temporal::{apply_recency_weight, validate_recency_weight, DecayConfig};
 
-use super::store::{MemoryStore, validate_limit};
+use super::store::{validate_limit, MemoryStore};
 
 /// Maximum allowed candidate pool size for hybrid search to prevent DoS.
 const MAX_CANDIDATE_POOL: usize = 10_000;

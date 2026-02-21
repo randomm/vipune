@@ -58,10 +58,7 @@ pub enum Error {
 
     /// Invalid timestamp in database record.
     #[error("Invalid timestamp format: {timestamp} ({error})")]
-    InvalidTimestamp {
-        timestamp: String,
-        error: String,
-    },
+    InvalidTimestamp { timestamp: String, error: String },
 
     /// Memory not found.
     #[error("Memory not found: {0}")]
