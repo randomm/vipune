@@ -64,9 +64,9 @@ impl EmbeddingEngine {
 
         // Check if model requires token_type_ids input
         let requires_token_type_ids = session
-            .inputs
+            .inputs()
             .iter()
-            .any(|input| input.name == "token_type_ids");
+            .any(|input| input.name() == "token_type_ids");
 
         Ok(EmbeddingEngine {
             session,
