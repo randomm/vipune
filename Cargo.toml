@@ -48,7 +48,7 @@ name = "vipune"
 path = "src/main.rs"
 
 [dev-dependencies]
-tempfile = "3.13"
+tempfile = "3.26"
 
 [profile.release]
 strip = true
