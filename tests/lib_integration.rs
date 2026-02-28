@@ -7,7 +7,6 @@ use vipune::errors::Error;
 use vipune::{detect_project, Config, MemoryStore, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
 
 /// Test basic memory add and search operations.
-#[ignore]
 #[test]
 fn test_memory_store_add_then_search_returns_matching_memory() {
     // Create a temporary database
@@ -181,7 +180,6 @@ fn test_detect_project_in_git_repo_returns_project_id() {
 }
 
 /// Test that Memory::fields are accessible.
-#[ignore]
 #[test]
 fn test_memory_with_stored_content_returns_expected_fields() {
     let temp_dir = env::temp_dir();
@@ -224,7 +222,6 @@ fn test_memory_with_stored_content_returns_expected_fields() {
 }
 
 /// Test hybrid search functionality.
-#[ignore]
 #[test]
 fn test_search_hybrid_with_test_memories_returns_fused_results() {
     let temp_dir = env::temp_dir();
@@ -264,7 +261,6 @@ fn test_search_hybrid_with_test_memories_returns_fused_results() {
 }
 
 /// Test that update() validates empty input.
-#[ignore]
 #[test]
 fn test_update_with_empty_input_returns_error() {
     let temp_dir = env::temp_dir();
@@ -293,7 +289,6 @@ fn test_update_with_empty_input_returns_error() {
 }
 
 /// Test that update() validates oversized input.
-#[ignore]
 #[test]
 fn test_update_with_oversized_input_returns_error() {
     let temp_dir = env::temp_dir();
@@ -510,7 +505,6 @@ fn test_list_with_limit_over_max_returns_error() {
 }
 
 /// Test that add() succeeds at exactly MAX_INPUT_LENGTH.
-#[ignore]
 #[test]
 fn test_add_at_exactly_max_input_length_returns_success() {
     let temp_dir = env::temp_dir();
