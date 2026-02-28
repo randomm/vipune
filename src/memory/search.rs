@@ -53,7 +53,7 @@ impl MemoryStore {
         Self::validate_input_length(query)?;
 
         validate_recency_weight(recency_weight).map_err(Error::Validation)?;
-        let embedding = self.embedder.embed(query)?;
+        let embedding = self.embedder()?.embed(query)?;
         let mut memories = self.db.search(project_id, &embedding, limit)?;
 
         if recency_weight > 0.0 {
@@ -129,7 +129,7 @@ impl MemoryStore {
         validate_limit(limit)?;
 
         // 1. Encode query for semantic search
-        let embedding = self.embedder.embed(query)?;
+        let embedding = self.embedder()?.embed(query)?;
 
         // 2. Calculate candidate pool (limit × 10, min 50, max MAX_CANDIDATE_POOL)
         let candidate_pool = limit.saturating_mul(10).clamp(50, MAX_CANDIDATE_POOL);

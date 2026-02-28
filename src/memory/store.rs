@@ -42,7 +42,8 @@ pub(crate) fn validate_limit(limit: usize) -> Result<(), Error> {
 /// for ONNX tensor allocations.
 pub struct MemoryStore {
     pub(crate) db: Database,
-    pub(crate) embedder: EmbeddingEngine,
+    pub(crate) embedder: Option<EmbeddingEngine>,
+    pub(crate) model_id: String,
     pub(crate) config: Config,
 }
 
@@ -61,7 +62,6 @@ impl MemoryStore {
     /// - Database path contains path traversal sequences (e.g., "../")
     /// - Parent directory cannot be canonicalized
     /// - Database cannot be opened
-    /// - Embedding model cannot be loaded
     pub fn new(db_path: &Path, model_id: &str, config: Config) -> Result<Self, Error> {
         use std::path::Component;
 
@@ -103,12 +103,22 @@ impl MemoryStore {
         };
 
         let db = Database::open(&db_real_path)?;
-        let embedder = EmbeddingEngine::new(model_id)?;
         Ok(MemoryStore {
             db,
-            embedder,
+            embedder: None,
+            model_id: model_id.to_string(),
             config,
         })
+    }
+
+    /// Lazily initialize and return a mutable reference to the embedding engine.
+    ///
+    /// Downloads the model on first call; subsequent calls return the cached engine.
+    pub(crate) fn embedder(&mut self) -> Result<&mut EmbeddingEngine, Error> {
+        if self.embedder.is_none() {
+            self.embedder = Some(EmbeddingEngine::new(&self.model_id)?);
+        }
+        Ok(self.embedder.as_mut().unwrap())
     }
 
     /// Validate input length (rejects empty and whitespace-only inputs).

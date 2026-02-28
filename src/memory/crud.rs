@@ -41,12 +41,12 @@ impl MemoryStore {
     ) -> Result<AddResult, Error> {
         Self::validate_input_length(content)?;
         if force {
-            let embedding = self.embedder.embed(content)?;
+            let embedding = self.embedder()?.embed(content)?;
             let id = self.db.insert(project_id, content, &embedding, metadata)?;
             return Ok(AddResult::Added { id });
         }
 
-        let embedding = self.embedder.embed(content)?;
+        let embedding = self.embedder()?.embed(content)?;
         let similars =
             self.db
                 .find_similar(project_id, &embedding, self.config.similarity_threshold)?;
@@ -115,7 +115,7 @@ impl MemoryStore {
     /// Returns error if the memory doesn't exist.
     pub fn update(&mut self, id: &str, content: &str) -> Result<(), Error> {
         Self::validate_input_length(content)?;
-        let embedding = self.embedder.embed(content)?;
+        let embedding = self.embedder()?.embed(content)?;
         Ok(self.db.update(id, content, &embedding)?)
     }
 
