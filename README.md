@@ -83,8 +83,7 @@ sudo mv vipune /usr/local/bin/
 
 **Latest release (recommended)**
 ```bash
-# Check https://github.com/randomm/vipune/releases for the latest version
-cargo install --git https://github.com/randomm/vipune --tag v0.1.1 vipune
+cargo install vipune
 ```
 
 **Or clone and build manually**
