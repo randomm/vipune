@@ -51,10 +51,10 @@ For source installation:
 **macOS Apple Silicon (arm64)**
 ```bash
 # Download
-curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-apple-darwin.tar.gz
+curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-apple-darwin.tar.xz
 
 # Extract
-tar xzf vipune-aarch64-apple-darwin.tar.gz
+tar xf vipune-aarch64-apple-darwin.tar.xz
 
 # Install to system directory (requires sudo)
 sudo mv vipune /usr/local/bin/
@@ -67,15 +67,15 @@ export PATH="$HOME/.local/bin:$PATH"
 
 **Linux x86_64**
 ```bash
-curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-x86_64-unknown-linux-gnu.tar.gz
-tar xzf vipune-x86_64-unknown-linux-gnu.tar.gz
+curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-x86_64-unknown-linux-gnu.tar.xz
+tar xf vipune-x86_64-unknown-linux-gnu.tar.xz
 sudo mv vipune /usr/local/bin/
 ```
 
 **Linux ARM64**
 ```bash
-curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-unknown-linux-gnu.tar.gz
-tar xzf vipune-aarch64-unknown-linux-gnu.tar.gz
+curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-unknown-linux-gnu.tar.xz
+tar xf vipune-aarch64-unknown-linux-gnu.tar.xz
 sudo mv vipune /usr/local/bin/
 ```
 
