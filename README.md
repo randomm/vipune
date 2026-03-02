@@ -49,34 +49,57 @@ For source installation:
 ### Pre-built binary
 
 **macOS Apple Silicon (arm64)**
+
+Download and extract:
+
 ```bash
-# Download
 curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-apple-darwin.tar.xz
-
-# Extract
 tar xf vipune-aarch64-apple-darwin.tar.xz
+```
 
-# Install to system directory (requires sudo)
-sudo mv vipune /usr/local/bin/
+Install to system PATH (requires sudo):
 
-# Or install to user directory (no sudo)
-mkdir -p ~/.local/bin
-mv vipune ~/.local/bin/
+```bash
+sudo mkdir -p /usr/local/bin && sudo mv vipune /usr/local/bin/
+```
+
+Or install to user directory (no sudo):
+
+```bash
+mkdir -p ~/.local/bin && mv vipune ~/.local/bin/
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+> Add the `export` line to your `~/.zshrc` or `~/.bashrc` to make it permanent.
+
 **Linux x86_64**
+
+Download and extract:
+
 ```bash
 curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-x86_64-unknown-linux-gnu.tar.xz
 tar xf vipune-x86_64-unknown-linux-gnu.tar.xz
-sudo mv vipune /usr/local/bin/
+```
+
+Install to system PATH:
+
+```bash
+sudo mkdir -p /usr/local/bin && sudo mv vipune /usr/local/bin/
 ```
 
 **Linux ARM64**
+
+Download and extract:
+
 ```bash
 curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-unknown-linux-gnu.tar.xz
 tar xf vipune-aarch64-unknown-linux-gnu.tar.xz
-sudo mv vipune /usr/local/bin/
+```
+
+Install to system PATH:
+
+```bash
+sudo mkdir -p /usr/local/bin && sudo mv vipune /usr/local/bin/
 ```
 
 ### Build from source
@@ -87,45 +110,63 @@ cargo install vipune
 ```
 
 **Or clone and build manually**
+
 ```bash
 git clone https://github.com/randomm/vipune.git
 cd vipune && cargo build --release
+```
 
-# Binary at ./target/release/vipune
+The binary will be at `./target/release/vipune`. Install it:
 
-# Add to PATH temporarily
+```bash
+sudo mkdir -p /usr/local/bin && sudo cp target/release/vipune /usr/local/bin/
+```
+
+Or add to PATH temporarily:
+
+```bash
 export PATH="$(pwd)/target/release:$PATH"
-
-# Or install permanently
-sudo cp target/release/vipune /usr/local/bin/
 ```
 
 ### Uninstall
 
+Remove the binary (whichever method you used to install):
+
 ```bash
-# Remove pre-built binary
 sudo rm /usr/local/bin/vipune
+```
 
-# Remove from user directory
+```bash
 rm ~/.local/bin/vipune
+```
 
-# Remove via cargo
+```bash
 cargo uninstall vipune
+```
 
-# Clear data (optional)
+Optionally, clear all data:
+
+```bash
 rm -rf ~/.vipune ~/.config/vipune
 ```
 
 ## Quick Start
 
+Add a memory:
+
 ```bash
-# Add a memory
 vipune add "Alice works at Microsoft"
+```
 
-# Search by semantic meaning
+Search by semantic meaning:
+
+```bash
 vipune search "where does alice work"
+```
 
-# Add with metadata (optional)
+Add with metadata (optional):
+
+```bash
 vipune add "Auth uses JWT tokens" --metadata '{"topic": "authentication"}'
 ```
 
