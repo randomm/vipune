@@ -4,7 +4,7 @@ use std::env;
 use std::path::PathBuf;
 
 use vipune::errors::Error;
-use vipune::{detect_project, Config, MemoryStore, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
+use vipune::{Config, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT, MemoryStore, detect_project};
 
 /// Test basic memory add and search operations.
 #[test]
@@ -153,11 +153,13 @@ fn test_search_with_oversized_input_returns_error() {
 #[test]
 fn test_config_default_with_no_env_vars_returns_valid_config() {
     // Clear environment variables that might affect config
-    env::remove_var("VIPUNE_DATABASE_PATH");
-    env::remove_var("VIPUNE_EMBEDDING_MODEL");
-    env::remove_var("VIPUNE_MODEL_CACHE");
-    env::remove_var("VIPUNE_SIMILARITY_THRESHOLD");
-    env::remove_var("VIPUNE_RECENCY_WEIGHT");
+    unsafe {
+        env::remove_var("VIPUNE_DATABASE_PATH");
+        env::remove_var("VIPUNE_EMBEDDING_MODEL");
+        env::remove_var("VIPUNE_MODEL_CACHE");
+        env::remove_var("VIPUNE_SIMILARITY_THRESHOLD");
+        env::remove_var("VIPUNE_RECENCY_WEIGHT");
+    }
 
     let config = Config::default();
 

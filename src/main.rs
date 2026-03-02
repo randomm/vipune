@@ -16,7 +16,7 @@ use clap::Parser;
 use commands::Commands;
 use errors::Error;
 use memory::MemoryStore;
-use output::{print_json, ErrorResponse};
+use output::{ErrorResponse, print_json};
 use project::detect_project;
 use std::process::ExitCode;
 

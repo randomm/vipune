@@ -1,6 +1,6 @@
 //! Semantic search and similarity operations.
 
-use super::{embedding, Database, Error, Memory};
+use super::{Database, Error, Memory, embedding};
 use crate::memory::store::MAX_SEARCH_LIMIT;
 
 pub type Result<T> = std::result::Result<T, Error>;

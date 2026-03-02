@@ -12,7 +12,7 @@ pub mod fts;
 pub mod search;
 
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension, Result as SqliteResult};
+use rusqlite::{Connection, OptionalExtension, Result as SqliteResult, params};
 use std::path::Path;
 use uuid::Uuid;
 
