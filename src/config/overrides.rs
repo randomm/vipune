@@ -37,8 +37,9 @@ mod tests {
             "VIPUNE_RECENCY_WEIGHT",
         ];
         for var in vars {
-            #[allow(clippy::disallowed_methods)]
-            std::env::remove_var(var);
+            unsafe {
+                std::env::remove_var(var);
+            }
         }
     }
 
@@ -47,14 +48,12 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         cleanup_env_vars();
 
-        #[allow(clippy::disallowed_methods)]
-        std::env::set_var("VIPUNE_DATABASE_PATH", "/custom/path/db.db");
-        #[allow(clippy::disallowed_methods)]
-        std::env::set_var("VIPUNE_EMBEDDING_MODEL", "env/model");
-        #[allow(clippy::disallowed_methods)]
-        std::env::set_var("VIPUNE_MODEL_CACHE", "/custom/cache");
-        #[allow(clippy::disallowed_methods)]
-        std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "0.95");
+        unsafe {
+            std::env::set_var("VIPUNE_DATABASE_PATH", "/custom/path/db.db");
+            std::env::set_var("VIPUNE_EMBEDDING_MODEL", "env/model");
+            std::env::set_var("VIPUNE_MODEL_CACHE", "/custom/cache");
+            std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "0.95");
+        }
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
@@ -84,8 +83,9 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         cleanup_env_vars();
 
-        #[allow(clippy::disallowed_methods)]
-        std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "invalid");
+        unsafe {
+            std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "invalid");
+        }
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
@@ -111,8 +111,9 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         cleanup_env_vars();
 
-        #[allow(clippy::disallowed_methods)]
-        std::env::set_var("VIPUNE_DATABASE_PATH", "");
+        unsafe {
+            std::env::set_var("VIPUNE_DATABASE_PATH", "");
+        }
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
@@ -138,8 +139,9 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         cleanup_env_vars();
 
-        #[allow(clippy::disallowed_methods)]
-        std::env::set_var("VIPUNE_EMBEDDING_MODEL", "   ");
+        unsafe {
+            std::env::set_var("VIPUNE_EMBEDDING_MODEL", "   ");
+        }
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
@@ -165,8 +167,9 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         cleanup_env_vars();
 
-        #[allow(clippy::disallowed_methods)]
-        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "0.5");
+        unsafe {
+            std::env::set_var("VIPUNE_RECENCY_WEIGHT", "0.5");
+        }
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
@@ -193,8 +196,9 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         cleanup_env_vars();
 
-        #[allow(clippy::disallowed_methods)]
-        std::env::set_var("VIPUNE_RECENCY_WEIGHT", "invalid");
+        unsafe {
+            std::env::set_var("VIPUNE_RECENCY_WEIGHT", "invalid");
+        }
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();

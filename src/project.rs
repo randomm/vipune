@@ -204,9 +204,13 @@ mod tests {
     #[test]
     fn test_env_var_whitespace() {
         // This test runs in isolation, safe to set env var
-        std::env::set_var("VIPUNE_PROJECT", "   ");
+        unsafe {
+            std::env::set_var("VIPUNE_PROJECT", "   ");
+        }
         let project = detect_project(None);
         assert!(!project.is_empty()); // Should ignore whitespace and use fallback
-        std::env::remove_var("VIPUNE_PROJECT");
+        unsafe {
+            std::env::remove_var("VIPUNE_PROJECT");
+        }
     }
 }

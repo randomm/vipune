@@ -324,9 +324,11 @@ fn test_hybrid_search_basic() {
 
     // Rust memory should appear in both semantic and BM25 results
     assert!(semantic_results.iter().any(|m| m.id == id_rust));
-    assert!(bm25_results
-        .iter()
-        .any(|m| m.content.to_lowercase().contains("rust")));
+    assert!(
+        bm25_results
+            .iter()
+            .any(|m| m.content.to_lowercase().contains("rust"))
+    );
 }
 
 #[test]

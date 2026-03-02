@@ -165,8 +165,9 @@ mod tests {
             "VIPUNE_RECENCY_WEIGHT",
         ];
         for var in vars {
-            #[allow(clippy::disallowed_methods)]
-            std::env::remove_var(var);
+            unsafe {
+                std::env::remove_var(var);
+            }
         }
     }
 
