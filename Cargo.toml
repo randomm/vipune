@@ -23,7 +23,7 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 # RC 11 provides lighter dependency footprint (hmac-sha256, lzma-rust2 instead of flate2, sha2, tar).
 # Stable 2.0.0 not released (latest stable: 1.18.0 with API incompatibilities).
 # Requires API changes: .inputs field → .inputs() method, input.name field → input.name() method.
-ort = { version = "=2.0.0-rc.11", features = ["ndarray"] }
+ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
 
 # HuggingFace tokenizers and model download
 tokenizers = "0.22.0"
