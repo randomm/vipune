@@ -63,8 +63,13 @@ impl Database {
 
         for row_result in rows {
             let (id, pid, content, metadata, created_at, updated_at, blob) = row_result?;
-            let stored_embedding = embedding::blob_to_vec(&blob)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+            let stored_embedding = embedding::blob_to_vec(&blob).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Blob,
+                    Box::new(e),
+                )
+            })?;
             let similarity = Some(embedding::cosine_similarity(
                 query_embedding,
                 &stored_embedding,

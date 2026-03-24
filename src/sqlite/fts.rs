@@ -151,8 +151,13 @@ impl Database {
         let memories: rusqlite::Result<Vec<Memory>> = stmt
             .query_map(params![escaped_query, project_id, limit as i64], |row| {
                 let blob: Vec<u8> = row.get(4)?;
-                let embedding = super::embedding::blob_to_vec(&blob)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+                let embedding = super::embedding::blob_to_vec(&blob).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?;
                 Ok(Memory {
                     id: row.get(0)?,
                     project_id: row.get(1)?,

@@ -33,6 +33,9 @@ pub struct Memory {
     /// Optional user-provided metadata (JSON string).
     pub metadata: Option<String>,
     /// The embedding vector (384-dimensional f32 values).
+    // allow(dead_code): Field is pub for library consumers (e.g. kide crate)
+    // but unused in the binary target due to separate lib/bin module trees.
+    #[allow(dead_code)]
     pub embedding: Vec<f32>,
 
     /// Similarity score (search-dependent):
@@ -236,8 +239,13 @@ impl Database {
         let result = stmt
             .query_row([id], |row| {
                 let blob: Vec<u8> = row.get(4)?;
-                let embedding = blob_to_vec(&blob)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+                let embedding = blob_to_vec(&blob).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?;
                 Ok(Memory {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -275,8 +283,13 @@ impl Database {
         let memories: SqliteResult<Vec<Memory>> = stmt
             .query_map(params![project_id, limit as i64], |row| {
                 let blob: Vec<u8> = row.get(4)?;
-                let embedding = blob_to_vec(&blob)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+                let embedding = blob_to_vec(&blob).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Blob,
+                        Box::new(e),
+                    )
+                })?;
                 Ok(Memory {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
@@ -344,6 +357,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::embedding::EMBEDDING_DIMS;
     use tempfile::TempDir;
 
     fn create_test_db() -> Database {
@@ -506,13 +520,13 @@ mod tests {
     #[test]
     fn test_get_includes_embedding() {
         let db = create_test_db();
-        let embedding = vec![0.1f32; 384];
+        let embedding = vec![0.1f32; EMBEDDING_DIMS];
         let id = db
             .insert("proj1", "test content", &embedding, None)
             .unwrap();
 
         let memory = db.get(&id).unwrap().unwrap();
-        assert_eq!(memory.embedding.len(), 384);
+        assert_eq!(memory.embedding.len(), EMBEDDING_DIMS);
         for (i, &val) in embedding.iter().enumerate() {
             assert!((memory.embedding[i] - val).abs() < 1e-6);
         }
@@ -521,8 +535,8 @@ mod tests {
     #[test]
     fn test_list_includes_embeddings() {
         let db = create_test_db();
-        let embedding1 = vec![0.1f32; 384];
-        let embedding2 = vec![0.2f32; 384];
+        let embedding1 = vec![0.1f32; EMBEDDING_DIMS];
+        let embedding2 = vec![0.2f32; EMBEDDING_DIMS];
 
         db.insert("proj1", "first", &embedding1, None).unwrap();
         db.insert("proj1", "second", &embedding2, None).unwrap();
@@ -531,7 +545,7 @@ mod tests {
         assert_eq!(memories.len(), 2);
 
         for memory in &memories {
-            assert_eq!(memory.embedding.len(), 384);
+            assert_eq!(memory.embedding.len(), EMBEDDING_DIMS);
         }
     }
 
@@ -539,17 +553,17 @@ mod tests {
     fn test_embedding_roundtrip() {
         let db = create_test_db();
         let original = vec![0.123f32, 0.456f32, 0.789f32];
-        let mut full_embedding = vec![0.1f32; 384];
+        let mut full_embedding = vec![0.1f32; EMBEDDING_DIMS];
         full_embedding[0] = original[0];
         full_embedding[1] = original[1];
-        full_embedding[383] = original[2];
+        full_embedding[EMBEDDING_DIMS - 1] = original[2];
 
         let id = db.insert("proj1", "test", &full_embedding, None).unwrap();
 
         let memory = db.get(&id).unwrap().unwrap();
-        assert_eq!(memory.embedding.len(), 384);
+        assert_eq!(memory.embedding.len(), EMBEDDING_DIMS);
         assert!((memory.embedding[0] - original[0]).abs() < 1e-6);
         assert!((memory.embedding[1] - original[1]).abs() < 1e-6);
-        assert!((memory.embedding[383] - original[2]).abs() < 1e-6);
+        assert!((memory.embedding[EMBEDDING_DIMS - 1] - original[2]).abs() < 1e-6);
     }
 }
