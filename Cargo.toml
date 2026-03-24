@@ -19,11 +19,11 @@ clap = { version = "4.5", features = ["derive"] }
 # Database
 rusqlite = { version = "0.38", features = ["bundled"] }
 
-# ONNX Runtime for embeddings (CPU-only, auto-downloads shared library)
-# RC 11 provides lighter dependency footprint (hmac-sha256, lzma-rust2 instead of flate2, sha2, tar).
+# ONNX Runtime for embeddings (CPU-only, auto-downloads shared library).
+# Using RC 9 for compatibility with gline-rs (see issue #53).
 # Stable 2.0.0 not released (latest stable: 1.18.0 with API incompatibilities).
-# Requires API changes: .inputs field → .inputs() method, input.name field → input.name() method.
-ort = { version = "=2.0.0-rc.11", features = ["ndarray", "download-binaries"] }
+ort = { version = "=2.0.0-rc.9", features = ["ndarray", "download-binaries"] }
+ort-sys = "=2.0.0-rc.9"
 
 # HuggingFace tokenizers and model download
 tokenizers = "0.22.0"
