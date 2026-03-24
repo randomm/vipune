@@ -295,4 +295,6 @@ vipune search "recent changes" --recency 0.7
 
 - Read the [complete CLI reference](cli-reference.md)
 - Explore agent integration patterns in the [README](../README.md#agent-integration)
+- Learn effective query patterns in the [Query Guide](vipune-query-guide.md)
+- Understand search modes in the [Search Guide](search.md)
 - Check project issues for upcoming features

@@ -372,13 +372,14 @@ All commands return exit code `1` on error, with error message to stderr or JSON
 vipune search "how do we handle authentication"
 ```
 
-**Find by metadata (via search):**
+**Hybrid search (keywords):**
 ```bash
-vipune add "Users table has email, password hash, created_at" --metadata '{"table": "users"}'
-vipune search "table schema"  # Will find it by semantic meaning
+vipune search "JWT tokens" --hybrid
 ```
 
-**Recency-weighted search:**
+*See [Search Guide](search.md) for when to use hybrid vs semantic search and how recency weighting works.*
+
+**Find by metadata (via search):**
 ```bash
 # High recency bias for time-sensitive queries
 vipune search "recent changes" --recency 0.8
@@ -435,3 +436,7 @@ vipune --project "my-company/project" add "Company-specific knowledge"
 # Search within project
 vipune --project "my-company/project" search "API keys"
 ```
+
+**See also:**
+- [Search Guide](search.md) — When to use hybrid vs semantic search, recency weighting
+- [Query Guide](vipune-query-guide.md) — Writing effective semantic queries
