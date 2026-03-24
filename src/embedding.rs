@@ -64,9 +64,9 @@ impl EmbeddingEngine {
 
         // Check if model requires token_type_ids input
         let requires_token_type_ids = session
-            .inputs()
+            .inputs
             .iter()
-            .any(|input| input.name() == "token_type_ids");
+            .any(|input| input.name == "token_type_ids");
 
         Ok(EmbeddingEngine {
             session,
@@ -113,16 +113,18 @@ impl EmbeddingEngine {
             let token_type_ids_vec: Vec<i64> = vec![0i64; seq_len]; // Single sentence, all zeros
             let token_type_ids_tensor =
                 Tensor::from_array(([1usize, seq_len], token_type_ids_vec))?;
-            self.session.run(inputs![
+            let inputs = inputs![
                 "input_ids" => input_ids_tensor,
                 "attention_mask" => attention_mask_tensor,
                 "token_type_ids" => token_type_ids_tensor
-            ])?
+            ];
+            self.session.run(inputs?)?
         } else {
-            self.session.run(inputs![
+            let inputs = inputs![
                 "input_ids" => input_ids_tensor,
                 "attention_mask" => attention_mask_tensor
-            ])?
+            ];
+            self.session.run(inputs?)?
         };
 
         let last_hidden_state = outputs
@@ -135,7 +137,8 @@ impl EmbeddingEngine {
             })?
             .try_extract_tensor::<f32>()?;
 
-        let (shape, data) = last_hidden_state;
+        let shape = last_hidden_state.shape();
+        let data = last_hidden_state.as_slice().unwrap();
         if shape.len() != 3 {
             return Err(Error::Inference(format!(
                 "Expected 3D output (batch, seq_len, hidden), got {:?}",
@@ -143,8 +146,8 @@ impl EmbeddingEngine {
             )));
         }
 
-        let batch_size = shape[0] as usize;
-        let hidden_dim = shape[2] as usize;
+        let batch_size = shape[0];
+        let hidden_dim = shape[2];
 
         if batch_size != 1 || hidden_dim != EMBEDDING_DIMS {
             return Err(Error::Inference(format!(
