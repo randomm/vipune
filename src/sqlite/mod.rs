@@ -16,11 +16,11 @@ use rusqlite::{Connection, OptionalExtension, Result as SqliteResult, params};
 use std::path::Path;
 use uuid::Uuid;
 
-pub use self::embedding::vec_to_blob;
+pub use self::embedding::{blob_to_vec, vec_to_blob};
 
-/// A single memory record with metadata and optional similarity score.
+/// A single memory record with metadata, embedding vector, and optional similarity score.
 ///
-/// Contains the stored memory content, metadata, and timestamps. The similarity
+/// Contains the stored memory content, metadata, embedding, and timestamps. The similarity
 /// field is populated only during search operations.
 #[derive(Clone, Debug)]
 pub struct Memory {
@@ -32,6 +32,8 @@ pub struct Memory {
     pub content: String,
     /// Optional user-provided metadata (JSON string).
     pub metadata: Option<String>,
+    /// The embedding vector (384-dimensional f32 values).
+    pub embedding: Vec<f32>,
 
     /// Similarity score (search-dependent):
     /// - Semantic search: Cosine similarity (0.0-1.0, higher = better match)
@@ -225,7 +227,7 @@ impl Database {
     pub fn get(&self, id: &str) -> Result<Option<Memory>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, project_id, content, metadata, created_at, updated_at
+            SELECT id, project_id, content, metadata, embedding, created_at, updated_at
             FROM memories
             WHERE id = ?1
             "#,
@@ -233,14 +235,18 @@ impl Database {
 
         let result = stmt
             .query_row([id], |row| {
+                let blob: Vec<u8> = row.get(4)?;
+                let embedding = blob_to_vec(&blob)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
                 Ok(Memory {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
                     content: row.get(2)?,
                     metadata: row.get(3)?,
+                    embedding,
                     similarity: None,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 })
             })
             .optional()?;
@@ -258,7 +264,7 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, project_id, content, metadata, created_at, updated_at
+            SELECT id, project_id, content, metadata, embedding, created_at, updated_at
             FROM memories
             WHERE project_id = ?1
             ORDER BY created_at DESC
@@ -268,14 +274,18 @@ impl Database {
 
         let memories: SqliteResult<Vec<Memory>> = stmt
             .query_map(params![project_id, limit as i64], |row| {
+                let blob: Vec<u8> = row.get(4)?;
+                let embedding = blob_to_vec(&blob)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
                 Ok(Memory {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
                     content: row.get(2)?,
                     metadata: row.get(3)?,
+                    embedding,
                     similarity: None,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
                 })
             })?
             .collect();
@@ -491,5 +501,55 @@ mod tests {
         assert_eq!(list2.len(), 1);
         assert_eq!(list1[0].project_id, "proj1");
         assert_eq!(list2[0].project_id, "proj2");
+    }
+
+    #[test]
+    fn test_get_includes_embedding() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert("proj1", "test content", &embedding, None)
+            .unwrap();
+
+        let memory = db.get(&id).unwrap().unwrap();
+        assert_eq!(memory.embedding.len(), 384);
+        for (i, &val) in embedding.iter().enumerate() {
+            assert!((memory.embedding[i] - val).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_list_includes_embeddings() {
+        let db = create_test_db();
+        let embedding1 = vec![0.1f32; 384];
+        let embedding2 = vec![0.2f32; 384];
+
+        db.insert("proj1", "first", &embedding1, None).unwrap();
+        db.insert("proj1", "second", &embedding2, None).unwrap();
+
+        let memories = db.list("proj1", 10).unwrap();
+        assert_eq!(memories.len(), 2);
+
+        for memory in &memories {
+            assert_eq!(memory.embedding.len(), 384);
+        }
+    }
+
+    #[test]
+    fn test_embedding_roundtrip() {
+        let db = create_test_db();
+        let original = vec![0.123f32, 0.456f32, 0.789f32];
+        let mut full_embedding = vec![0.1f32; 384];
+        full_embedding[0] = original[0];
+        full_embedding[1] = original[1];
+        full_embedding[383] = original[2];
+
+        let id = db.insert("proj1", "test", &full_embedding, None).unwrap();
+
+        let memory = db.get(&id).unwrap().unwrap();
+        assert_eq!(memory.embedding.len(), 384);
+        assert!((memory.embedding[0] - original[0]).abs() < 1e-6);
+        assert!((memory.embedding[1] - original[1]).abs() < 1e-6);
+        assert!((memory.embedding[383] - original[2]).abs() < 1e-6);
     }
 }

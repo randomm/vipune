@@ -111,6 +111,7 @@ pub fn rrf_fusion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::embedding::EMBEDDING_DIMS;
 
     fn create_test_memory(
         id: &str,
@@ -123,6 +124,7 @@ mod tests {
             project_id: project_id.to_string(),
             content: content.to_string(),
             metadata: None,
+            embedding: vec![0.1f32; EMBEDDING_DIMS],
             similarity,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
@@ -250,6 +252,7 @@ mod tests {
             project_id: "proj-a".to_string(),
             content: "test content".to_string(),
             metadata: Some("metadata".to_string()),
+            embedding: vec![0.1f32; EMBEDDING_DIMS],
             similarity: Some(0.9),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),

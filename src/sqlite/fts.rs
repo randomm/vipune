@@ -137,7 +137,7 @@ impl Database {
         }
 
         let sql = r#"
-            SELECT m.id, m.project_id, m.content, m.metadata, m.created_at, m.updated_at,
+            SELECT m.id, m.project_id, m.content, m.metadata, m.embedding, m.created_at, m.updated_at,
                    bm25(memories_fts) as bm25_score
             FROM memories_fts
             JOIN memories m ON m.rowid = memories_fts.rowid
@@ -150,14 +150,18 @@ impl Database {
 
         let memories: rusqlite::Result<Vec<Memory>> = stmt
             .query_map(params![escaped_query, project_id, limit as i64], |row| {
+                let blob: Vec<u8> = row.get(4)?;
+                let embedding = super::embedding::blob_to_vec(&blob)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
                 Ok(Memory {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
                     content: row.get(2)?,
                     metadata: row.get(3)?,
-                    created_at: row.get(4)?,
-                    updated_at: row.get(5)?,
-                    similarity: Some(row.get::<_, f64>(6)?),
+                    embedding,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    similarity: Some(row.get::<_, f64>(7)?),
                 })
             })?
             .collect();
