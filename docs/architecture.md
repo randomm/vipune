@@ -15,16 +15,26 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 | Module | Purpose |
 |--------|---------|
 | `src/main.rs` | CLI entry point, argument parsing with clap, command dispatch (add, search, get, list, delete, update, version) |
-| `src/memory.rs` | High-level orchestration of embedding generation and persistence; conflict detection for similar memories |
-| `src/sqlite.rs` | SQLite persistence layer with schema, insert/search/update/delete operations, FTS5 hybrid search support |
+| `src/commands.rs` | Command dispatch logic, CLI argument handling |
+| `src/memory/` | Memory store CRUD operations and search (replaces old `src/memory.rs`) |
+| `src/memory/mod.rs` | Module re-exports |
+| `src/memory/store.rs` | Core MemoryStore struct, `&mut self` embedding requirements |
+| `src/memory/crud.rs` | Add, get, list, update, delete operations with conflict detection |
+| `src/memory/search.rs` | Search orchestration, hybrid search coordination |
+| `src/memory/tests.rs` | Memory module unit tests |
+| `src/sqlite/` | SQLite persistence layer (replaces old `src/sqlite.rs`) |
+| `src/sqlite/mod.rs` | Module re-exports |
+| `src/sqlite/embedding.rs` | BLOB I/O, cosine similarity computation |
+| `src/sqlite/fts.rs` | FTS5 full-text search, BM25, triggers, auto-migration |
+| `src/sqlite/search.rs` | Hybrid search coordination, semantic + BM25 |
 | `src/embedding.rs` | ONNX model loading and text-to-vector conversion using bge-small-en-v1.5 and HuggingFace tokenizer |
 | `src/project.rs` | Project auto-detection from git remote, environment variable, or working directory |
 | `src/config/` | Configuration loading from TOML files, environment variables, and validation |
 | `src/errors.rs` | Unified error types wrapping rusqlite, ONNX, tokenizer, and HuggingFace Hub errors |
-| `src/output.rs` | JSON response types for CLI output (add, search, get, list responses) |
+| `src/memory_types.rs` | Shared type definitions (AddResult, ConflictMemory) |
+| `src/output.rs` | JSON response formatting for CLI output |
 | `src/temporal.rs` | Recency decay scoring with exponential/linear decay functions for search result weighting |
 | `src/rrf.rs` | Reciprocal Rank Fusion (RRF) algorithm for merging semantic and BM25 search rankings |
-| `src/memory_types.rs` | Shared type definitions (AddResult, ConflictMemory) |
 
 ## Embedding Pipeline
 
@@ -43,6 +53,8 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 
 **Caching**: Model files downloaded on first use via `hf_hub`, cached in `~/.vipune/models/`, reused for all subsequent operations.
 
+**See also**: [Embedding Pipeline Details](embedding-pipeline.md) for contributor-level documentation on ONNX integration, model versioning, and BLOB format.
+
 ## Hybrid Search
 
 vipune supports two search modes:
@@ -58,6 +70,8 @@ vipune supports two search modes:
 - Documents appearing in both lists get boosted scores
 
 **Recency weighting**: Optional exponential or linear decay applied to scores based on creation timestamp, with configurable grace period.
+
+**See also**: [Search Guide](search.md) for user-facing guidance on when to use each search mode and how recency weighting works.
 
 ## Database Schema
 
@@ -146,11 +160,17 @@ Configurable parameters include:
 
 **Synchronous only**: No async/await, no tokio, no `.await` operators. All I/O is blocking, matching the simplicity requirement for a CLI tool.
 
-**Single crate**: No workspaces, no lib.rs/main.rs split. All code in one binary simplifies distribution (single release artifact).
+**Lib and bin targets**: `src/lib.rs` (public API exports) and `src/main.rs` (CLI entry point). Single release artifact enables both library use and CLI tool.
 
 **No daemon**: Tool exits after operation. State lives only in SQLite; no in-memory caches survive between invocations.
 
 **File size limits**: Source files capped at 500 lines (exceptions justified). Keeps modules focused, testable, and maintainable.
 
 **Zero technical debt**: No TODO/FIXME/HACK comments in src/. Incomplete work tracked in GitHub issues, not left in code.
+
+## See Also
+
+- **[Embedding Pipeline](embedding-pipeline.md)** — Contributor-level documentation on ONNX integration, model versioning, and BLOB format
+- **[Search Guide](search.md)** — User-facing guidance on semantic vs hybrid search, recency weighting, and query strategies
+- **[Testing Guide](testing.md)** — How to write tests, test utilities, and coverage expectations
 

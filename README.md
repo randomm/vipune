@@ -182,7 +182,7 @@ vipune add "Auth uses JWT tokens" --metadata '{"topic": "authentication"}'
 | `vipune update <id> <text>` | Update a memory's content |
 | `vipune version` | Show version |
 
-[Complete CLI reference](docs/cli-reference.md) • [Quickstart guide](docs/quickstart.md)
+[Complete CLI reference](docs/cli-reference.md) • [Quickstart guide](docs/quickstart.md) • [Search guide](docs/search.md) • [Architecture](docs/architecture.md)
 
 ## Library Usage
 
@@ -191,7 +191,7 @@ vipune can also be used as a Rust crate for programmatic integration:
 ```toml
 # Cargo.toml
 [dependencies]
-vipune = "0.1"
+vipune = "0.2"
 ```
 
 ```rust
@@ -252,6 +252,8 @@ recency_weight = 0.3
 vipune works with any agent that can run shell commands — no plugins, adapters, or API keys required. Configure your agent with a few lines of instructions, grant shell command permissions, and the agent can use `vipune search` and `vipune add` to maintain persistent memory across tasks.
 
 **[→ See Agent Integration Guide](docs/agent-integration.md)** for per-tool setup instructions (Claude Code, Cursor, Windsurf, Cline, Roo Code, GitHub Copilot, Goose, Aider, OpenCode, Zed, and more).
+
+**See also:** [Search Guide](docs/search.md) for agent-friendly query patterns.
 
 **Exit codes for agent workflows:**
 - `0` - Success

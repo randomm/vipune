@@ -8,6 +8,8 @@ The knowledge loop is simple: before starting work, search for relevant context;
 
 Use vipune to create a feedback cycle in your agent workflow:
 
+*See also: [Search Guide](search.md) for query patterns that work best with agents.*
+
 1. **Search before starting** - `vipune search "relevant topic"` to recall context from past work
 2. **Do the work** - Execute your task with the knowledge in mind
 3. **Store learnings** - `vipune add "important discovery"` after completing meaningful work

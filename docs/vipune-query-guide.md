@@ -141,6 +141,11 @@ Based on the 22 test cases, these patterns consistently score well:
 
 Vipune's semantic search excels with **technical specificity**. The model understands:
 
+## See Also
+
+- **[Search Guide](search.md)** — When to use hybrid vs semantic search, recency weighting, and query strategies
+- **[CLI Reference](cli-reference.md)** — Complete command-line reference for all vipune commands
+
 - Domain-specific terminology (handler, ConversationGraph, MessageHandler)
 - Architectural concepts (authentication, schema, pooling)
 - Action-component relationships (message handling, user login)
