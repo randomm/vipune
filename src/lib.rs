@@ -56,6 +56,9 @@ pub use embedding::{EMBEDDING_DIMS, EmbeddingEngine};
 pub use errors::Error;
 pub use memory::MemoryStore;
 pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
-pub use memory_types::{AddResult, ConflictMemory};
+pub use memory_types::{
+    AddResult, BatchIngestItem, BatchIngestOutcome, BatchIngestResult, BatchIngestSummary,
+    ConflictMemory, IngestPolicy,
+};
 pub use project::detect_project;
 pub use sqlite::Memory;

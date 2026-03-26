@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::config::Config;
+use crate::memory_types::{BatchIngestItem, IngestPolicy};
 use crate::sqlite::Database;
 
 #[test]
@@ -407,4 +408,316 @@ fn test_hybrid_search_with_recency() {
         // Either the high-similarity old memory is first, or we have a single result
         assert!(top_id == &id_old || semantic_results.len() == 1);
     }
+}
+
+/// Test that batch_ingest handles empty batch (returns empty outcome).
+#[test]
+fn test_batch_ingest_with_empty_batch_returns_empty_outcome() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.db");
+    std::mem::forget(dir);
+
+    let config = Config::default();
+    let embedding_model = Config::default().embedding_model;
+    let mut store = MemoryStore::new(&path, &embedding_model, config).unwrap();
+
+    let items: Vec<BatchIngestItem> = Vec::new();
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    assert_eq!(outcome.results.len(), 0);
+    assert_eq!(outcome.summary.total, 0);
+    assert_eq!(outcome.summary.added, 0);
+    assert_eq!(outcome.summary.conflicts, 0);
+    assert_eq!(outcome.summary.errors, 0);
+}
+
+/// Test that batch_ingest returns results in input order (index mapping).
+#[test]
+fn test_batch_ingest_returns_results_in_input_order() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.db");
+    std::mem::forget(dir);
+
+    let config = Config::default();
+    let embedding_model = Config::default().embedding_model;
+    let mut store = MemoryStore::new(&path, &embedding_model, config).unwrap();
+
+    let items = vec![
+        BatchIngestItem::new("Elephants live in Africa".to_string()),
+        BatchIngestItem::new("Rust programming language features".to_string()),
+        BatchIngestItem::new("Coffee shops in Seattle".to_string()),
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    // Verify length matches input
+    assert_eq!(outcome.results.len(), 3);
+
+    // Verify results are in input order and all added (use distinct content to avoid conflicts)
+    for (i, result) in outcome.results.iter().enumerate() {
+        if let crate::memory_types::BatchIngestResult::Added { id } = result {
+            assert!(!id.is_empty());
+        } else {
+            panic!("Expected Added at index {}, got: {:?}", i, result);
+        }
+    }
+
+    // Verify all added
+    assert_eq!(outcome.summary.added, 3);
+}
+
+/// Test that batch_ingest handles mixed outcomes (some added, some conflicts).
+#[test]
+fn test_batch_ingest_handles_mixed_outcomes() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.db");
+    std::mem::forget(dir);
+
+    let db = Database::open(&path).unwrap();
+    let config = Config::default();
+    let embedding_model = Config::default().embedding_model;
+    let mut store = MemoryStore::new(&path, &embedding_model, config).unwrap();
+
+    // First, add a memory to create conflicts
+    let existing_content = "Python async programming uses await syntax";
+    let embedding = store.embedder().unwrap().embed(existing_content).unwrap();
+    db.insert("test", existing_content, &embedding, None)
+        .unwrap();
+
+    // Now add a batch with: similar content, different content, overlapping content
+    let items = vec![
+        BatchIngestItem::new("Python async programming uses await syntax".to_string()), // Should conflict
+        BatchIngestItem::new("JavaScript event loop handles callbacks".to_string()), // Should add
+        BatchIngestItem::new("Async programming in Python with await".to_string()), // Should conflict
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    assert_eq!(outcome.results.len(), 3);
+
+    // First should conflict
+    assert!(matches!(
+        outcome.results[0],
+        crate::memory_types::BatchIngestResult::Conflicts { .. }
+    ));
+
+    // Second should add
+    assert!(matches!(
+        outcome.results[1],
+        crate::memory_types::BatchIngestResult::Added { .. }
+    ));
+
+    // Third should conflict
+    assert!(matches!(
+        outcome.results[2],
+        crate::memory_types::BatchIngestResult::Conflicts { .. }
+    ));
+
+    // Verify summary
+    assert_eq!(outcome.summary.added, 1);
+    assert_eq!(outcome.summary.conflicts, 2);
+    assert_eq!(outcome.summary.total, 3);
+}
+
+/// Test that batch_ingest respects IngestPolicy::Force (adds regardless of conflicts).
+#[test]
+fn test_batch_ingest_with_force_policy_adds_all_items() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.db");
+    std::mem::forget(dir);
+
+    let db = Database::open(&path).unwrap();
+    let config = Config::default();
+    let embedding_model = Config::default().embedding_model;
+    let mut store = MemoryStore::new(&path, &embedding_model, config).unwrap();
+
+    // First, add a memory
+    let embedding = store
+        .embedder()
+        .unwrap()
+        .embed("Alice works at Microsoft")
+        .unwrap();
+    db.insert("test", "Alice works at Microsoft", &embedding, None)
+        .unwrap();
+
+    // Batch with Force policy should add duplicate content
+    let items = vec![
+        BatchIngestItem::new("Alice works at Microsoft".to_string()),
+        BatchIngestItem::new("Another memory".to_string()),
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::Force)
+        .expect("Batch ingest should succeed");
+
+    // All should be added despite duplicates
+    assert_eq!(outcome.results.len(), 2);
+    assert!(matches!(
+        outcome.results[0],
+        crate::memory_types::BatchIngestResult::Added { .. }
+    ));
+    assert!(matches!(
+        outcome.results[1],
+        crate::memory_types::BatchIngestResult::Added { .. }
+    ));
+    assert_eq!(outcome.summary.added, 2);
+}
+
+/// Test that batch_ingest handles invalid input items as errors.
+#[test]
+fn test_batch_ingest_with_invalid_input_items_returns_errors() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.db");
+    std::mem::forget(dir);
+
+    let config = Config::default();
+    let embedding_model = Config::default().embedding_model;
+    let mut store = MemoryStore::new(&path, &embedding_model, config).unwrap();
+
+    // Mix of valid and invalid items
+    let items = vec![
+        BatchIngestItem::new("Valid content".to_string()),
+        BatchIngestItem::new("".to_string()),    // Empty
+        BatchIngestItem::new("   ".to_string()), // Whitespace only
+        BatchIngestItem::new("Another valid".to_string()),
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    assert_eq!(outcome.results.len(), 4);
+
+    // First should add
+    assert!(matches!(
+        outcome.results[0],
+        crate::memory_types::BatchIngestResult::Added { .. }
+    ));
+
+    // Second should error (empty)
+    assert!(matches!(
+        outcome.results[1],
+        crate::memory_types::BatchIngestResult::Error { .. }
+    ));
+
+    // Third should error (whitespace)
+    assert!(matches!(
+        outcome.results[2],
+        crate::memory_types::BatchIngestResult::Error { .. }
+    ));
+
+    // Fourth should add
+    assert!(matches!(
+        outcome.results[3],
+        crate::memory_types::BatchIngestResult::Added { .. }
+    ));
+
+    // Verify summary
+    assert_eq!(outcome.summary.added, 2);
+    assert_eq!(outcome.summary.errors, 2);
+}
+
+/// Test that batch_ingest handles oversized input items as errors.
+#[test]
+fn test_batch_ingest_with_oversized_input_items_returns_errors() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.db");
+    std::mem::forget(dir);
+
+    let config = Config::default();
+    let embedding_model = Config::default().embedding_model;
+    let mut store = MemoryStore::new(&path, &embedding_model, config).unwrap();
+
+    // Mix of valid and oversized items
+    use super::store::MAX_INPUT_LENGTH;
+    let items = vec![
+        BatchIngestItem::new("Valid content".to_string()),
+        BatchIngestItem::new("x".repeat(MAX_INPUT_LENGTH + 1)), // Too long
+        BatchIngestItem::new("Another valid".to_string()),
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    assert_eq!(outcome.results.len(), 3);
+
+    // First should add
+    assert!(matches!(
+        outcome.results[0],
+        crate::memory_types::BatchIngestResult::Added { .. }
+    ));
+
+    // Second should error (too long)
+    assert!(matches!(
+        outcome.results[1],
+        crate::memory_types::BatchIngestResult::Error { .. }
+    ));
+
+    // Third should add
+    assert!(matches!(
+        outcome.results[2],
+        crate::memory_types::BatchIngestResult::Added { .. }
+    ));
+
+    assert_eq!(outcome.summary.added, 2);
+    assert_eq!(outcome.summary.errors, 1);
+}
+
+/// Test that batch_ingest summary is accurate.
+#[test]
+fn test_batch_ingest_summary_matches_results() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.db");
+    std::mem::forget(dir);
+
+    let db = Database::open(&path).unwrap();
+    let config = Config::default();
+    let embedding_model = Config::default().embedding_model;
+    let mut store = MemoryStore::new(&path, &embedding_model, config).unwrap();
+
+    // Add one memory for conflicts
+    let embedding = store
+        .embedder()
+        .unwrap()
+        .embed("PostgreSQL is a relational database")
+        .unwrap();
+    db.insert(
+        "test",
+        "PostgreSQL is a relational database",
+        &embedding,
+        None,
+    )
+    .unwrap();
+
+    // Mix of all outcomes
+    let items = vec![
+        BatchIngestItem::new("PostgreSQL is a relational database".to_string()), // Conflict
+        BatchIngestItem::new("Rust ownership system prevents data races".to_string()), // Added
+        BatchIngestItem::new("".to_string()),                                    // Error
+        BatchIngestItem::new("Node.js uses event-driven architecture".to_string()), // Added
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    // Verify summary matches manual count (2 new memories added)
+    assert_eq!(outcome.summary.total, 4);
+    assert_eq!(outcome.summary.added, 2);
+    assert_eq!(outcome.summary.conflicts, 1);
+    assert_eq!(outcome.summary.errors, 1);
 }

@@ -4,7 +4,10 @@ use std::env;
 use std::path::PathBuf;
 
 use vipune::errors::Error;
-use vipune::{Config, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT, MemoryStore, detect_project};
+use vipune::{
+    BatchIngestItem, Config, IngestPolicy, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT, MemoryStore,
+    detect_project,
+};
 
 /// Test basic memory add and search operations.
 #[test]
@@ -595,6 +598,377 @@ fn test_search_hybrid_with_oversized_input_returns_error() {
     } else {
         panic!("Expected InputTooLong error");
     }
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that batch_ingest handles empty batch (returns empty outcome).
+#[test]
+fn test_batch_ingest_with_empty_batch_returns_empty_outcome() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let items: Vec<BatchIngestItem> = Vec::new();
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    assert_eq!(outcome.results.len(), 0);
+    assert_eq!(outcome.summary.total, 0);
+    assert_eq!(outcome.summary.added, 0);
+    assert_eq!(outcome.summary.conflicts, 0);
+    assert_eq!(outcome.summary.errors, 0);
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that batch_ingest returns results in input order (index mapping).
+#[test]
+fn test_batch_ingest_returns_results_in_input_order() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let items = vec![
+        BatchIngestItem::new("The first semantic concept involves neural network architecture patterns for deep learning models".to_string()),
+        BatchIngestItem::new("A quantum mechanical principle states that particles exhibit wave like duality with interference patterns observed".to_string()),
+        BatchIngestItem::new("Photosynthesis is a biochemical process where plants convert sunlight into chemical energy stored as glucose".to_string()),
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    // Verify length matches input
+    assert_eq!(outcome.results.len(), 3);
+
+    // Verify results are in input order
+    if let vipune::BatchIngestResult::Added { id } = &outcome.results[0] {
+        assert!(!id.is_empty());
+    } else {
+        panic!("Expected Added at index 0");
+    }
+
+    if let vipune::BatchIngestResult::Added { id } = &outcome.results[1] {
+        assert!(!id.is_empty());
+    } else {
+        panic!("Expected Added at index 1");
+    }
+
+    if let vipune::BatchIngestResult::Added { id } = &outcome.results[2] {
+        assert!(!id.is_empty());
+    } else {
+        panic!("Expected Added at index 2");
+    }
+
+    // Verify all added
+    assert_eq!(outcome.summary.added, 3);
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that batch_ingest handles mixed outcomes (some added, some conflicts).
+#[test]
+fn test_batch_ingest_handles_mixed_outcomes() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    // First, add a memory to create conflicts
+    let existing_content = "Alice works at Microsoft";
+    match store
+        .add_with_conflict("test", existing_content, None, false)
+        .unwrap()
+    {
+        vipune::AddResult::Added { .. } => {}
+        _ => panic!("Expected first add to succeed"),
+    }
+
+    // Now add a batch with: similar content, different content, overlapping content
+    let items = vec![
+        BatchIngestItem::new("Alice works at Microsoft".to_string()), // Should conflict
+        BatchIngestItem::new("Different content about Bob".to_string()), // Should add
+        BatchIngestItem::new("Alice works at Microsoft".to_string()), // Should conflict
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    assert_eq!(outcome.results.len(), 3);
+
+    // First should conflict
+    assert!(matches!(
+        outcome.results[0],
+        vipune::BatchIngestResult::Conflicts { .. }
+    ));
+
+    // Second should add
+    assert!(matches!(
+        outcome.results[1],
+        vipune::BatchIngestResult::Added { .. }
+    ));
+
+    // Third should conflict
+    assert!(matches!(
+        outcome.results[2],
+        vipune::BatchIngestResult::Conflicts { .. }
+    ));
+
+    // Verify summary
+    assert_eq!(outcome.summary.added, 1);
+    assert_eq!(outcome.summary.conflicts, 2);
+    assert_eq!(outcome.summary.total, 3);
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that batch_ingest respects IngestPolicy::Force (adds regardless of conflicts).
+#[test]
+fn test_batch_ingest_with_force_policy_adds_all_items() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    // First, add a memory
+    match store
+        .add_with_conflict("test", "Alice works at Microsoft", None, false)
+        .unwrap()
+    {
+        vipune::AddResult::Added { .. } => {}
+        _ => panic!("Expected first add to succeed"),
+    }
+
+    // Batch with Force policy should add duplicate content
+    let items = vec![
+        BatchIngestItem::new("Alice works at Microsoft".to_string()),
+        BatchIngestItem::new("Another memory".to_string()),
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::Force)
+        .expect("Batch ingest should succeed");
+
+    // All should be added despite duplicates
+    assert_eq!(outcome.results.len(), 2);
+    assert!(matches!(
+        outcome.results[0],
+        vipune::BatchIngestResult::Added { .. }
+    ));
+    assert!(matches!(
+        outcome.results[1],
+        vipune::BatchIngestResult::Added { .. }
+    ));
+    assert_eq!(outcome.summary.added, 2);
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that batch_ingest handles invalid input items as errors.
+#[test]
+fn test_batch_ingest_with_invalid_input_items_returns_errors() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    // Mix of valid and invalid items
+    let items = vec![
+        BatchIngestItem::new("Valid content".to_string()),
+        BatchIngestItem::new("".to_string()),    // Empty
+        BatchIngestItem::new("   ".to_string()), // Whitespace only
+        BatchIngestItem::new("Another valid".to_string()),
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    assert_eq!(outcome.results.len(), 4);
+
+    // First should add
+    assert!(matches!(
+        outcome.results[0],
+        vipune::BatchIngestResult::Added { .. }
+    ));
+
+    // Second should error (empty)
+    assert!(matches!(
+        outcome.results[1],
+        vipune::BatchIngestResult::Error { .. }
+    ));
+
+    // Third should error (whitespace)
+    assert!(matches!(
+        outcome.results[2],
+        vipune::BatchIngestResult::Error { .. }
+    ));
+
+    // Fourth should add
+    assert!(matches!(
+        outcome.results[3],
+        vipune::BatchIngestResult::Added { .. }
+    ));
+
+    // Verify summary
+    assert_eq!(outcome.summary.added, 2);
+    assert_eq!(outcome.summary.errors, 2);
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that batch_ingest handles oversized input items as errors.
+#[test]
+fn test_batch_ingest_with_oversized_input_items_returns_errors() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    // Mix of valid and oversized items
+    let items = vec![
+        BatchIngestItem::new("Valid content".to_string()),
+        BatchIngestItem::new("x".repeat(MAX_INPUT_LENGTH + 1)), // Too long
+        BatchIngestItem::new("Another valid".to_string()),
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    assert_eq!(outcome.results.len(), 3);
+
+    // First should add
+    assert!(matches!(
+        outcome.results[0],
+        vipune::BatchIngestResult::Added { .. }
+    ));
+
+    // Second should error (too long)
+    assert!(matches!(
+        outcome.results[1],
+        vipune::BatchIngestResult::Error { .. }
+    ));
+
+    // Third should add
+    assert!(matches!(
+        outcome.results[2],
+        vipune::BatchIngestResult::Added { .. }
+    ));
+
+    assert_eq!(outcome.summary.added, 2);
+    assert_eq!(outcome.summary.errors, 1);
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that batch_ingest with metadata works correctly.
+#[test]
+fn test_batch_ingest_with_metadata_stores_metadata() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let items = vec![
+        BatchIngestItem::with_metadata(
+            "The content includes semantic metadata fields for structured data storage".to_string(),
+            r#"{"key": "value"}"#.to_string(),
+        ),
+        BatchIngestItem::new(
+            "A separate content item without any metadata information attached".to_string(),
+        ),
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    assert_eq!(outcome.results.len(), 2);
+    assert!(matches!(
+        outcome.results[0],
+        vipune::BatchIngestResult::Added { .. }
+    ));
+    assert!(matches!(
+        outcome.results[1],
+        vipune::BatchIngestResult::Added { .. }
+    ));
+
+    // Verify metadata was stored
+    if let vipune::BatchIngestResult::Added { id } = &outcome.results[0] {
+        let memory = store
+            .get(id)
+            .expect("Failed to get memory")
+            .expect("Memory not found");
+        assert_eq!(memory.metadata, Some(r#"{"key": "value"}"#.to_string()));
+    }
+
+    if let vipune::BatchIngestResult::Added { id } = &outcome.results[1] {
+        let memory = store
+            .get(id)
+            .expect("Failed to get memory")
+            .expect("Memory not found");
+        assert_eq!(memory.metadata, None);
+    }
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that batch_ingest summary is accurate.
+#[test]
+fn test_batch_ingest_summary_matches_results() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    // Add one memory for conflicts
+    match store
+        .add_with_conflict("test", "Existing memory", None, false)
+        .unwrap()
+    {
+        vipune::AddResult::Added { .. } => {}
+        _ => panic!("Expected first add to succeed"),
+    }
+
+    // Mix of all outcomes
+    let items = vec![
+        BatchIngestItem::new("Existing memory".to_string()), // Conflict
+        BatchIngestItem::new("A completely new and unique memory about cloud infrastructure patterns".to_string()), // Added
+        BatchIngestItem::new("".to_string()), // Error
+        BatchIngestItem::new("Another distinct memory concerning database optimization strategies and query performance".to_string()), // Added
+    ];
+
+    let outcome = store
+        .batch_ingest("test", &items, IngestPolicy::ConflictAware)
+        .expect("Batch ingest should succeed");
+
+    // Verify summary matches manual count
+    assert_eq!(outcome.summary.total, 4);
+    assert_eq!(outcome.summary.added, 2);
+    assert_eq!(outcome.summary.conflicts, 1);
+    assert_eq!(outcome.summary.errors, 1);
 
     std::fs::remove_file(db_path).ok();
 }
