@@ -2,7 +2,7 @@
 
 use crate::errors::Error;
 use crate::memory::MemoryStore;
-use crate::memory_types::AddResult;
+use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
 use crate::{config, temporal};
 use std::process::ExitCode;
@@ -114,7 +114,13 @@ fn handle_add(
     force: bool,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    match store.add_with_conflict(project_id, text, metadata, force)? {
+    let policy = if force {
+        IngestPolicy::Force
+    } else {
+        IngestPolicy::ConflictAware
+    };
+
+    match store.ingest(project_id, text, metadata, policy)? {
         AddResult::Added { id } => {
             if json {
                 print_json(&AddResponse {

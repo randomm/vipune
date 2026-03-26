@@ -134,4 +134,15 @@ impl MemoryStore {
         }
         Ok(())
     }
+
+    #[cfg(test)]
+    /// Create a MemoryStore from an existing Database for testing.
+    pub(crate) fn from_db(db: Database, config: Config) -> Self {
+        MemoryStore {
+            db,
+            embedder: None,
+            model_id: String::new(),
+            config,
+        }
+    }
 }
