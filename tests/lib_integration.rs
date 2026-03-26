@@ -4,7 +4,9 @@ use std::env;
 use std::path::PathBuf;
 
 use vipune::errors::Error;
-use vipune::{Config, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT, MemoryStore, detect_project};
+use vipune::{
+    Config, IngestPolicy, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT, MemoryStore, detect_project,
+};
 
 /// Test basic memory add and search operations.
 #[test]
@@ -595,6 +597,222 @@ fn test_search_hybrid_with_oversized_input_returns_error() {
     } else {
         panic!("Expected InputTooLong error");
     }
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that ingest with ConflictAware policy maps to existing conflict behavior.
+#[test]
+fn test_ingest_conflict_aware_policy_maps_to_existing_behavior() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let project_id = "test-project";
+
+    // Add first memory
+    let result = store
+        .ingest(
+            project_id,
+            "Alice works at Microsoft",
+            None,
+            IngestPolicy::ConflictAware,
+        )
+        .expect("Failed to add memory");
+    assert!(
+        matches!(result, vipune::AddResult::Added { .. }),
+        "First add should succeed with ConflictAware policy"
+    );
+
+    // Add very similar content - should detect conflict
+    let result = store
+        .ingest(
+            project_id,
+            "Alice is employed at Microsoft",
+            None,
+            IngestPolicy::ConflictAware,
+        )
+        .expect("Failed to check conflicts");
+    assert!(
+        matches!(result, vipune::AddResult::Conflicts { .. }),
+        "Similar content should return conflicts with ConflictAware policy"
+    );
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that ingest with Force policy bypasses conflict detection.
+#[test]
+fn test_ingest_force_policy_bypasses_conflicts() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let project_id = "test-project";
+
+    // Add first memory
+    let _id1 = match store
+        .ingest(
+            project_id,
+            "Alice works at Microsoft",
+            None,
+            IngestPolicy::ConflictAware,
+        )
+        .expect("Failed to add memory")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("First add should succeed"),
+    };
+
+    // Add duplicate content with Force - should succeed regardless
+    let id2 = match store
+        .ingest(
+            project_id,
+            "Alice works at Microsoft",
+            None,
+            IngestPolicy::Force,
+        )
+        .expect("Failed to force add")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Force policy should always return Added"),
+    };
+
+    // Verify both memories exist
+    let results = store.list(project_id, 10).expect("Failed to list memories");
+    assert_eq!(
+        results.len(),
+        2,
+        "Both memories should exist after Force add"
+    );
+    assert!(
+        results.iter().any(|m| m.id == id2),
+        "Second memory should be stored with Force policy"
+    );
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that ingest validates empty input.
+#[test]
+fn test_ingest_with_empty_input_returns_error() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    // Test both policies reject empty input
+    let result = store.ingest("test", "", None, IngestPolicy::ConflictAware);
+    assert!(result.is_err());
+    assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
+
+    let result = store.ingest("test", "", None, IngestPolicy::Force);
+    assert!(result.is_err());
+    assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that ingest validates oversized input.
+#[test]
+fn test_ingest_with_oversized_input_returns_error() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
+
+    // Test both policies reject oversized input
+    let result = store.ingest("test", &long_text, None, IngestPolicy::ConflictAware);
+    assert!(result.is_err());
+    if let Error::InputTooLong {
+        max_length,
+        actual_length,
+    } = &result.as_ref().unwrap_err()
+    {
+        assert_eq!(*max_length, MAX_INPUT_LENGTH);
+        assert_eq!(*actual_length, MAX_INPUT_LENGTH + 1);
+    } else {
+        panic!("Expected InputTooLong error");
+    }
+
+    let result = store.ingest("test", &long_text, None, IngestPolicy::Force);
+    assert!(result.is_err());
+    if let Error::InputTooLong {
+        max_length,
+        actual_length,
+    } = &result.as_ref().unwrap_err()
+    {
+        assert_eq!(*max_length, MAX_INPUT_LENGTH);
+        assert_eq!(*actual_length, MAX_INPUT_LENGTH + 1);
+    } else {
+        panic!("Expected InputTooLong error");
+    }
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that ingest works with metadata.
+#[test]
+fn test_ingest_with_metadata_succeeds() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    // Test ConflictAware with metadata
+    let id1 = match store
+        .ingest(
+            "test-project",
+            "Test content",
+            Some(r#"{"source": "manual"}"#),
+            IngestPolicy::ConflictAware,
+        )
+        .expect("Failed to ingest")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Test Force with metadata
+    let id2 = match store
+        .ingest(
+            "test-project",
+            "Another test",
+            Some(r#"{"source": "import"}"#),
+            IngestPolicy::Force,
+        )
+        .expect("Failed to ingest")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Verify metadata was stored
+    let memory1 = store.get(&id1).expect("Failed to get").expect("Not found");
+    assert_eq!(
+        memory1.metadata.as_ref().unwrap(),
+        r#"{"source": "manual"}"#
+    );
+
+    let memory2 = store.get(&id2).expect("Failed to get").expect("Not found");
+    assert_eq!(
+        memory2.metadata.as_ref().unwrap(),
+        r#"{"source": "import"}"#
+    );
 
     std::fs::remove_file(db_path).ok();
 }
