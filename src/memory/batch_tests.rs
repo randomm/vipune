@@ -15,7 +15,7 @@ fn test_batch_ingest_empty_batch() {
     let db = Database::open(&path).unwrap();
     let config = Config::default();
 
-    let mut store = MemoryStore::new_with_db(db, config).unwrap();
+    let mut store = MemoryStore::from_db(db, config);
 
     let result = store
         .batch_ingest("test-project", vec![], IngestPolicy::ConflictAware)
@@ -41,7 +41,7 @@ fn test_batch_ingest_mixed_outcomes() {
     db.insert("test-project", "Alice works at Microsoft", &embedding, None)
         .unwrap();
 
-    let mut store = MemoryStore::new_with_db(db, config).unwrap();
+    let mut store = MemoryStore::from_db(db, config);
 
     // Create a batch with mixed outcomes:
     // 0: empty -> Error
@@ -123,7 +123,7 @@ fn test_batch_ingest_deterministic_index_mapping() {
     db.insert("test-project", "conflict with item 1", &embedding, None)
         .unwrap();
 
-    let mut store = MemoryStore::new_with_db(db, config).unwrap();
+    let mut store = MemoryStore::from_db(db, config);
 
     // Create batch with specific ordering
     let items = vec![
@@ -183,7 +183,7 @@ fn test_batch_ingest_policy_force() {
     db.insert("test-project", "Alice works at Microsoft", &embedding, None)
         .unwrap();
 
-    let mut store = MemoryStore::new_with_db(db, config).unwrap();
+    let mut store = MemoryStore::from_db(db, config);
 
     // Create batch with conflicts
     let items = vec![
@@ -229,7 +229,7 @@ fn test_batch_ingest_invalid_inputs() {
     let db = Database::open(&path).unwrap();
     let config = Config::default();
 
-    let mut store = MemoryStore::new_with_db(db, config).unwrap();
+    let mut store = MemoryStore::from_db(db, config);
 
     // Create oversized input (100,001 characters)
     let too_long = "a".repeat(100_001);
@@ -285,7 +285,7 @@ fn test_batch_ingest_all_errors() {
     let db = Database::open(&path).unwrap();
     let config = Config::default();
 
-    let mut store = MemoryStore::new_with_db(db, config).unwrap();
+    let mut store = MemoryStore::from_db(db, config);
 
     // Create a batch where every item fails validation
     let items = vec![
@@ -319,7 +319,7 @@ fn test_batch_ingest_metadata_preservation() {
     let db = Database::open(&path).unwrap();
     let config = Config::default();
 
-    let mut store = MemoryStore::new_with_db(db, config).unwrap();
+    let mut store = MemoryStore::from_db(db, config);
 
     let items = vec![
         ("content with metadata", Some(r#"{"tag": "important"}"#)),

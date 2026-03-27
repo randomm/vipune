@@ -1,13 +1,9 @@
 //! CRUD operations for the memory store.
 
 use crate::errors::Error;
-<<<<<<< HEAD
-use crate::memory_types::{AddResult, ConflictMemory, IngestPolicy};
-=======
 use crate::memory_types::{
     AddResult, BatchIngestItemResult, BatchIngestResult, ConflictMemory, IngestPolicy,
 };
->>>>>>> ed60981 (feat(#64): add batch ingest API with per-item outcomes)
 use crate::sqlite::Memory;
 
 use super::store::MemoryStore;

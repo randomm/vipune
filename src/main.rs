@@ -259,7 +259,7 @@ mod tests {
 
         let db = Database::open(&path).unwrap();
         let config = config::Config::default();
-        let mut store = MemoryStore::new_with_db(db, config).expect("Failed to create store");
+        let mut store = MemoryStore::from_db(db, config);
 
         // Test with empty batch
         let result = store.batch_ingest("test-project", vec![], IngestPolicy::Force);
