@@ -1,38 +1,7 @@
-//! Tests for the memory store.
+//! Tests for search operations.
 
-use super::*;
-use crate::config::Config;
+use crate::memory::MemoryStore;
 use crate::sqlite::Database;
-
-#[test]
-fn test_memory_store_new() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let _path = dir.path().join("test.db");
-
-    // Note: This test is ignored because it requires downloading the model
-    // Use `cargo test -- --ignored` to run it
-}
-
-#[test]
-fn test_add_and_get() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let embedding = vec![0.5f32; 384];
-    let id = db
-        .insert("test-project", "test content", &embedding, Some("metadata"))
-        .unwrap();
-
-    let memory = db.get(&id).unwrap().unwrap();
-    assert_eq!(memory.id, id);
-    assert_eq!(memory.content, "test content");
-    assert_eq!(memory.project_id, "test-project");
-    assert_eq!(memory.metadata, Some("metadata".to_string()));
-}
 
 #[test]
 fn test_search_basic() {
@@ -55,109 +24,6 @@ fn test_search_basic() {
     assert!(!results.is_empty());
     assert_eq!(results[0].id, id_match);
     assert!(results[0].similarity.unwrap() > 0.9);
-}
-
-#[test]
-fn test_list_by_project() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let embedding = vec![0.5f32; 384];
-
-    db.insert("project-a", "content a", &embedding, None)
-        .unwrap();
-    db.insert("project-b", "content b", &embedding, None)
-        .unwrap();
-    db.insert("project-a", "content a2", &embedding, None)
-        .unwrap();
-
-    let memories_a = db.list("project-a", 10).unwrap();
-    assert_eq!(memories_a.len(), 2);
-
-    let memories_b = db.list("project-b", 10).unwrap();
-    assert_eq!(memories_b.len(), 1);
-}
-
-#[test]
-fn test_update_memory() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let embedding_old = vec![0.3f32; 384];
-    let embedding_new = vec![0.8f32; 384];
-
-    let id = db
-        .insert("test-project", "original", &embedding_old, None)
-        .unwrap();
-
-    db.update(&id, "updated", &embedding_new).unwrap();
-
-    let memory = db.get(&id).unwrap().unwrap();
-    assert_eq!(memory.content, "updated");
-    assert_ne!(memory.created_at, memory.updated_at);
-}
-
-#[test]
-fn test_update_nonexistent() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let embedding = vec![0.5f32; 384];
-
-    let result = db.update("does-not-exist", "content", &embedding);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_delete_memory() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let embedding = vec![0.5f32; 384];
-
-    let id = db
-        .insert("test-project", "to delete", &embedding, None)
-        .unwrap();
-    assert!(db.delete(&id).unwrap());
-
-    let memory = db.get(&id).unwrap();
-    assert!(memory.is_none());
-}
-
-#[test]
-fn test_delete_nonexistent() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let deleted = db.delete("does-not-exist").unwrap();
-    assert!(!deleted);
-}
-
-#[test]
-fn test_get_nonexistent() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let memory = db.get("does-not-exist").unwrap();
-    assert!(memory.is_none());
 }
 
 #[test]
@@ -201,61 +67,6 @@ fn test_negative_similarity() {
     let results = db.search("test-project", &embedding_neg, 10).unwrap();
     assert!(!results.is_empty());
     assert!(results[0].similarity.unwrap() < 0.0);
-}
-
-#[ignore]
-#[test]
-fn test_integration_add_search_roundtrip() {
-    // Full integration test with real model
-    // Requires: cargo test -- --ignored
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    let config = Config::default();
-
-    let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", config).unwrap();
-
-    let id = match store
-        .add_with_conflict("test-project", "semantic search is useful", None, false)
-        .unwrap()
-    {
-        crate::memory_types::AddResult::Added { id } => id,
-        _ => panic!("Expected AddResult::Added"),
-    };
-
-    let results = store
-        .search("test-project", "finding information", 5, 0.0)
-        .unwrap();
-    assert!(!results.is_empty());
-
-    let memory = store.get(&id).unwrap().unwrap();
-    assert_eq!(memory.content, "semantic search is useful");
-}
-
-#[ignore]
-#[test]
-fn test_integration_update_changes_embedding() {
-    // Full integration test with real model
-    // Requires: cargo test -- --ignored
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    let config = Config::default();
-
-    let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", config).unwrap();
-
-    let id = match store
-        .add_with_conflict("test-project", "original content", None, false)
-        .unwrap()
-    {
-        crate::memory_types::AddResult::Added { id } => id,
-        _ => panic!("Expected AddResult::Added"),
-    };
-
-    store.update(&id, "completely different content").unwrap();
-
-    let memory = store.get(&id).unwrap().unwrap();
-    assert_eq!(memory.content, "completely different content");
 }
 
 #[test]
@@ -407,4 +218,61 @@ fn test_hybrid_search_with_recency() {
         // Either the high-similarity old memory is first, or we have a single result
         assert!(top_id == &id_old || semantic_results.len() == 1);
     }
+}
+
+#[ignore]
+#[test]
+fn test_integration_add_search_roundtrip() {
+    // Full integration test with real model
+    // Requires: cargo test -- --ignored
+    use crate::config::Config;
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.db");
+    let config = Config::default();
+
+    let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", config).unwrap();
+
+    let id = match store
+        .add_with_conflict("test-project", "semantic search is useful", None, false)
+        .unwrap()
+    {
+        crate::memory_types::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    let results = store
+        .search("test-project", "finding information", 5, 0.0)
+        .unwrap();
+    assert!(!results.is_empty());
+
+    let memory = store.get(&id).unwrap().unwrap();
+    assert_eq!(memory.content, "semantic search is useful");
+}
+
+#[ignore]
+#[test]
+fn test_integration_update_changes_embedding() {
+    // Full integration test with real model
+    // Requires: cargo test -- --ignored
+    use crate::config::Config;
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.db");
+    let config = Config::default();
+
+    let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", config).unwrap();
+
+    let id = match store
+        .add_with_conflict("test-project", "original content", None, false)
+        .unwrap()
+    {
+        crate::memory_types::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    store.update(&id, "completely different content").unwrap();
+
+    let memory = store.get(&id).unwrap().unwrap();
+    assert_eq!(memory.content, "completely different content");
 }

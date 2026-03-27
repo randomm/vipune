@@ -1,7 +1,7 @@
 //! CRUD operations for the memory store.
 
 use crate::errors::Error;
-use crate::memory_types::{AddResult, ConflictMemory};
+use crate::memory_types::{AddResult, ConflictMemory, IngestPolicy};
 use crate::sqlite::Memory;
 
 use super::store::MemoryStore;
@@ -67,6 +67,62 @@ impl MemoryStore {
                 proposed: content.to_string(),
                 conflicts,
             })
+        }
+    }
+
+    #[must_use = "handle the error or results may be lost"]
+    /// Ingest a memory with explicit policy.
+    ///
+    /// Ergonomic single-method API for adding memories with configurable
+    /// conflict handling behavior.
+    ///
+    /// # Arguments
+    ///
+    /// * `project_id` - Project identifier (e.g., git repo URL or user-defined)
+    /// * `content` - Text content to store (1 to 100,000 characters)
+    /// * `metadata` - Optional JSON metadata string
+    /// * `policy` - Conflict handling policy (ConflictAware or Force)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(AddResult::Added { id })` if memory was stored successfully
+    /// * `Ok(AddResult::Conflicts { proposed, conflicts })` if Conflicts policy and similar memories exist
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Input is empty
+    /// - Input exceeds 100,000 characters
+    /// - Embedding generation fails
+    /// - Database operations fail
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Add with conflict detection (reject if similar exists)
+    /// match store.ingest("my-project", "Alice works at Microsoft", None, IngestPolicy::ConflictAware)? {
+    ///     AddResult::Added { id } => println!("Added: {}", id),
+    ///     AddResult::Conflicts { conflicts, .. } => println!("Found {} conflicts", conflicts.len()),
+    /// }
+    ///
+    /// // Force add regardless of conflicts
+    /// let id = match store.ingest("my-project", "Duplicate content", None, IngestPolicy::Force)? {
+    ///     AddResult::Added { id } => id,
+    ///     AddResult::Conflicts { .. } => unreachable!(),
+    /// };
+    /// ```
+    pub fn ingest(
+        &mut self,
+        project_id: &str,
+        content: &str,
+        metadata: Option<&str>,
+        policy: IngestPolicy,
+    ) -> Result<AddResult, Error> {
+        match policy {
+            IngestPolicy::ConflictAware => {
+                self.add_with_conflict(project_id, content, metadata, false)
+            }
+            IngestPolicy::Force => self.add_with_conflict(project_id, content, metadata, true),
         }
     }
 

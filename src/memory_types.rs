@@ -30,3 +30,20 @@ pub struct ConflictMemory {
     /// Similarity score indicating the degree of conflict (0.0 to 1.0).
     pub similarity: f64,
 }
+
+/// Policy for handling conflicts during memory ingestion.
+///
+/// Determines whether similar existing memories should block addition
+/// or be ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IngestPolicy {
+    /// Detect and reject conflicts (similar to force=false in add_with_conflict).
+    ///
+    /// Returns conflict details without storing if similar memories exist
+    /// with similarity >= threshold.
+    ConflictAware,
+    /// Force addition regardless of conflicts (similar to force=true).
+    ///
+    /// Bypasses conflict detection and stores the memory unconditionally.
+    Force,
+}
