@@ -13,3 +13,12 @@ pub fn cleanup_env_vars(vars: &[&str]) {
         }
     }
 }
+
+#[test]
+fn test_cleanup_env_vars() {
+    unsafe {
+        std::env::set_var("VIPUNE_TEST_VAR", "test_value");
+    }
+    cleanup_env_vars(&["VIPUNE_TEST_VAR"]);
+    assert!(std::env::var("VIPUNE_TEST_VAR").is_err());
+}

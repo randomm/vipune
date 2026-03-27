@@ -13,3 +13,6 @@ pub use store::MemoryStore;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod batch_tests;

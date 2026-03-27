@@ -35,9 +35,7 @@ pub struct Memory {
     /// Optional user-provided metadata (JSON string).
     pub metadata: Option<String>,
     /// The embedding vector (384-dimensional f32 values).
-    // allow(dead_code): Field is pub for library consumers (e.g. kide crate)
-    // but unused in the binary target due to separate lib/bin module trees.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Library API: exposed for consumers, unused in CLI
     pub embedding: Vec<f32>,
 
     /// Similarity score (search-dependent):
@@ -198,7 +196,6 @@ impl Database {
     ///
     /// This is used in tests to control the created_at and updated_at timestamps.
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn insert_with_time(
         &self,
         project_id: &str,
@@ -451,12 +448,223 @@ impl Database {
         Ok(results)
     }
 
-    /// Get internal connection (for internal use, e.g., tests).
-    #[allow(dead_code)] // Used in fts.rs tests
+    /// Get internal connection (for test use).
+    #[cfg(test)]
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+    use crate::embedding::EMBEDDING_DIMS;
+    use tempfile::TempDir;
+
+    fn create_test_db() -> Database {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::open(&path).unwrap();
+        std::mem::forget(dir);
+        db
+    }
+
+    #[test]
+    fn test_insert_and_get() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert("proj1", "test content", &embedding, None)
+            .unwrap();
+
+        let memory = db.get(&id).unwrap();
+        assert!(memory.is_some());
+        let m = memory.unwrap();
+        assert_eq!(m.content, "test content");
+        assert_eq!(m.project_id, "proj1");
+    }
+
+    #[test]
+    fn test_insert_with_metadata() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert(
+                "proj1",
+                "test content",
+                &embedding,
+                Some(r#"{"key": "value"}"#),
+            )
+            .unwrap();
+
+        let m = db.get(&id).unwrap().unwrap();
+        assert_eq!(m.metadata, Some(r#"{"key": "value"}"#.to_string()));
+    }
+
+    #[test]
+    fn test_insert_invalid_embedding() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 256];
+        let result = db.insert("proj1", "test", &embedding, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_nonexistent() {
+        let db = create_test_db();
+        let memory = db.get("nonexistent").unwrap();
+        assert!(memory.is_none());
+    }
+
+    #[test]
+    fn test_list_ordering() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id1 = db
+            .insert_with_time(
+                "proj1",
+                "first",
+                &embedding,
+                None,
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:00Z",
+            )
+            .unwrap();
+        let id2 = db
+            .insert_with_time(
+                "proj1",
+                "second",
+                &embedding,
+                None,
+                "2024-01-02T00:00:00Z",
+                "2024-01-02T00:00:00Z",
+            )
+            .unwrap();
+
+        let memories = db.list("proj1", 10).unwrap();
+        assert_eq!(memories.len(), 2);
+        assert_eq!(memories[0].id, id2); // Newest first
+        assert_eq!(memories[1].id, id1);
+    }
+
+    #[test]
+    fn test_list_limit() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        for i in 0..5 {
+            db.insert("proj1", &format!("content {}", i), &embedding, None)
+                .unwrap();
+        }
+
+        let memories = db.list("proj1", 2).unwrap();
+        assert_eq!(memories.len(), 2);
+    }
+
+    #[test]
+    fn test_update() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db.insert("proj1", "original", &embedding, None).unwrap();
+
+        db.update(&id, "updated", &embedding).unwrap();
+
+        let m = db.get(&id).unwrap().unwrap();
+        assert_eq!(m.content, "updated");
+    }
+
+    #[test]
+    fn test_update_nonexistent() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let result = db.update("nonexistent", "content", &embedding);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_delete() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db.insert("proj1", "content", &embedding, None).unwrap();
+
+        let deleted = db.delete(&id).unwrap();
+        assert!(deleted);
+
+        let memory = db.get(&id).unwrap();
+        assert!(memory.is_none());
+    }
+
+    #[test]
+    fn test_delete_nonexistent() {
+        let db = create_test_db();
+        let deleted = db.delete("nonexistent").unwrap();
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn test_project_isolation() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        db.insert("proj1", "proj1 content", &embedding, None)
+            .unwrap();
+        db.insert("proj2", "proj2 content", &embedding, None)
+            .unwrap();
+
+        let list1 = db.list("proj1", 10).unwrap();
+        let list2 = db.list("proj2", 10).unwrap();
+
+        assert_eq!(list1.len(), 1);
+        assert_eq!(list2.len(), 1);
+        assert_eq!(list1[0].project_id, "proj1");
+        assert_eq!(list2[0].project_id, "proj2");
+    }
+
+    #[test]
+    fn test_get_includes_embedding() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; EMBEDDING_DIMS];
+        let id = db
+            .insert("proj1", "test content", &embedding, None)
+            .unwrap();
+
+        let memory = db.get(&id).unwrap().unwrap();
+        assert_eq!(memory.embedding.len(), EMBEDDING_DIMS);
+        for (i, &val) in embedding.iter().enumerate() {
+            assert!((memory.embedding[i] - val).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_list_includes_embeddings() {
+        let db = create_test_db();
+        let embedding1 = vec![0.1f32; EMBEDDING_DIMS];
+        let embedding2 = vec![0.2f32; EMBEDDING_DIMS];
+
+        db.insert("proj1", "first", &embedding1, None).unwrap();
+        db.insert("proj1", "second", &embedding2, None).unwrap();
+
+        let memories = db.list("proj1", 10).unwrap();
+        assert_eq!(memories.len(), 2);
+
+        for memory in &memories {
+            assert_eq!(memory.embedding.len(), EMBEDDING_DIMS);
+        }
+    }
+
+    #[test]
+    fn test_embedding_roundtrip() {
+        let db = create_test_db();
+        let original = [0.123f32, 0.456f32, 0.789f32];
+        let mut full_embedding = vec![0.1f32; EMBEDDING_DIMS];
+        full_embedding[0] = original[0];
+        full_embedding[1] = original[1];
+        full_embedding[EMBEDDING_DIMS - 1] = original[2];
+
+        let id = db.insert("proj1", "test", &full_embedding, None).unwrap();
+
+        let memory = db.get(&id).unwrap().unwrap();
+        assert_eq!(memory.embedding.len(), EMBEDDING_DIMS);
+        assert!((memory.embedding[0] - original[0]).abs() < 1e-6);
+        assert!((memory.embedding[1] - original[1]).abs() < 1e-6);
+        assert!((memory.embedding[EMBEDDING_DIMS - 1] - original[2]).abs() < 1e-6);
+    }
+}

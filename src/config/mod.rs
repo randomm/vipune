@@ -9,7 +9,7 @@ mod validation;
 #[cfg(test)]
 mod tests_utils;
 #[cfg(test)]
-use tests_utils::ENV_MUTEX;
+use tests_utils::{ENV_MUTEX, cleanup_env_vars};
 
 use crate::errors::Error;
 use serde::Deserialize;
@@ -156,21 +156,6 @@ impl Config {
 mod tests {
     use super::*;
 
-    fn cleanup_env_vars() {
-        let vars = [
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-        ];
-        for var in vars {
-            unsafe {
-                std::env::remove_var(var);
-            }
-        }
-    }
-
     #[test]
     fn test_default_config() {
         let config = Config::default();
@@ -185,7 +170,13 @@ mod tests {
     #[test]
     fn test_config_load_without_file() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
 
         let config = Config::load().unwrap();
 
@@ -197,7 +188,13 @@ mod tests {
     #[test]
     fn test_config_file_overrides_defaults() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
 
         let config = Config::load().unwrap();
 

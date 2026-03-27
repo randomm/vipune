@@ -309,7 +309,7 @@ mod tests {
 
     fn verify_top_results_are_overlap(results: &[Memory], start: u32, end: u32) {
         let mut overlap_count = 0;
-        for (_idx, result) in results.iter().take((end - start + 1) as usize).enumerate() {
+        for result in results.iter().take((end - start + 1) as usize) {
             let id_num = result
                 .id
                 .strip_prefix("mem-")
