@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 
 /// Expand `~` to home directory in a PathBuf (in-place).
-#[allow(dead_code)] // Dead code justified: used in Config::load()
 pub fn expand_tilde(path: &mut PathBuf) {
     if path.starts_with("~") {
         if let Some(home) = dirs::home_dir() {
@@ -14,7 +13,6 @@ pub fn expand_tilde(path: &mut PathBuf) {
 }
 
 /// Expand `~` to home directory in a PathBuf (returns new PathBuf).
-#[allow(dead_code)] // Dead code justified: used in Config::load()
 pub fn expand_tilde_path(path: &Path) -> PathBuf {
     if path.starts_with("~") {
         if let Some(home) = dirs::home_dir() {

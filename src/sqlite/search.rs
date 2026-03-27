@@ -200,6 +200,6 @@ mod tests {
         db.insert("proj1", "memory 2", &embedding2, None).unwrap();
 
         let results = db.find_similar("proj1", &embedding1, 0.99).unwrap();
-        assert!(results.len() >= 1);
+        assert!(!results.is_empty());
     }
 }

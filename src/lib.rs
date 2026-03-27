@@ -44,7 +44,7 @@ pub mod config;
 pub mod embedding;
 pub mod errors;
 pub mod memory;
-pub mod memory_types;
+pub mod memory_types; // Library-only: batch ingest API (not used in CLI)
 pub mod project;
 mod rrf;
 mod sqlite;
@@ -56,6 +56,8 @@ pub use embedding::{EMBEDDING_DIMS, EmbeddingEngine};
 pub use errors::Error;
 pub use memory::MemoryStore;
 pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
-pub use memory_types::{AddResult, ConflictMemory, IngestPolicy};
+pub use memory_types::{
+    AddResult, BatchIngestItemResult, BatchIngestResult, ConflictMemory, IngestPolicy,
+}; // Library-only: conflict detection and batch ingest types
 pub use project::detect_project;
 pub use sqlite::Memory;

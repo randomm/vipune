@@ -11,6 +11,9 @@ pub enum DecayFunction {
     /// Exponential decay: e^(-λ × age_seconds)
     Exponential,
     /// Linear decay: 1 - λ × age_days (scaled to [0,1])
+    /// Implemented and thoroughly tested. Currently unused in production paths,
+    /// but available for future use or external library consumers.
+    #[cfg_attr(not(test), allow(dead_code))]
     Linear,
 }
 
@@ -47,7 +50,8 @@ impl DecayFunction {
     /// Get all available decay functions.
     ///
     /// Returns an iterator over all decay function variants.
-    #[allow(dead_code)]
+    /// This method documents all available decay function types.
+    #[cfg(test)]
     pub fn all() -> impl Iterator<Item = Self> {
         [DecayFunction::Exponential, DecayFunction::Linear].into_iter()
     }

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use super::env_parser;
 
 #[cfg(test)]
-use super::tests_utils::ENV_MUTEX;
+use super::tests_utils::{ENV_MUTEX, cleanup_env_vars};
 
 /// Apply environment variable overrides to configuration.
 pub fn apply_env_overrides(
@@ -28,25 +28,16 @@ pub fn apply_env_overrides(
 mod tests {
     use super::*;
 
-    fn cleanup_env_vars() {
-        let vars = [
+    #[test]
+    fn test_env_var_overrides_config() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars(&[
             "VIPUNE_DATABASE_PATH",
             "VIPUNE_EMBEDDING_MODEL",
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
-        ];
-        for var in vars {
-            unsafe {
-                std::env::remove_var(var);
-            }
-        }
-    }
-
-    #[test]
-    fn test_env_var_overrides_config() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars();
+        ]);
 
         unsafe {
             std::env::set_var("VIPUNE_DATABASE_PATH", "/custom/path/db.db");
@@ -75,13 +66,25 @@ mod tests {
         assert_eq!(model_cache, PathBuf::from("/custom/cache"));
         assert_eq!(similarity_threshold, 0.95);
 
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
     }
 
     #[test]
     fn test_invalid_similarity_threshold() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
 
         unsafe {
             std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "invalid");
@@ -103,13 +106,25 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Config(_))));
 
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
     }
 
     #[test]
     fn test_empty_env_var_rejected() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
 
         unsafe {
             std::env::set_var("VIPUNE_DATABASE_PATH", "");
@@ -131,13 +146,25 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Config(_))));
 
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
     }
 
     #[test]
     fn test_whitespace_env_var_rejected() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
 
         unsafe {
             std::env::set_var("VIPUNE_EMBEDDING_MODEL", "   ");
@@ -159,13 +186,25 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Config(_))));
 
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
     }
 
     #[test]
     fn test_recency_weight_env_var_override() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
 
         unsafe {
             std::env::set_var("VIPUNE_RECENCY_WEIGHT", "0.5");
@@ -188,13 +227,25 @@ mod tests {
 
         assert_eq!(recency_weight, 0.5);
 
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
     }
 
     #[test]
     fn test_invalid_recency_weight_format() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
 
         unsafe {
             std::env::set_var("VIPUNE_RECENCY_WEIGHT", "invalid");
@@ -216,6 +267,12 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Config(_))));
 
-        cleanup_env_vars();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+        ]);
     }
 }
