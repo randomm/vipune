@@ -796,18 +796,18 @@ fn test_ingest_conflict_aware_policy_maps_to_existing_behavior() {
         "First add should succeed with ConflictAware policy"
     );
 
-    // Add very similar content - should detect conflict
+    // Add duplicate content - should detect conflict
     let result = store
         .ingest(
             project_id,
-            "Alice is employed at Microsoft",
+            "Alice works at Microsoft",
             None,
             IngestPolicy::ConflictAware,
         )
         .expect("Failed to check conflicts");
     assert!(
         matches!(result, vipune::AddResult::Conflicts { .. }),
-        "Similar content should return conflicts with ConflictAware policy"
+        "Duplicate content should return conflicts with ConflictAware policy"
     );
 
     std::fs::remove_file(db_path).ok();
