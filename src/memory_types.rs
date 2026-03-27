@@ -32,8 +32,10 @@ pub struct ConflictMemory {
 }
 
 /// Conflict policy for batch ingest operations.
+///
+/// Determines how conflicts are handled during batch ingestion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Public API used by batch_ingest
 pub enum IngestPolicy {
     /// Check for conflicts and refuse to add if conflicts are found.
     ConflictAware,
@@ -42,8 +44,12 @@ pub enum IngestPolicy {
 }
 
 /// Input item for batch ingest operations.
+///
+/// Each item is validated independently during batch ingestion:
+/// - Empty content → Error result (batch continues)
+/// - Content > 100,000 characters → Error result (batch continues)
+/// - Valid content → Proceeds to insertion or conflict detection
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct BatchIngestItem {
     /// Text content to store (1 to 100,000 characters).
     pub content: String,
@@ -51,9 +57,9 @@ pub struct BatchIngestItem {
     pub metadata: Option<String>,
 }
 
-#[allow(dead_code)]
 impl BatchIngestItem {
     /// Create a new batch ingest item.
+    #[allow(dead_code)] // Public API used in lib.rs examples
     pub fn new(content: String) -> Self {
         Self {
             content,
@@ -62,6 +68,7 @@ impl BatchIngestItem {
     }
 
     /// Create a new batch ingest item with metadata.
+    #[allow(dead_code)] // Public API used in lib.rs examples
     pub fn with_metadata(content: String, metadata: String) -> Self {
         Self {
             content,
@@ -75,7 +82,7 @@ impl BatchIngestItem {
 /// Each item in a batch ingest operation returns a `BatchIngestResult`
 /// indicating whether it was added, had conflicts, or encountered an error.
 #[derive(Debug, Serialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Public API returned by batch_ingest
 pub enum BatchIngestResult {
     /// Memory was successfully added.
     Added { id: String },
@@ -90,7 +97,7 @@ pub enum BatchIngestResult {
 
 /// Summary statistics for batch ingest operations.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Public API part of BatchIngestOutcome
 pub struct BatchIngestSummary {
     /// Number of items successfully added.
     pub added: usize,
@@ -130,7 +137,7 @@ impl BatchIngestSummary {
 ///
 /// Contains per-item results (in input order) and summary statistics.
 #[derive(Debug, Serialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Public API returned by batch_ingest
 pub struct BatchIngestOutcome {
     /// Per-item results, indexed by input order.
     pub results: Vec<BatchIngestResult>,

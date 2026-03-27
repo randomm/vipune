@@ -219,6 +219,25 @@ for memory in results {
 }
 ```
 
+```rust
+use vipune::{Config, MemoryStore, memory_types::{BatchIngestItem, IngestPolicy}};
+
+// Batch ingest multiple memories
+let items = vec![
+    BatchIngestItem::new("First memory".to_string()),
+    BatchIngestItem::with_metadata("Second memory".to_string(), r#"{"tag": "important"}"#.to_string()),
+];
+
+let outcome = store.batch_ingest(&project_id, &items, IngestPolicy::ConflictAware)
+    .expect("Batch ingest failed");
+
+println!("Added: {}, Conflicts: {}, Errors: {}",
+    outcome.summary.added,
+    outcome.summary.conflicts,
+    outcome.summary.errors
+);
+```
+
 **See the crate documentation at [docs.rs](https://docs.rs/vipune) for complete API reference.**
 
 ## Configuration

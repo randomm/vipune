@@ -34,6 +34,30 @@
 //!     println!("{:.2}: {}", memory.similarity.unwrap_or(0.0), memory.content);
 //! }
 //! ```
+
+//! # Batch Ingest Example
+//!
+//! ```no_run
+//! # use vipune::{Config, MemoryStore, BatchIngestItem, IngestPolicy};
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let config = Config::default();
+//! # let mut store = MemoryStore::new(
+//! #     config.database_path.as_path(),
+//! #     &config.embedding_model,
+//! #     config.clone()
+//! # )?;
+//!
+//! let items = vec![
+//!     BatchIngestItem::new("First memory".to_string()),
+//!     BatchIngestItem::with_metadata("Second memory".to_string(), r#"{"tag": "important"}"#.to_string()),
+//! ];
+//!
+//! let outcome = store.batch_ingest("my-project", &items, IngestPolicy::ConflictAware)?;
+//!
+//! println!("Added: {}, Conflicts: {}", outcome.summary.added, outcome.summary.conflicts);
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! # Mutability Requirements
 //!

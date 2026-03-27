@@ -133,11 +133,30 @@ impl MemoryStore {
     }
 
     #[must_use = "handle the error or results may be lost"]
-    #[allow(dead_code)]
     /// Add multiple memories in a single batch operation.
     ///
     /// Processes all items independently; mixed outcomes (Added/Conflicts/Error) are supported.
     /// Results are returned in input order for direct mapping to original items.
+    ///
+    /// # Deterministic Behavior
+    ///
+    /// - Items are processed sequentially in the order provided
+    /// - Each result at index N corresponds to the input item at index N
+    /// - Invalid items (empty content, content > 100,000 characters) return `Error` but do not stop processing
+    /// - Valid items continue processing even after encountering errors in earlier items
+    ///
+    /// # Input Validation
+    ///
+    /// Each item is validated independently:
+    /// - Empty content → Error result (processing continues)
+    /// - Content exceeding 100,000 characters → Error result (processing continues)
+    /// - Valid content → Proceeds to conflict detection or insertion based on policy
+    ///
+    /// # Performance Note
+    ///
+    /// Batch operations are designed to be non-regressive compared to single-item loops:
+    /// embedding generation and database operations have equivalent overhead per item.
+    /// Use batch API primarily for convenience and atomic result handling, not for performance gains.
     ///
     /// # Arguments
     ///
@@ -168,6 +187,7 @@ impl MemoryStore {
     /// let outcome = store.batch_ingest("my-project", &items, IngestPolicy::ConflictAware).unwrap();
     /// println!("Added: {}, Conflicts: {}", outcome.summary.added, outcome.summary.conflicts);
     /// ```
+    #[allow(dead_code)] // Public API for library consumers, documented in lib.rs
     pub fn batch_ingest(
         &mut self,
         project_id: &str,
@@ -207,6 +227,7 @@ impl MemoryStore {
         Ok(BatchIngestOutcome::new(results))
     }
 
+    #[allow(dead_code)] // Helper for batch_ingest, private API
     /// Process a single batch item with the given policy.
     fn process_single_item(
         &mut self,
@@ -395,5 +416,124 @@ mod tests {
         if let BatchIngestResult::Error { message } = &outcome.results[1] {
             assert!(message.to_lowercase().contains("input cannot be empty"));
         }
+    }
+
+    #[test]
+    fn batch_force_policy_adds_despite_conflicts() {
+        let mut store = create_test_store();
+
+        // Add a base memory
+        let base_content = "Duplicate content here";
+        store
+            .add_with_conflict("test-project", base_content, None, false)
+            .unwrap();
+
+        let items = vec![
+            BatchIngestItem::new(base_content.to_string()), // would conflict with ConflictAware
+            BatchIngestItem::new("Another memory".to_string()),
+        ];
+
+        // With Force policy, all items should be added even with conflicts
+        let outcome = store
+            .batch_ingest("test-project", &items, IngestPolicy::Force)
+            .unwrap();
+
+        assert_eq!(outcome.summary.total, 2);
+        assert_eq!(outcome.summary.added, 2);
+        assert_eq!(outcome.summary.conflicts, 0);
+        assert_eq!(outcome.summary.errors, 0);
+
+        assert!(matches!(
+            outcome.results[0],
+            BatchIngestResult::Added { .. }
+        ));
+        assert!(matches!(
+            outcome.results[1],
+            BatchIngestResult::Added { .. }
+        ));
+    }
+
+    #[test]
+    fn batch_input_length_validation() {
+        let mut store = create_test_store();
+
+        // Create content exceeding MAX_INPUT_LENGTH (100,000 characters)
+        let long_content = "x".repeat(100_001);
+
+        let items = vec![
+            BatchIngestItem::new("Valid memory".to_string()), // index 0: added
+            BatchIngestItem::new(long_content),               // index 1: error (too long)
+        ];
+
+        let outcome = store
+            .batch_ingest("test-project", &items, IngestPolicy::Force)
+            .unwrap();
+
+        assert_eq!(outcome.summary.total, 2);
+        assert_eq!(outcome.summary.added, 1);
+        assert_eq!(outcome.summary.conflicts, 0);
+        assert_eq!(outcome.summary.errors, 1);
+
+        assert!(matches!(
+            outcome.results[0],
+            BatchIngestResult::Added { .. }
+        ));
+        assert!(matches!(
+            outcome.results[1],
+            BatchIngestResult::Error { .. }
+        ));
+
+        // Verify error message
+        if let BatchIngestResult::Error { message } = &outcome.results[1] {
+            assert!(message.to_lowercase().contains("too long"));
+        }
+    }
+
+    // Performance sanity check: batch_ingest should not be significantly slower than single-item loop.
+    // This is a non-regression test, not a microbenchmark. Uses generous threshold and deterministic dataset.
+    // Issue #64: ensure batch API doesn't introduce performance regressions compared to calling add_with_conflict in a loop.
+    #[test]
+    fn performance_sanity_batch_vs_single_item_no_regression() {
+        // Use small, deterministic dataset
+        let items_data: Vec<String> = (0..10)
+            .map(|i| format!("Test memory document number {} with unique content", i))
+            .collect();
+        let items: Vec<BatchIngestItem> = items_data
+            .iter()
+            .cloned()
+            .map(BatchIngestItem::new)
+            .collect();
+
+        // Time batch operation
+        let mut store_batch = create_test_store();
+        let start_batch = std::time::Instant::now();
+        store_batch
+            .batch_ingest("perf-test", &items, IngestPolicy::Force)
+            .unwrap();
+        let batch_duration = start_batch.elapsed();
+
+        // Time single-item loop (equivalent workload: 10 independent add_with_conflict calls)
+        let mut store_loop = create_test_store();
+        let start_loop = std::time::Instant::now();
+        for item in items_data.iter() {
+            store_loop
+                .add_with_conflict("perf-test", item, None, true)
+                .unwrap();
+        }
+        let loop_duration = start_loop.elapsed();
+
+        // Sanity threshold: batch should not be more than 5x slower than loop (generous for debug mode)
+        // If performance regresses significantly, this will catch it without flakiness
+        let max_acceptable_ratio = 5.0;
+        let ratio = batch_duration.as_nanos() as f64 / loop_duration.as_nanos().max(1) as f64;
+
+        assert!(
+            ratio <= max_acceptable_ratio,
+            "Batch operation {}x slower than loop (threshold: {}x)\nBatch: {:?}, Loop: {:?}",
+            ratio,
+            max_acceptable_ratio,
+            batch_duration,
+            loop_duration,
+        );
     }
 }
