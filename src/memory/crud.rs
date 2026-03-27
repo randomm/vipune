@@ -129,4 +129,70 @@ impl MemoryStore {
     pub fn delete(&self, id: &str) -> Result<bool, Error> {
         Ok(self.db.delete(id)?)
     }
+
+    #[allow(dead_code)] // Public API for library consumers (e.g., kide)
+    #[must_use = "handle the error or results may be lost"]
+    /// List memories for a project created since a given timestamp.
+    ///
+    /// Returns memories with `created_at > since_timestamp`, ordered by creation time (newest first).
+    /// The timestamp comparison is exclusive (does not include memories created exactly at the timestamp).
+    ///
+    /// # Arguments
+    ///
+    /// * `project_id` - Project identifier
+    /// * `since_timestamp` - RFC3339-formatted timestamp (exclusive lower bound)
+    /// * `limit` - Maximum number of results to return
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - The timestamp is not valid RFC3339
+    /// - Limit is 0 or exceeds MAX_SEARCH_LIMIT
+    /// - Database query fails
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use chrono::Utc;
+    /// let one_hour_ago = (Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+    /// let recent = store.list_since("project", &one_hour_ago, 10)?;
+    /// ```
+    pub fn list_since(
+        &self,
+        project_id: &str,
+        since_timestamp: &str,
+        limit: usize,
+    ) -> Result<Vec<Memory>, Error> {
+        use super::store::validate_limit;
+        validate_limit(limit)?;
+        Ok(self.db.list_since(project_id, since_timestamp, limit)?)
+    }
+
+    #[allow(dead_code)] // Public API for library consumers (e.g., kide)
+    #[must_use = "handle the error or results may be lost"]
+    /// Get multiple memories by their IDs.
+    ///
+    /// Returns results in the same order as the input IDs. Missing IDs are represented as `None`.
+    ///
+    /// # Arguments
+    ///
+    /// * `ids` - Slice of memory IDs to retrieve
+    ///
+    /// # Returns
+    ///
+    /// Vector of `Option<Memory>` with the same length as `ids`. Each position corresponds
+    /// to the ID at the same index in the input. `Some(memory)` if found, `None` if not found.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let results = store.get_many(&["id1", "id2", "missing-id"])?;
+    /// assert_eq!(results.len(), 3);
+    /// assert!(results[0].is_some()); // Found id1
+    /// assert!(results[1].is_some()); // Found id2
+    /// assert!(results[2].is_none()); // Missing ID
+    /// ```
+    pub fn get_many(&self, ids: &[&str]) -> Result<Vec<Option<Memory>>, Error> {
+        Ok(self.db.get_many(ids)?)
+    }
 }
