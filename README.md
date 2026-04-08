@@ -44,13 +44,14 @@ Store semantic memories, search by meaning, and detect conflicts. Single binary 
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/randomm/vipune/releases/latest/download/vipune-installer.sh | sh
 ```
 
-Install to a custom location:
+> The installer detects your platform, downloads the correct binary, and adds it to `~/.cargo/bin/` by default. If you don't use Rust, restart your shell or run `export PATH="$HOME/.cargo/bin:$PATH"` to make vipune available. Use `--prefix=/usr/local` for system-wide installs.
 
+To verify the download before running, download the checksum file and check:
 ```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/randomm/vipune/releases/latest/download/vipune-installer.sh | sh -s -- --prefix=/usr/local
+curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-installer.sh.sha256
+sha256sum -c vipune-installer.sh.sha256
+sh vipune-installer.sh
 ```
-
-> The installer detects your platform, downloads the correct binary, and adds it to `~/.cargo/bin/` by default (already in PATH for Rust users). If you don't use Rust, restart your shell or run `export PATH="$HOME/.cargo/bin:$PATH"` to make vipune available. Use `--prefix` for system-wide installs.
 
 ### Pre-built binary
 
@@ -114,27 +115,11 @@ export PATH="$(pwd)/target/release:$PATH"
 
 ### Uninstall
 
-Remove the binary (whichever method you used to install):
-
-**Default install (curl or cargo):**
 ```bash
-rm ~/.cargo/bin/vipune
+rm ~/.cargo/bin/vipune   # or: sudo rm /usr/local/bin/vipune
 ```
 
-**System-wide install:**
-```bash
-sudo rm /usr/local/bin/vipune
-```
-
-**Legacy user-directory install:**
-```bash
-rm ~/.local/bin/vipune
-```
-
-**Or via cargo:**
-```bash
-cargo uninstall vipune
-```
+Or via cargo: `cargo uninstall vipune`
 
 Optionally, clear all data:
 

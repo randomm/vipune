@@ -12,6 +12,8 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/randomm/vipune/releases
 cargo install vipune
 ```
 
+> For checksum verification before installing, see the [README](../README.md#installation).
+
 **First run:** vipune will automatically download the ONNX model (~400MB) to `~/.vipune/models/`. This happens once and takes 30-60 seconds depending on your connection.
 
 ## Step 2: Add Your First Memory
