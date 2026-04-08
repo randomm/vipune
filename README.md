@@ -38,13 +38,19 @@ Store semantic memories, search by meaning, and detect conflicts. Single binary 
 **Supported:** macOS ARM64, Linux x86_64, Linux ARM64  
 **Not supported:** Windows (due to ONNX Runtime compilation complexity)
 
-### Prerequisites
+### Quick install (macOS and Linux)
 
-For source installation:
-- Rust 1.70+ (install via https://rustup.rs)
-- System dependencies for ONNX Runtime:
-  - Linux: libgomp1, libc6
-  - macOS: None required
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/randomm/vipune/releases/latest/download/vipune-installer.sh | sh
+```
+
+Install to a custom location:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/randomm/vipune/releases/latest/download/vipune-installer.sh | sh -s -- --prefix=/usr/local
+```
+
+> The installer detects your platform, downloads the correct binary, and adds it to `~/.cargo/bin/` by default (already in PATH for Rust users). If you don't use Rust, restart your shell or run `export PATH="$HOME/.cargo/bin:$PATH"` to make vipune available. Use `--prefix` for system-wide installs.
 
 ### Pre-built binary
 
@@ -54,23 +60,9 @@ Download and extract:
 
 ```bash
 curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-apple-darwin.tar.xz
-tar xf vipune-aarch64-apple-darwin.tar.xz
-```
-
-Install to system PATH (requires sudo):
-
-```bash
+tar xf vipune-aarch64-apple-darwin.tar.xz --strip-components=1
 sudo mkdir -p /usr/local/bin && sudo mv vipune /usr/local/bin/
 ```
-
-Or install to user directory (no sudo):
-
-```bash
-mkdir -p ~/.local/bin && mv vipune ~/.local/bin/
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-> Add the `export` line to your `~/.zshrc` or `~/.bashrc` to make it permanent.
 
 **Linux x86_64**
 
@@ -78,12 +70,7 @@ Download and extract:
 
 ```bash
 curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-x86_64-unknown-linux-gnu.tar.xz
-tar xf vipune-x86_64-unknown-linux-gnu.tar.xz
-```
-
-Install to system PATH:
-
-```bash
+tar xf vipune-x86_64-unknown-linux-gnu.tar.xz --strip-components=1
 sudo mkdir -p /usr/local/bin && sudo mv vipune /usr/local/bin/
 ```
 
@@ -93,16 +80,13 @@ Download and extract:
 
 ```bash
 curl -sSfLO https://github.com/randomm/vipune/releases/latest/download/vipune-aarch64-unknown-linux-gnu.tar.xz
-tar xf vipune-aarch64-unknown-linux-gnu.tar.xz
-```
-
-Install to system PATH:
-
-```bash
+tar xf vipune-aarch64-unknown-linux-gnu.tar.xz --strip-components=1
 sudo mkdir -p /usr/local/bin && sudo mv vipune /usr/local/bin/
 ```
 
 ### Build from source
+
+Requires the [Rust toolchain](https://rustup.rs) (1.85+). On Linux, you may also need `libgomp1` and `libc6`.
 
 **Latest release (recommended)**
 ```bash
@@ -132,14 +116,22 @@ export PATH="$(pwd)/target/release:$PATH"
 
 Remove the binary (whichever method you used to install):
 
+**Default install (curl or cargo):**
+```bash
+rm ~/.cargo/bin/vipune
+```
+
+**System-wide install:**
 ```bash
 sudo rm /usr/local/bin/vipune
 ```
 
+**Legacy user-directory install:**
 ```bash
 rm ~/.local/bin/vipune
 ```
 
+**Or via cargo:**
 ```bash
 cargo uninstall vipune
 ```
