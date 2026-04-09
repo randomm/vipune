@@ -5,15 +5,14 @@ Get started with vipune in 5 minutes.
 ## Step 1: Install
 
 ```bash
-# Install from source
-cargo install --git https://github.com/randomm/vipune vipune
+# Quick install (macOS and Linux)
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/randomm/vipune/releases/latest/download/vipune-installer.sh | sh
 
-# Or build from source
-git clone https://github.com/randomm/vipune.git
-cd vipune
-cargo build --release
-cargo install --path .
+# Or install from source
+cargo install vipune
 ```
+
+> For checksum verification before installing, see the [README](../README.md#installation).
 
 **First run:** vipune will automatically download the ONNX model (~400MB) to `~/.vipune/models/`. This happens once and takes 30-60 seconds depending on your connection.
 
