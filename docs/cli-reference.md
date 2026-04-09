@@ -331,6 +331,46 @@ vipune 0.1.1
 
 ---
 
+### mcp
+
+Start vipune as an MCP (Model Context Protocol) server over stdio. This enables AI agents like Claude Code and Cursor to use vipune as a native memory provider.
+
+```
+vipune mcp
+```
+
+**Behavior:**
+- Starts MCP server on stdin/stdout
+- Exposes three tools: `store_memory`, `search_memories`, `list_memories`
+- Automatically detects project from git repository
+- Uses default database path (`~/.vipune/memories.db`)
+
+**Available Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `store_memory` | Store information for later recall |
+| `search_memories` | Find memories by meaning |
+| `list_memories` | List recent memories |
+
+**Exit codes:**
+- `0` - Success
+- `1` - Error (initialization failed)
+
+**Example MCP configuration (Claude Code):**
+```json
+{
+  "mcpServers": {
+    "vipune": {
+      "command": "vipune",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+---
+
 ## Project Detection
 
 vipune automatically detects projects from git repositories. When inside a git repo, the project ID is inferred from the remote origin URL.

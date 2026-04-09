@@ -25,7 +25,6 @@
 //!     Ok(vipune::AddResult::Added { id }) => println!("Added memory: {}", id),
 //!     Ok(vipune::AddResult::Conflicts { .. }) => println!("Conflict detected"),
 //!     Err(e) => eprintln!("Error: {}", e),
-//!     Err(e) => eprintln!("Error: {}", e),
 //! }
 //!
 //! // Search memories
@@ -49,6 +48,9 @@ pub mod project;
 mod rrf;
 mod sqlite;
 mod temporal;
+
+#[cfg(feature = "mcp")]
+pub mod mcp;
 
 // Re-export public API
 pub use config::Config;

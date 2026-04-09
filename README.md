@@ -224,6 +224,41 @@ similarity_threshold = 0.85
 recency_weight = 0.3
 ```
 
+## MCP Server
+
+vipune can act as an MCP (Model Context Protocol) server, enabling AI agents like Claude Code and Cursor to use it as a native memory provider.
+
+### Building with MCP support
+
+```bash
+cargo build --features mcp
+```
+
+### Setup (Claude Code)
+
+Add to your Claude Code configuration (`~/.claude/settings.json` or project `.claude.json`):
+
+```json
+{
+  "mcpServers": {
+    "vipune": {
+      "command": "vipune",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Setup (Cursor)
+
+Add to your Cursor MCP configuration with the same JSON structure.
+
+### Available Tools
+
+- **store_memory**: Store information for later recall
+- **search_memories**: Find memories by meaning
+- **list_memories**: List recent memories
+
 ## Agent Integration
 
 vipune works with any agent that can run shell commands — no plugins, adapters, or API keys required. Configure your agent with a few lines of instructions, grant shell command permissions, and the agent can use `vipune search` and `vipune add` to maintain persistent memory across tasks.

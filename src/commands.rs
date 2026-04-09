@@ -65,6 +65,10 @@ pub enum Commands {
         text: String,
     },
     Version,
+
+    #[cfg(feature = "mcp")]
+    /// Start MCP server over stdio
+    Mcp,
 }
 
 /// Execute a CLI command.
@@ -103,6 +107,8 @@ pub fn execute(
         Commands::Delete { id } => handle_delete(store, id, json),
         Commands::Update { id, text } => handle_update(store, id, text, json),
         Commands::Version => handle_version(json),
+        #[cfg(feature = "mcp")]
+        Commands::Mcp => unreachable!("Mcp is handled before execute"),
     }
 }
 
