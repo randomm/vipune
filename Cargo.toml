@@ -17,7 +17,7 @@ mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
 
 [dependencies]
 # CLI argument parsing
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 
 # Database
 rusqlite = { version = "0.38", features = ["bundled"] }
@@ -26,7 +26,7 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 # Using RC 9 for compatibility with gline-rs (see issue #53).
 # Stable 2.0.0 not released (latest stable: 1.18.0 with API incompatibilities).
 ort = { version = "=2.0.0-rc.9", features = ["ndarray", "download-binaries"] }
-ort-sys = "=2.0.0-rc.9"
+ort-sys = "=2.0.0-rc.10"
 
 # HuggingFace tokenizers and model download
 tokenizers = "0.22.0"
@@ -57,7 +57,7 @@ name = "vipune"
 path = "src/main.rs"
 
 [dev-dependencies]
-tempfile = "3.13"
+tempfile = "3.27"
 
 [profile.release]
 strip = true
