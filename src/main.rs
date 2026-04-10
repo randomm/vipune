@@ -68,6 +68,19 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
 
     let project_id = detect_project(cli.project.as_deref());
 
+    // Handle MCP command separately (doesn't use MemoryStore directly)
+    #[cfg(feature = "mcp")]
+    if matches!(cli.command, Commands::Mcp) {
+        // MCP server run_mcp uses library types; map to local error type
+        vipune::mcp::server::run_mcp(
+            config.embedding_model.clone(),
+            &project_id,
+            config.database_path.clone(),
+        )
+        .map_err(|e| Error::Config(e.to_string()))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
     let mut store = MemoryStore::new(
         &config.database_path,
         &config.embedding_model,

@@ -12,6 +12,9 @@ readme = "README.md"
 authors = ["Janni Turunen"]
 description = "A minimal memory layer for AI agents"
 
+[features]
+mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
+
 [dependencies]
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive"] }
@@ -39,6 +42,11 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 toml = "0.8"
 dirs = "6"
+
+# MCP server (optional, feature-gated)
+rmcp = { version = "1.2", features = ["server", "transport-io", "macros"], optional = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
+schemars = { version = "1", optional = true }
 
 [lib]
 name = "vipune"
@@ -69,7 +77,7 @@ cargo-dist-version = "0.30.4"
 ci = "github"
 # The installers to generate for each app
 installers = ["shell"]
-# Target platforms to build apps for (Rust target-triple syntax)
+# Target platforms to build apps (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
 # Which actions to run on pull requests
 pr-run-mode = "upload"
