@@ -1,8 +1,8 @@
 //! MCP (Model Context Protocol) server for vipune.
 //!
 //! This module provides an MCP server over stdio that exposes vipune's memory
-//! operations as tools. The module is feature-gated behind the `mcp` feature to
-//! keep the library fully synchronous (no tokio/async in lib.rs).
+//! operations as tools. The module is a default feature — MCP is enabled by
+//! default. Use `default-features = false` in your Cargo.toml for sync-only builds.
 //!
 //! # Architecture
 //!

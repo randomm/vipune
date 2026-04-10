@@ -4,7 +4,8 @@
 
 vipune is a single Rust binary CLI tool for semantic memory storage and search. It was designed for simplicity and predictability:
 
-- **Fully synchronous**: No async runtime (no tokio), no event loops. All operations block until complete. This eliminates complexity and runtime overhead.
+- **Library core is sync-only**: No async runtime in `src/lib.rs` (no tokio). All operations block until complete. This eliminates complexity and runtime overhead.
+- **MCP server uses tokio**: The MCP server module uses an async runtime (tokio) when enabled (default feature).
 - **No daemon**: CLI tool only — runs, executes, and exits. No long-lived server process.
 - **No network at runtime**: All dependencies are bundled. HuggingFace Hub model downloads happen once and are cached locally.
 - **SQLite for persistence**: Data stored in `~/.vipune/memories.db` using rusqlite (bundled, no external SQLite installation required).
@@ -134,7 +135,6 @@ END;
 | `dirs` | XDG-compliant home directory paths for `~/.vipune/` cache and database locations. |
 
 **Intentionally excluded**:
-- ❌ `tokio`: Async runtime unnecessary for synchronous CLI operation
 - ❌ `reqwest`: HTTP client not needed (model downloads via hf-hub with ureq blocking I/O)
 - ❌ `pyo3`: Python bindings not required (Rust-only tool)
 - ❌ `sqlx`: Async database toolkit incompatible with synchronous design
@@ -158,7 +158,7 @@ Configurable parameters include:
 
 ## Design Constraints
 
-**Synchronous only**: No async/await, no tokio, no `.await` operators. All I/O is blocking, matching the simplicity requirement for a CLI tool.
+**Synchronous core; MCP server adds tokio when enabled (default feature)**: No async/await, no `.await` operators in library code (`src/lib.rs`). All I/O is blocking, matching the simplicity requirement for a CLI tool. The MCP module is the exception — it uses tokio for async MCP protocol handling.
 
 **Lib and bin targets**: `src/lib.rs` (public API exports) and `src/main.rs` (CLI entry point). Single release artifact enables both library use and CLI tool.
 

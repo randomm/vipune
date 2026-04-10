@@ -13,6 +13,7 @@ authors = ["Janni Turunen"]
 description = "A minimal memory layer for AI agents"
 
 [features]
+default = ["mcp"]
 mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
 
 [dependencies]

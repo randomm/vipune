@@ -228,11 +228,7 @@ recency_weight = 0.3
 
 vipune can act as an MCP (Model Context Protocol) server, enabling AI agents like Claude Code and Cursor to use it as a native memory provider.
 
-### Building with MCP support
-
-```bash
-cargo build --features mcp
-```
+> **Note:** MCP is enabled by default. Library users can use `default-features = false` for sync-only builds.
 
 ### Setup (Claude Code)
 
