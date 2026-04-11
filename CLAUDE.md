@@ -14,10 +14,10 @@ All three checks must pass. No exceptions, no bypasses (`--no-verify`, suppressi
 
 ## Architecture
 
-**Single Binary, Synchronous Rust:**
+**Single Binary, Synchronous Library Core:**
 - All code compiles to one CLI executable
-- No async/await, no tokio, no concurrent runtime
-- Fully synchronous Rust (stdlib-first philosophy)
+- Library core (`src/lib.rs`): fully synchronous Rust (stdlib-first philosophy)
+- MCP server uses async runtime (tokio) as default feature
 - Max 500 lines per source file (refactor if exceeded)
 
 **Key Modules:**

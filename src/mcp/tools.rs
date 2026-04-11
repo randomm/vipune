@@ -172,6 +172,7 @@ impl McpError {
 impl From<Error> for rmcp::ErrorData {
     fn from(e: Error) -> Self {
         match e {
+            // User input errors → INVALID_REQUEST with invalid_input type
             Error::EmptyInput => McpError::invalid_input("Text cannot be empty"),
             Error::InputTooLong {
                 max_length,
@@ -180,6 +181,18 @@ impl From<Error> for rmcp::ErrorData {
                 "Input too long: {} characters (max: {})",
                 actual_length, max_length
             )),
+            Error::InvalidInput(msg) => McpError::invalid_input(&msg),
+            Error::Validation(msg) => McpError::invalid_input(&msg),
+            Error::InvalidTimestamp { timestamp, error } => {
+                McpError::invalid_input(&format!("Invalid timestamp '{}': {}", timestamp, error))
+            }
+            // Not found → INVALID_REQUEST with not_found type
+            Error::NotFound(msg) => rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                msg,
+                Some(serde_json::json!({"type": "not_found"})),
+            ),
+            // Internal/unrecoverable errors → INTERNAL_ERROR
             _ => McpError::internal_error(&e.to_string()),
         }
     }

@@ -36,8 +36,10 @@ pub fn run_mcp(embedding_model: String, project_id: &str, db_path: PathBuf) -> R
     // Create tool handler
     let handler = ToolHandler::new(store, project_id.to_string());
 
-    // Create tokio runtime
-    let runtime = tokio::runtime::Runtime::new()
+    // Create tokio runtime (single-threaded since MCP stdio handles requests sequentially)
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
         .map_err(|e| Error::Config(format!("Failed to create tokio runtime: {}", e)))?;
 
     // Run MCP server over stdio

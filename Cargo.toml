@@ -13,6 +13,7 @@ authors = ["Janni Turunen"]
 description = "A minimal memory layer for AI agents"
 
 [features]
+default = ["mcp"]
 mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
 
 [dependencies]
@@ -45,7 +46,7 @@ dirs = "6"
 
 # MCP server (optional, feature-gated)
 rmcp = { version = "1.2", features = ["server", "transport-io", "macros"], optional = true }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
+tokio = { version = "1", features = ["rt", "macros"], optional = true }
 schemars = { version = "1", optional = true }
 
 [lib]
