@@ -102,4 +102,34 @@ mod tool_handler_tests {
         assert!(json.contains("test content"));
         assert!(json.contains("0.85"));
     }
+
+    /// Tests ToolHandler data path: ingest, search, and list operations through StoreWrapper.
+    #[tokio::test]
+    async fn test_store_and_search_integration() {
+        let (store, _dir) = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = super::super::tools::StoreWrapper::new(store.clone());
+        let project_id = "test-project";
+
+        // Ingest a memory
+        let result = wrapper.ingest(project_id, "rust is awesome", "null", false);
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        let json_str = serde_json::to_string(&value).unwrap();
+        assert!(json_str.contains("added"));
+
+        // Search for it
+        let search_result = wrapper.search(project_id, "rust programming", 5);
+        assert!(search_result.is_ok());
+        let search_value = search_result.unwrap();
+        let search_str = serde_json::to_string(&search_value).unwrap();
+        assert!(search_str.contains("rust is awesome"));
+
+        // List it
+        let list_result = wrapper.list(project_id, 10);
+        assert!(list_result.is_ok());
+        let list_value = list_result.unwrap();
+        let list_str = serde_json::to_string(&list_value).unwrap();
+        assert!(list_str.contains("rust is awesome"));
+    }
 }

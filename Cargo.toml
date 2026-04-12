@@ -59,6 +59,7 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = "3.13"
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [profile.release]
 strip = true
