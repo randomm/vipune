@@ -15,11 +15,17 @@ use std::sync::{Arc, Mutex};
 /// Wrapper for MemoryStore to allow async-sound use.
 ///
 /// Since MCP stdio handles requests sequentially, the Mutex will never contend.
-struct StoreWrapper(Arc<Mutex<MemoryStore>>);
+pub(crate) struct StoreWrapper(Arc<Mutex<MemoryStore>>);
 
 impl StoreWrapper {
+    /// Create a new StoreWrapper from a shared MemoryStore.
+    #[allow(dead_code)]
+    pub(crate) fn new(store: Arc<Mutex<MemoryStore>>) -> Self {
+        Self(store)
+    }
+
     /// Store a memory with conflict detection.
-    fn ingest(
+    pub(crate) fn ingest(
         &self,
         project_id: &str,
         text: &str,
@@ -62,7 +68,7 @@ impl StoreWrapper {
     }
 
     /// Search memories by semantic meaning.
-    fn search(
+    pub(crate) fn search(
         &self,
         project_id: &str,
         query: &str,
@@ -87,7 +93,7 @@ impl StoreWrapper {
     }
 
     /// List recent memories.
-    fn list(&self, project_id: &str, limit: usize) -> Result<serde_json::Value, Error> {
+    pub(crate) fn list(&self, project_id: &str, limit: usize) -> Result<serde_json::Value, Error> {
         let store = self.0.lock().unwrap();
         let memories = store.list(project_id, limit)?;
 

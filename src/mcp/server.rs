@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 /// Run the MCP server over stdio.
 ///
-/// This function:
+/// This function blocks until the client disconnects. It:
 /// 1. Creates a MemoryStore instance
 /// 2. Creates a tokio runtime
 /// 3. Serves the MCP protocol over stdio
@@ -45,9 +45,13 @@ pub fn run_mcp(embedding_model: String, project_id: &str, db_path: PathBuf) -> R
     // Run MCP server over stdio
     runtime.block_on(async {
         let (stdin, stdout) = rmcp::transport::stdio();
-        let _service = rmcp::serve_server(handler, (stdin, stdout))
+        let service = rmcp::serve_server(handler, (stdin, stdout))
             .await
             .map_err(|e| Error::Config(format!("MCP server error: {}", e)))?;
+        service
+            .waiting()
+            .await
+            .map_err(|e| Error::Config(format!("MCP server task error: {}", e)))?;
         Ok(())
     })
 }
