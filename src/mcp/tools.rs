@@ -19,7 +19,7 @@ pub(crate) struct StoreWrapper(Arc<Mutex<MemoryStore>>);
 
 impl StoreWrapper {
     /// Create a new StoreWrapper from a shared MemoryStore.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used in cfg(test) builds
     pub(crate) fn new(store: Arc<Mutex<MemoryStore>>) -> Self {
         Self(store)
     }
