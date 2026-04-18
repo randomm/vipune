@@ -204,4 +204,14 @@ mod tests {
         assert!(config.model_cache.ends_with(".vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
     }
+
+    #[test]
+    fn test_default_model_matches_embed_constant() {
+        let config = Config::default();
+        assert_eq!(
+            config.embedding_model,
+            crate::embedding::EMBED_MODEL_ID,
+            "Config::default() model must match EMBED_MODEL_ID — update both when changing the default model"
+        );
+    }
 }
