@@ -11,6 +11,7 @@ mod tests_utils;
 #[cfg(test)]
 use tests_utils::{ENV_MUTEX, cleanup_env_vars};
 
+use crate::embedding::EMBED_MODEL_ID;
 use crate::errors::Error;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -65,7 +66,7 @@ impl Default for Config {
 
         Self {
             database_path: vipune_dir.join("memories.db"),
-            embedding_model: "BAAI/bge-small-en-v1.5".to_string(),
+            embedding_model: EMBED_MODEL_ID.to_string(),
             model_cache: vipune_dir.join("models"),
             similarity_threshold: 0.85,
             recency_weight: 0.3,
@@ -202,5 +203,15 @@ mod tests {
         assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
         assert!(config.model_cache.ends_with(".vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
+    }
+
+    #[test]
+    fn test_default_model_matches_embed_constant() {
+        let config = Config::default();
+        assert_eq!(
+            config.embedding_model,
+            crate::embedding::EMBED_MODEL_ID,
+            "Config::default() model must match EMBED_MODEL_ID — update both when changing the default model"
+        );
     }
 }
