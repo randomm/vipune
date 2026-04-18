@@ -54,7 +54,7 @@ pub mod mcp;
 
 // Re-export public API
 pub use config::Config;
-pub use embedding::{EMBEDDING_DIMS, EmbeddingEngine};
+pub use embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine};
 pub use errors::Error;
 pub use memory::MemoryStore;
 pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};

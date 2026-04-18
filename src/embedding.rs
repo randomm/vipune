@@ -2,7 +2,7 @@
 //!
 //! Uses bge-small-en-v1.5 model (384 dimensions) with mean pooling and L2 normalization.
 
-use hf_hub::api::sync::Api;
+use hf_hub::{Repo, RepoType, api::sync::Api};
 use ort::inputs;
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
@@ -16,6 +16,12 @@ use tokenizers::TruncationParams;
 ///
 /// All generated embeddings are 384-dimensional vectors.
 pub const EMBEDDING_DIMS: usize = 384;
+
+/// HuggingFace model ID for the embedding model.
+pub const EMBED_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
+
+/// Pinned revision SHA for the embedding model to ensure reproducibility.
+pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
 
 /// ONNX embedding engine for synchronous text-to-vector conversion.
 ///
@@ -34,21 +40,51 @@ pub struct EmbeddingEngine {
 }
 
 impl EmbeddingEngine {
-    /// Load model from cache or download on first use.
+    /// Creates a new embedding engine with the specified model.
     ///
-    /// # Sync API Choice
+    /// When `model_id` is the default model (`EMBED_MODEL_ID`), the pinned revision
+    /// `EMBED_MODEL_REVISION` is used to ensure reproducibility. Custom model IDs
+    /// fall back to the `main` branch.
     ///
-    /// Uses `hf_hub::api::sync::Api` with ureq feature for blocking I/O.
-    /// This approach is fully synchronous, matching vipune's no-async policy.
     /// Files are cached locally in HF Hub cache, only downloaded once.
     pub fn new(model_id: &str) -> Result<Self, Error> {
         let api = Api::new()?;
-        let repo = api.model(model_id.to_string());
+
+        // Use pinned revision for default model, "main" for custom models
+        let revision = if model_id == EMBED_MODEL_ID {
+            EMBED_MODEL_REVISION.to_string()
+        } else {
+            "main".to_string()
+        };
+
+        // Capture the actual model_id and revision for the error message
+        let err_model_id = model_id.to_string();
+        let err_revision = revision.clone();
+
+        let repo = api.repo(Repo::with_revision(
+            model_id.to_string(),
+            RepoType::Model,
+            revision,
+        ));
+
+        // Helper function for error messaging
+        let wrap_download_err = move |e: hf_hub::api::sync::ApiError| {
+            let revision_hint = if err_model_id == EMBED_MODEL_ID {
+                format!(" --revision {}", err_revision)
+            } else {
+                String::new()
+            };
+            Error::Config(format!(
+                "Failed to download embedding model '{}': {}.\n\nIf running in an air-gapped environment, pre-fetch the model before going offline:\n  huggingface-cli download {}{} --cache-dir ~/.cache/huggingface/hub",
+                err_model_id, e, err_model_id, revision_hint
+            ))
+        };
 
         let model_path = repo
             .get("onnx/model.onnx")
-            .or_else(|_| repo.get("model.onnx"))?;
-        let tokenizer_path = repo.get("tokenizer.json")?;
+            .or_else(|_| repo.get("model.onnx"))
+            .map_err(&wrap_download_err)?;
+        let tokenizer_path = repo.get("tokenizer.json").map_err(&wrap_download_err)?;
 
         let mut tokenizer = Tokenizer::from_file(tokenizer_path)?;
         tokenizer
@@ -196,6 +232,13 @@ mod tests {
     #[test]
     fn test_embedding_dimensions() {
         assert_eq!(EMBEDDING_DIMS, 384);
+    }
+
+    #[test]
+    fn test_embed_model_constants() {
+        assert_eq!(EMBED_MODEL_ID, "BAAI/bge-small-en-v1.5");
+        assert_eq!(EMBED_MODEL_REVISION.len(), 40); // SHA-1 is 40 hex chars
+        assert!(EMBED_MODEL_REVISION.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
