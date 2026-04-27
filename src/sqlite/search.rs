@@ -27,6 +27,14 @@ impl Database {
     /// Retrieves all memories for a project, computes cosine similarity with the query
     /// embedding, sorts by similarity (highest first), and returns the top `limit` results.
     ///
+    /// # Arguments
+    ///
+    /// * `project_id` - Project identifier
+    /// * `query_embedding` - The embedding vector to compare against
+    /// * `limit` - Maximum number of results to return
+    /// * `memory_types` - Optional filter for memory types (None = no filter by type)
+    /// * `statuses` - Optional filter for lifecycle statuses (None = default to 'active')
+    ///
     /// # Errors
     ///
     /// Returns error if the query embedding has invalid dimensions or if the database
@@ -36,33 +44,95 @@ impl Database {
         project_id: &str,
         query_embedding: &[f32],
         limit: usize,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
     ) -> Result<Vec<Memory>> {
         validate_limit(limit)?;
 
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, project_id, content, metadata, created_at, updated_at, embedding
-            FROM memories
-            WHERE project_id = ?1
-            "#,
-        )?;
+        let mut where_clauses = vec!["project_id = ?1".to_string()];
+        let mut param_index = 2usize;
+
+        // Status filter (default to active if None)
+        if let Some(statuses) = statuses {
+            if !statuses.is_empty() {
+                let placeholders: Vec<String> = (0..statuses.len())
+                    .map(|i| format!("?{}", param_index + i))
+                    .collect();
+                where_clauses.push(format!("status IN ({})", placeholders.join(", ")));
+                param_index += statuses.len();
+            }
+        } else {
+            where_clauses.push(format!("status = ?{}", param_index));
+            param_index += 1;
+        }
+
+        // Type filter (only if explicitly provided)
+        if let Some(types) = memory_types {
+            if !types.is_empty() {
+                let placeholders: Vec<String> = (0..types.len())
+                    .map(|i| format!("?{}", param_index + i))
+                    .collect();
+                where_clauses.push(format!("type IN ({})", placeholders.join(", ")));
+            }
+        }
+
+        let where_clause = where_clauses.join(" AND ");
+        let query = format!(
+            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+             FROM memories WHERE {} ORDER BY created_at DESC",
+            where_clause
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&project_id];
+        if let Some(statuses) = statuses {
+            if statuses.is_empty() {
+                // explicit empty = no status filter, but we didn't add a clause
+            } else {
+                for s in statuses {
+                    params.push(s);
+                }
+            }
+        } else {
+            params.push(&"active");
+        }
+        if let Some(types) = memory_types {
+            for t in types {
+                params.push(t);
+            }
+        }
 
         let mut memories: Vec<Memory> = Vec::new();
 
-        let rows = stmt.query_map([project_id], |row| {
+        let rows = stmt.query_map(params.as_slice(), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<String>>(3)?,
-                row.get::<_, String>(4)?,
+                row.get::<_, Vec<u8>>(4)?,
                 row.get::<_, String>(5)?,
-                row.get::<_, Vec<u8>>(6)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, Option<String>>(9)?,
             ))
         })?;
 
         for row_result in rows {
-            let (id, pid, content, metadata, created_at, updated_at, blob) = row_result?;
+            let (
+                id,
+                pid,
+                content,
+                metadata,
+                blob,
+                created_at,
+                updated_at,
+                type_val,
+                status_val,
+                superseded_by,
+            ) = row_result?;
             let stored_embedding = embedding::blob_to_vec(&blob).map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
                     6,
@@ -84,6 +154,9 @@ impl Database {
                 similarity,
                 created_at,
                 updated_at,
+                memory_type: type_val,
+                status: status_val,
+                superseded_by,
             });
         }
 
@@ -111,7 +184,7 @@ impl Database {
         embedding: &[f32],
         threshold: f64,
     ) -> Result<Vec<Memory>> {
-        let all_results = self.search(project_id, embedding, MAX_SEARCH_LIMIT)?;
+        let all_results = self.search(project_id, embedding, MAX_SEARCH_LIMIT, None, None)?;
         Ok(all_results
             .into_iter()
             .filter(|m| m.similarity.unwrap_or(0.0) >= threshold)
@@ -152,12 +225,26 @@ mod tests {
     fn test_search_basic() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        db.insert("proj1", "rust programming", &embedding, None)
-            .unwrap();
-        db.insert("proj1", "python data science", &embedding, None)
-            .unwrap();
+        db.insert(
+            "proj1",
+            "rust programming",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+        db.insert(
+            "proj1",
+            "python data science",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
 
-        let results = db.search("proj1", &embedding, 10).unwrap();
+        let results = db.search("proj1", &embedding, 10, None, None).unwrap();
         assert_eq!(results.len(), 2);
         assert!(results[0].similarity.unwrap() >= 0.9);
     }
@@ -167,11 +254,18 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         for i in 0..5 {
-            db.insert("proj1", &format!("content {}", i), &embedding, None)
-                .unwrap();
+            db.insert(
+                "proj1",
+                &format!("content {}", i),
+                &embedding,
+                None,
+                "fact",
+                "active",
+            )
+            .unwrap();
         }
 
-        let results = db.search("proj1", &embedding, 2).unwrap();
+        let results = db.search("proj1", &embedding, 2, None, None).unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -179,12 +273,26 @@ mod tests {
     fn test_search_project_isolation() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        db.insert("proj1", "project 1 memory", &embedding, None)
-            .unwrap();
-        db.insert("proj2", "project 2 memory", &embedding, None)
-            .unwrap();
+        db.insert(
+            "proj1",
+            "project 1 memory",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+        db.insert(
+            "proj2",
+            "project 2 memory",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
 
-        let results = db.search("proj1", &embedding, 10).unwrap();
+        let results = db.search("proj1", &embedding, 10, None, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].project_id, "proj1");
     }
@@ -196,8 +304,10 @@ mod tests {
         let mut embedding2 = vec![1.0f32; 384];
         embedding2[0] = 0.0; // Slightly different
 
-        db.insert("proj1", "memory 1", &embedding1, None).unwrap();
-        db.insert("proj1", "memory 2", &embedding2, None).unwrap();
+        db.insert("proj1", "memory 1", &embedding1, None, "fact", "active")
+            .unwrap();
+        db.insert("proj1", "memory 2", &embedding2, None, "fact", "active")
+            .unwrap();
 
         let results = db.find_similar("proj1", &embedding1, 0.99).unwrap();
         assert!(!results.is_empty());

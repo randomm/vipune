@@ -48,6 +48,8 @@ impl MemoryStore {
     /// * `content` - Text content to store (1 to 100,000 characters)
     /// * `metadata` - Optional JSON metadata string
     /// * `force` - If true, bypass conflict detection and add regardless
+    /// * `memory_type` - Memory type string (fact, preference, procedure, guard, observation)
+    /// * `status` - Memory status string (active, candidate)
     ///
     /// # Returns
     ///
@@ -67,6 +69,8 @@ impl MemoryStore {
         content: &str,
         metadata: Option<&str>,
         force: bool,
+        memory_type: &str,
+        status: &str,
     ) -> Result<AddResult, Error> {
         Self::validate_input_length(content)?;
 
@@ -78,7 +82,14 @@ impl MemoryStore {
         };
 
         if force {
-            let id = self.db.insert(project_id, content, &embedding, metadata)?;
+            let id = self.db.insert(
+                project_id,
+                content,
+                &embedding,
+                metadata,
+                memory_type,
+                status,
+            )?;
             return Ok(AddResult::Added { id });
         }
 
@@ -95,7 +106,14 @@ impl MemoryStore {
             .collect();
 
         if conflicts.is_empty() {
-            let id = self.db.insert(project_id, content, &embedding, metadata)?;
+            let id = self.db.insert(
+                project_id,
+                content,
+                &embedding,
+                metadata,
+                memory_type,
+                status,
+            )?;
             Ok(AddResult::Added { id })
         } else {
             Ok(AddResult::Conflicts {
@@ -146,6 +164,7 @@ impl MemoryStore {
     ///     AddResult::Conflicts { .. } => unreachable!(),
     /// };
     /// ```
+    #[allow(dead_code)] // Library API: available for consumers
     pub fn ingest(
         &mut self,
         project_id: &str,
@@ -153,11 +172,27 @@ impl MemoryStore {
         metadata: Option<&str>,
         policy: IngestPolicy,
     ) -> Result<AddResult, Error> {
+        self.ingest_with_type_status(project_id, content, metadata, policy, "fact", "active")
+    }
+
+    /// Ingest with explicit memory type and status.
+    #[must_use = "handle the error or results may be lost"]
+    pub fn ingest_with_type_status(
+        &mut self,
+        project_id: &str,
+        content: &str,
+        metadata: Option<&str>,
+        policy: IngestPolicy,
+        memory_type: &str,
+        status: &str,
+    ) -> Result<AddResult, Error> {
         match policy {
             IngestPolicy::ConflictAware => {
-                self.add_with_conflict(project_id, content, metadata, false)
+                self.add_with_conflict(project_id, content, metadata, false, memory_type, status)
             }
-            IngestPolicy::Force => self.add_with_conflict(project_id, content, metadata, true),
+            IngestPolicy::Force => {
+                self.add_with_conflict(project_id, content, metadata, true, memory_type, status)
+            }
         }
     }
 
@@ -178,16 +213,24 @@ impl MemoryStore {
     ///
     /// * `project_id` - Project identifier
     /// * `limit` - Maximum number of results to return
+    /// * `memory_types` - Optional filter by memory types
+    /// * `statuses` - Optional filter by memory statuses
     ///
     /// # Errors
     ///
     /// Returns error if:
     /// - Limit is 0
     /// - Limit exceeds MAX_SEARCH_LIMIT
-    pub fn list(&self, project_id: &str, limit: usize) -> Result<Vec<Memory>, Error> {
+    pub fn list(
+        &self,
+        project_id: &str,
+        limit: usize,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
+    ) -> Result<Vec<Memory>, Error> {
         use super::store::validate_limit;
         validate_limit(limit)?;
-        Ok(self.db.list(project_id, limit)?)
+        Ok(self.db.list(project_id, limit, memory_types, statuses)?)
     }
 
     #[must_use = "handle the error or results may be lost"]
@@ -267,6 +310,8 @@ impl MemoryStore {
     /// * `project_id` - Project identifier
     /// * `since_timestamp` - RFC3339-formatted timestamp (exclusive lower bound)
     /// * `limit` - Maximum number of results to return
+    /// * `memory_types` - Optional filter by memory types
+    /// * `statuses` - Optional filter by memory statuses
     ///
     /// # Errors
     ///
@@ -280,17 +325,21 @@ impl MemoryStore {
     /// ```ignore
     /// use chrono::Utc;
     /// let one_hour_ago = (Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
-    /// let recent = store.list_since("project", &one_hour_ago, 10)?;
+    /// let recent = store.list_since("project", &one_hour_ago, 10, None, None)?;
     /// ```
     pub fn list_since(
         &self,
         project_id: &str,
         since_timestamp: &str,
         limit: usize,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
     ) -> Result<Vec<Memory>, Error> {
         use super::store::validate_limit;
         validate_limit(limit)?;
-        Ok(self.db.list_since(project_id, since_timestamp, limit)?)
+        Ok(self
+            .db
+            .list_since(project_id, since_timestamp, limit, memory_types, statuses)?)
     }
 
     #[allow(dead_code)] // Public API for library consumers (e.g., kide)
@@ -390,7 +439,9 @@ impl MemoryStore {
                 Err(e) => BatchIngestItemResult::Error {
                     message: format!("{}", e),
                 },
-                Ok(()) => match self.add_with_conflict(project_id, content, metadata, force) {
+                Ok(()) => match self
+                    .add_with_conflict(project_id, content, metadata, force, "fact", "active")
+                {
                     Ok(AddResult::Added { id }) => BatchIngestItemResult::Added { id },
                     Ok(AddResult::Conflicts {
                         proposed,

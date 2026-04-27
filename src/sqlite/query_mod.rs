@@ -43,6 +43,9 @@ pub fn map_row_to_memory(row: &Row) -> SqliteResult<Memory> {
         similarity: None,
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
+        memory_type: row.get(7)?,
+        status: row.get(8)?,
+        superseded_by: row.get(9)?,
     })
 }
 
@@ -71,6 +74,8 @@ mod tests {
                 "test content",
                 &embedding,
                 Some(r#"{"key":"value"}"#),
+                "fact",
+                "active",
             )
             .unwrap();
 
@@ -78,7 +83,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, project_id, content, metadata, embedding, created_at, updated_at
+                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
                 FROM memories
                 WHERE id = ?1
                 "#,
@@ -99,14 +104,14 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; EMBEDDING_DIMS];
         let id = db
-            .insert("proj1", "test content", &embedding, None)
+            .insert("proj1", "test content", &embedding, None, "fact", "active")
             .unwrap();
 
         let conn = db.conn();
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, project_id, content, metadata, embedding, created_at, updated_at
+                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
                 FROM memories
                 WHERE id = ?1
                 "#,
@@ -126,8 +131,8 @@ mod tests {
         let blob = super::super::embedding::vec_to_blob(&vec![0.1f32; EMBEDDING_DIMS]).unwrap();
         conn.execute(
             r#"
-            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at)
-            VALUES ('test-id', 'proj1', 'test', ?1, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')
+            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status)
+            VALUES ('test-id', 'proj1', 'test', ?1, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'fact', 'active')
             "#,
             params![blob],
         )
@@ -136,7 +141,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, project_id, content, metadata, embedding, created_at, updated_at
+                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
                 FROM memories
                 WHERE id = ?1
                 "#,

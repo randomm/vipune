@@ -2,6 +2,7 @@
 
 use crate::errors::Error;
 use crate::memory::MemoryStore;
+use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
 use crate::{config, embedding::EmbeddingEngine, temporal};
@@ -12,6 +13,9 @@ struct SearchContext {
     limit: usize,
     recency: Option<f64>,
     hybrid: bool,
+    memory_type: Option<String>,
+    status: Option<String>,
+    include_candidates: bool,
 }
 
 /// Commands supported by vipune CLI.
@@ -32,6 +36,18 @@ pub enum Commands {
         /// Bypass conflict detection and store the memory unconditionally.
         #[arg(long)]
         force: bool,
+
+        /// Memory type (fact, preference, procedure, guard, observation)
+        #[arg(long, default_value = "fact")]
+        memory_type: String,
+
+        /// Memory status (active, candidate)
+        #[arg(long, default_value = "active")]
+        status: String,
+
+        /// Supersede an existing memory (atomic replacement)
+        #[arg(long)]
+        supersedes: Option<String>,
     },
     Search {
         /// Search query text
@@ -48,6 +64,18 @@ pub enum Commands {
         /// Use hybrid search (semantic + BM25 with RRF fusion)
         #[arg(long)]
         hybrid: bool,
+
+        /// Filter by memory type (comma-separated)
+        #[arg(long)]
+        memory_type: Option<String>,
+
+        /// Filter by status (default: active)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Include candidate memories in results
+        #[arg(long)]
+        include_candidates: bool,
     },
     Get {
         /// Memory ID
@@ -57,6 +85,18 @@ pub enum Commands {
         /// Maximum number of results (default: 10)
         #[arg(short = 'l', long, default_value = "10")]
         limit: usize,
+
+        /// Filter by memory type (comma-separated)
+        #[arg(long)]
+        memory_type: Option<String>,
+
+        /// Filter by status (default: active)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Include candidate memories in results
+        #[arg(long)]
+        include_candidates: bool,
     },
     Delete {
         /// Memory ID
@@ -73,6 +113,14 @@ pub enum Commands {
         /// Optional JSON metadata (replaces existing metadata)
         #[arg(short = 'm', long)]
         metadata: Option<String>,
+
+        /// Update memory type
+        #[arg(long)]
+        memory_type: Option<String>,
+
+        /// Update memory status
+        #[arg(long)]
+        status: Option<String>,
     },
     Version,
 
@@ -95,12 +143,28 @@ pub fn execute(
             text,
             metadata,
             force,
-        } => handle_add(store, &project_id, text, metadata.as_deref(), *force, json),
+            memory_type,
+            status,
+            supersedes,
+        } => handle_add(
+            store,
+            &project_id,
+            text,
+            metadata.as_deref(),
+            *force,
+            memory_type,
+            status,
+            supersedes.as_deref(),
+            json,
+        ),
         Commands::Search {
             query,
             limit,
             recency,
             hybrid,
+            memory_type,
+            status,
+            include_candidates,
         } => handle_search(
             store,
             &project_id,
@@ -109,16 +173,44 @@ pub fn execute(
                 limit: *limit,
                 recency: *recency,
                 hybrid: *hybrid,
+                memory_type: memory_type.clone(),
+                status: status.clone(),
+                include_candidates: *include_candidates,
             },
             config,
             json,
         ),
         Commands::Get { id } => handle_get(store, id, json),
-        Commands::List { limit } => handle_list(store, &project_id, *limit, json),
+        Commands::List {
+            limit,
+            memory_type,
+            status,
+            include_candidates,
+        } => handle_list(
+            store,
+            &project_id,
+            *limit,
+            memory_type.as_deref(),
+            status.as_deref(),
+            *include_candidates,
+            json,
+        ),
         Commands::Delete { id } => handle_delete(store, id, json),
-        Commands::Update { id, text, metadata } => {
-            handle_update(store, id, text.as_deref(), metadata.as_deref(), json)
-        }
+        Commands::Update {
+            id,
+            text,
+            metadata,
+            memory_type,
+            status,
+        } => handle_update(
+            store,
+            id,
+            text.as_deref(),
+            metadata.as_deref(),
+            memory_type.as_deref(),
+            status.as_deref(),
+            json,
+        ),
         Commands::Version => handle_version(json),
         #[cfg(feature = "mcp")]
         Commands::Mcp => unreachable!("Mcp is handled before execute"),
@@ -153,21 +245,74 @@ fn handle_validate(text: &str, model_id: &str, json: bool) -> Result<ExitCode, E
     Ok(ExitCode::SUCCESS)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_add(
     store: &mut MemoryStore,
     project_id: &str,
     text: &str,
     metadata: Option<&str>,
     force: bool,
+    memory_type: &str,
+    status: &str,
+    supersedes: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
+    // Validate memory_type
+    let _ = MemoryType::from_str(memory_type)?;
+
+    // Validate status
+    let status_val = MemoryStatus::from_str(status)?;
+    if !status_val.is_valid_for_insert() {
+        return Err(Error::InvalidInput(format!(
+            "Status '{}' is not valid for new memory insertion. Must be 'active' or 'candidate'.",
+            status
+        )));
+    }
+
+    // Check mutually exclusive flags
+    if supersedes.is_some() && force {
+        return Err(Error::InvalidInput(
+            "Cannot use both --supersedes and --force flags together".to_string(),
+        ));
+    }
+
+    // If supersedes is provided, use supersede flow
+    if let Some(old_id) = supersedes {
+        // Use mock embedding if embedder is not loaded (test mode)
+        let embedding = if store.embedder.is_none() {
+            crate::memory::crud::mock_embedding_for_content(text)
+        } else {
+            store.embedder()?.embed(text)?
+        };
+
+        let metadata_str = metadata.map(|s| s.to_string());
+        let new_id = store.db.supersede(
+            project_id,
+            text,
+            &embedding,
+            metadata_str.as_deref(),
+            memory_type,
+            old_id,
+        )?;
+
+        if json {
+            print_json(&AddResponse {
+                status: "superseded".to_string(),
+                id: new_id,
+            });
+        } else {
+            println!("Superseded memory {} with new memory", old_id);
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
     let policy = if force {
         IngestPolicy::Force
     } else {
         IngestPolicy::ConflictAware
     };
 
-    match store.ingest(project_id, text, metadata, policy)? {
+    match store.ingest_with_type_status(project_id, text, metadata, policy, memory_type, status)? {
         AddResult::Added { id } => {
             if json {
                 print_json(&AddResponse {
@@ -223,10 +368,47 @@ fn handle_search(
 ) -> Result<ExitCode, Error> {
     let recency_weight = opts.recency.unwrap_or(config.recency_weight);
     temporal::validate_recency_weight(recency_weight)?;
-    let memories = if opts.hybrid {
-        store.search_hybrid(project_id, &opts.query, opts.limit, recency_weight)?
+
+    // Build filter params from CLI flags
+    let type_vec: Option<Vec<String>> = opts
+        .memory_type
+        .as_ref()
+        .map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
+    let type_strs: Option<Vec<&str>> = type_vec
+        .as_ref()
+        .map(|v| v.iter().map(|s| s.as_str()).collect());
+    let type_slice: Option<&[&str]> = type_strs.as_deref();
+
+    let status_vec: Option<Vec<String>> = if opts.include_candidates {
+        Some(vec!["active".to_string(), "candidate".to_string()])
     } else {
-        store.search(project_id, &opts.query, opts.limit, recency_weight)?
+        opts.status
+            .as_ref()
+            .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
+    };
+    let status_strs: Option<Vec<&str>> = status_vec
+        .as_ref()
+        .map(|v| v.iter().map(|s| s.as_str()).collect());
+    let status_slice: Option<&[&str]> = status_strs.as_deref();
+
+    let memories = if opts.hybrid {
+        store.search_hybrid(
+            project_id,
+            &opts.query,
+            opts.limit,
+            recency_weight,
+            type_slice,
+            status_slice,
+        )?
+    } else {
+        store.search(
+            project_id,
+            &opts.query,
+            opts.limit,
+            recency_weight,
+            type_slice,
+            status_slice,
+        )?
     };
     if json {
         let results: Vec<SearchResultItem> = memories
@@ -281,9 +463,30 @@ fn handle_list(
     store: &mut MemoryStore,
     project_id: &str,
     limit: usize,
+    memory_type: Option<&str>,
+    status: Option<&str>,
+    include_candidates: bool,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    let memories = store.list(project_id, limit)?;
+    // Build filter params from CLI flags
+    let type_vec: Option<Vec<String>> =
+        memory_type.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
+    let type_strs: Option<Vec<&str>> = type_vec
+        .as_ref()
+        .map(|v| v.iter().map(|s| s.as_str()).collect());
+    let type_slice: Option<&[&str]> = type_strs.as_deref();
+
+    let status_vec: Option<Vec<String>> = if include_candidates {
+        Some(vec!["active".to_string(), "candidate".to_string()])
+    } else {
+        status.map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
+    };
+    let status_strs: Option<Vec<&str>> = status_vec
+        .as_ref()
+        .map(|v| v.iter().map(|s| s.as_str()).collect());
+    let status_slice: Option<&[&str]> = status_strs.as_deref();
+
+    let memories = store.list(project_id, limit, type_slice, status_slice)?;
     if json {
         let items: Vec<ListItem> = memories
             .into_iter()
@@ -324,6 +527,8 @@ fn handle_update(
     id: &str,
     text: Option<&str>,
     metadata: Option<&str>,
+    _memory_type: Option<&str>,
+    _status: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
     if text.is_none() && metadata.is_none() {

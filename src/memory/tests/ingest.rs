@@ -123,7 +123,7 @@ fn test_ingest_force_bypasses_conflicts() {
         AddResult::Added { id } => {
             assert!(!id.is_empty());
             // Verify both memories exist
-            let memories = store.list("test-project", 10).unwrap();
+            let memories = store.list("test-project", 10, None, None).unwrap();
             assert_eq!(memories.len(), 2);
         }
         AddResult::Conflicts { .. } => panic!("Expected AddResult::Added with Force policy"),

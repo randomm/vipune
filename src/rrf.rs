@@ -128,6 +128,9 @@ mod tests {
             similarity,
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            memory_type: "fact".to_string(),
+            status: "active".to_string(),
+            superseded_by: None,
         }
     }
 
@@ -256,6 +259,9 @@ mod tests {
             similarity: Some(0.9),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             updated_at: "2024-01-01T00:00:00Z".to_string(),
+            memory_type: "fact".to_string(),
+            status: "active".to_string(),
+            superseded_by: None,
         };
 
         let fused = rrf_fusion(vec![vec![memory]], None).unwrap();

@@ -38,8 +38,15 @@ fn test_batch_ingest_mixed_outcomes() {
     // Use the same mock embedding function that add_with_conflict uses
     // so exact duplicates produce identical embeddings (deterministic)
     let embedding = super::crud::mock_embedding_for_content("Alice works at Microsoft");
-    db.insert("test-project", "Alice works at Microsoft", &embedding, None)
-        .unwrap();
+    db.insert(
+        "test-project",
+        "Alice works at Microsoft",
+        &embedding,
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
 
     let mut store = MemoryStore::from_db(db, config);
 
@@ -120,8 +127,15 @@ fn test_batch_ingest_deterministic_index_mapping() {
     // Use the same mock embedding function that add_with_conflict uses
     // so exact duplicates produce identical embeddings (deterministic)
     let embedding = super::crud::mock_embedding_for_content("conflict with item 1");
-    db.insert("test-project", "conflict with item 1", &embedding, None)
-        .unwrap();
+    db.insert(
+        "test-project",
+        "conflict with item 1",
+        &embedding,
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
 
     let mut store = MemoryStore::from_db(db, config);
 
@@ -180,8 +194,15 @@ fn test_batch_ingest_policy_force() {
     // Pre-populate with conflicting content
     // Use the same mock embedding function for consistency
     let embedding = super::crud::mock_embedding_for_content("Alice works at Microsoft");
-    db.insert("test-project", "Alice works at Microsoft", &embedding, None)
-        .unwrap();
+    db.insert(
+        "test-project",
+        "Alice works at Microsoft",
+        &embedding,
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
 
     let mut store = MemoryStore::from_db(db, config);
 

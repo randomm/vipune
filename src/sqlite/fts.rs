@@ -137,7 +137,7 @@ impl Database {
         }
 
         let sql = r#"
-            SELECT m.id, m.project_id, m.content, m.metadata, m.embedding, m.created_at, m.updated_at,
+            SELECT m.id, m.project_id, m.content, m.metadata, m.embedding, m.created_at, m.updated_at, m.type, m.status, m.superseded_by,
                    bm25(memories_fts) as bm25_score
             FROM memories_fts
             JOIN memories m ON m.rowid = memories_fts.rowid
@@ -166,7 +166,10 @@ impl Database {
                     embedding,
                     created_at: row.get(5)?,
                     updated_at: row.get(6)?,
-                    similarity: Some(row.get::<_, f64>(7)?),
+                    memory_type: row.get(7)?,
+                    status: row.get(8)?,
+                    superseded_by: row.get(9)?,
+                    similarity: Some(row.get::<_, f64>(10)?),
                 })
             })?
             .collect();
@@ -225,9 +228,17 @@ mod tests {
     fn test_fts5_search() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        db.insert("proj1", "rust programming", &embedding, None)
+        db.insert(
+            "proj1",
+            "rust programming",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+        db.insert("proj1", "python data", &embedding, None, "fact", "active")
             .unwrap();
-        db.insert("proj1", "python data", &embedding, None).unwrap();
 
         let results = db.search_bm25("rust", "proj1", 10).unwrap();
         assert_eq!(results.len(), 1);
@@ -239,7 +250,7 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         let id = db
-            .insert("proj1", "original text", &embedding, None)
+            .insert("proj1", "original text", &embedding, None, "fact", "active")
             .unwrap();
 
         assert_eq!(db.search_bm25("original", "proj1", 10).unwrap().len(), 1);
@@ -263,12 +274,33 @@ mod tests {
     fn test_fts5_special_characters() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        db.insert("proj1", "test with \"quotes\"", &embedding, None)
-            .unwrap();
-        db.insert("proj1", "test with 'apos'", &embedding, None)
-            .unwrap();
-        db.insert("proj1", "test with\\slash", &embedding, None)
-            .unwrap();
+        db.insert(
+            "proj1",
+            "test with \"quotes\"",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+        db.insert(
+            "proj1",
+            "test with 'apos'",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+        db.insert(
+            "proj1",
+            "test with\\slash",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
 
         assert_eq!(
             db.search_bm25("test with \"quotes\"", "proj1", 10)
@@ -290,7 +322,7 @@ mod tests {
     fn test_fts5_empty_query() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        db.insert("proj1", "test content", &embedding, None)
+        db.insert("proj1", "test content", &embedding, None, "fact", "active")
             .unwrap();
 
         // Empty query returns no results
@@ -302,10 +334,24 @@ mod tests {
     fn test_fts5_phrase_search() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        db.insert("proj1", "rust programming", &embedding, None)
-            .unwrap();
-        db.insert("proj1", "rust error handling", &embedding, None)
-            .unwrap();
+        db.insert(
+            "proj1",
+            "rust programming",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+        db.insert(
+            "proj1",
+            "rust error handling",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
 
         // Multi-word phrase should find matching content
         let results = db.search_bm25("rust programming", "proj1", 10).unwrap();
@@ -317,8 +363,15 @@ mod tests {
     fn test_fts5_unicode_text() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        db.insert("proj1", "café résumé 日本語", &embedding, None)
-            .unwrap();
+        db.insert(
+            "proj1",
+            "café résumé 日本語",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
 
         // Test basic Unicode matching
         let results = db.search_bm25("café", "proj1", 10).unwrap();
@@ -334,8 +387,15 @@ mod tests {
 
         {
             let db = Database::open(&path).unwrap();
-            db.insert("proj1", "before migration", &vec![0.1f32; 384], None)
-                .unwrap();
+            db.insert(
+                "proj1",
+                "before migration",
+                &vec![0.1f32; 384],
+                None,
+                "fact",
+                "active",
+            )
+            .unwrap();
         }
 
         {
@@ -354,11 +414,18 @@ mod tests {
         // Initial data with 3 rows
         {
             let db = Database::open(&path).unwrap();
-            db.insert("proj1", "first", &vec![0.1f32; 384], None)
+            db.insert("proj1", "first", &vec![0.1f32; 384], None, "fact", "active")
                 .unwrap();
-            db.insert("proj1", "second", &vec![0.1f32; 384], None)
-                .unwrap();
-            db.insert("proj1", "third", &vec![0.1f32; 384], None)
+            db.insert(
+                "proj1",
+                "second",
+                &vec![0.1f32; 384],
+                None,
+                "fact",
+                "active",
+            )
+            .unwrap();
+            db.insert("proj1", "third", &vec![0.1f32; 384], None, "fact", "active")
                 .unwrap();
         }
 

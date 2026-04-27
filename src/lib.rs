@@ -20,7 +20,7 @@
 //! let project_id = detect_project(None);
 //!
 //! // Add a memory with conflict detection
-//! let result = store.add_with_conflict(&project_id, "Alice works at Microsoft", None, false);
+//! let result = store.add_with_conflict(&project_id, "Alice works at Microsoft", None, false, "fact", "active");
 //! match result {
 //!     Ok(vipune::AddResult::Added { id }) => println!("Added memory: {}", id),
 //!     Ok(vipune::AddResult::Conflicts { .. }) => println!("Conflict detected"),
@@ -28,7 +28,7 @@
 //! }
 //!
 //! // Search memories
-//! let results = store.search(&project_id, "where does alice work", 10, 0.0);
+//! let results = store.search(&project_id, "where does alice work", 10, 0.0, None, None);
 //! for memory in results.unwrap() {
 //!     println!("{:.2}: {}", memory.similarity.unwrap_or(0.0), memory.content);
 //! }
@@ -57,6 +57,7 @@ pub use config::Config;
 pub use embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine};
 pub use errors::Error;
 pub use memory::MemoryStore;
+pub use memory::lifecycle::{MemoryStatus, MemoryType};
 pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
 pub use memory_types::{
     AddResult, BatchIngestItemResult, BatchIngestResult, ConflictMemory, IngestPolicy,
