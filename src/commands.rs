@@ -65,8 +65,14 @@ pub enum Commands {
     Update {
         /// Memory ID
         id: String,
-        /// New content
-        text: String,
+
+        /// New content (optional)
+        #[arg(short = 't', long)]
+        text: Option<String>,
+
+        /// Optional JSON metadata (replaces existing metadata)
+        #[arg(short = 'm', long)]
+        metadata: Option<String>,
     },
     Version,
 
@@ -110,7 +116,9 @@ pub fn execute(
         Commands::Get { id } => handle_get(store, id, json),
         Commands::List { limit } => handle_list(store, &project_id, *limit, json),
         Commands::Delete { id } => handle_delete(store, id, json),
-        Commands::Update { id, text } => handle_update(store, id, text, json),
+        Commands::Update { id, text, metadata } => {
+            handle_update(store, id, text.as_deref(), metadata.as_deref(), json)
+        }
         Commands::Version => handle_version(json),
         #[cfg(feature = "mcp")]
         Commands::Mcp => unreachable!("Mcp is handled before execute"),
@@ -314,10 +322,28 @@ fn handle_delete(store: &mut MemoryStore, id: &str, json: bool) -> Result<ExitCo
 fn handle_update(
     store: &mut MemoryStore,
     id: &str,
-    text: &str,
+    text: Option<&str>,
+    metadata: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    store.update(id, text)?;
+    if text.is_none() && metadata.is_none() {
+        return Err(Error::InvalidInput(
+            "At least one of text or metadata must be provided".to_string(),
+        ));
+    }
+
+    // Validate metadata: reject empty strings and invalid JSON
+    if let Some(meta) = metadata {
+        if meta.trim().is_empty() {
+            return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
+        }
+        // Validate that metadata is valid JSON
+        serde_json::from_str::<serde_json::Value>(meta).map_err(|e| {
+            Error::InvalidInput(format!("invalid metadata JSON: {}", e))
+        })?;
+    }
+
+    store.update(id, text, metadata)?;
     if json {
         print_json(&UpdateResponse {
             status: "updated".to_string(),

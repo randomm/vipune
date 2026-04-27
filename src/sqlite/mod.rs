@@ -271,25 +271,83 @@ impl Database {
         Ok(memories?)
     }
 
-    /// Update a memory's content and embedding.
+    /// Update a memory's content and/or metadata.
+    ///
+    /// - If content is provided: updates content and embedding
+    /// - If metadata is provided: updates metadata (full replacement, not merge)
+    /// - If both provided: updates both
     ///
     /// Returns an error if the memory does not exist.
     ///
     /// # Errors
     ///
-    /// Returns error if the embedding has invalid dimensions, memory not found, or query fails.
-    pub fn update(&self, id: &str, content: &str, embedding: &[f32]) -> Result<()> {
+    /// Returns error if:
+    /// - Embedding has invalid dimensions (when content is provided)
+    /// - Memory not found
+    /// - Query fails
+    pub fn update(
+        &self,
+        id: &str,
+        content: Option<&str>,
+        embedding: Option<&[f32]>,
+        metadata: Option<&str>,
+    ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let blob = vec_to_blob(embedding)?;
 
-        let rows = self.conn.execute(
-            r#"
-            UPDATE memories
-            SET content = ?1, embedding = ?2, updated_at = ?3
-            WHERE id = ?4
-            "#,
-            params![content, &blob, &now, id],
-        )?;
+        // Build dynamic UPDATE query based on what's being updated
+        let rows = match (content, embedding, metadata) {
+            // Content update (requires embedding) - DOES NOT TOUCH METADATA
+            (Some(text), Some(emb), None) => {
+                let blob = vec_to_blob(emb)?;
+                self.conn.execute(
+                    r#"
+                    UPDATE memories
+                    SET content = ?1, embedding = ?2, updated_at = ?3
+                    WHERE id = ?4
+                    "#,
+                    params![text, &blob, &now, id],
+                )?
+            }
+            // Metadata-only update
+            (None, None, Some(meta)) => self.conn.execute(
+                r#"
+                UPDATE memories
+                SET metadata = ?1, updated_at = ?2
+                WHERE id = ?3
+                "#,
+                params![meta, &now, id],
+            )?,
+            // Both content and metadata update
+            (Some(text), Some(emb), Some(meta)) => {
+                let blob = vec_to_blob(emb)?;
+                self.conn.execute(
+                    r#"
+                    UPDATE memories
+                    SET content = ?1, embedding = ?2, metadata = ?3, updated_at = ?4
+                    WHERE id = ?5
+                    "#,
+                    params![text, &blob, meta, &now, id],
+                )?
+            }
+            // Invalid state: content without embedding (should never happen)
+            (Some(_), None, _) => {
+                return Err(Error::Sqlite(
+                    "Content update requires embedding".to_string(),
+                ));
+            }
+            // Invalid state: embedding without content (should never happen)
+            (None, Some(_), _) => {
+                return Err(Error::Sqlite(
+                    "Embedding requires content update".to_string(),
+                ));
+            }
+            // Invalid state: both content and metadata are None
+            (None, None, None) => {
+                return Err(Error::Sqlite(
+                    "At least one of content or metadata must be provided".to_string(),
+                ));
+            }
+        };
 
         if rows == 0 {
             return Err(Error::Sqlite("No memory found".to_string()));
@@ -575,17 +633,81 @@ mod tests {
         let embedding = vec![0.1f32; 384];
         let id = db.insert("proj1", "original", &embedding, None).unwrap();
 
-        db.update(&id, "updated", &embedding).unwrap();
+        db.update(&id, Some("updated"), Some(&embedding), None)
+            .unwrap();
 
         let m = db.get(&id).unwrap().unwrap();
         assert_eq!(m.content, "updated");
     }
 
     #[test]
+    fn test_update_text_only_preserves_metadata() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert("proj1", "original", &embedding, Some(r#"{"tag": "old"}"#))
+            .unwrap();
+
+        let new_embedding = vec![0.2f32; 384];
+        db.update(&id, Some("updated"), Some(&new_embedding), None)
+            .unwrap();
+
+        let m = db.get(&id).unwrap().unwrap();
+        assert_eq!(m.content, "updated");
+        assert_eq!(m.metadata, Some(r#"{"tag": "old"}"#.to_string()));
+    }
+
+    #[test]
+    fn test_update_metadata_only() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db.insert("proj1", "original", &embedding, None).unwrap();
+
+        db.update(&id, None, None, Some(r#"{"tag": "new"}"#))
+            .unwrap();
+
+        let m = db.get(&id).unwrap().unwrap();
+        assert_eq!(m.content, "original"); // Content unchanged
+        assert_eq!(m.metadata, Some(r#"{"tag": "new"}"#.to_string()));
+    }
+
+    #[test]
+    fn test_update_both_text_and_metadata() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert("proj1", "original", &embedding, Some(r#"{"tag": "old"}"#))
+            .unwrap();
+
+        let new_embedding = vec![0.2f32; 384];
+        db.update(
+            &id,
+            Some("updated"),
+            Some(&new_embedding),
+            Some(r#"{"tag": "new"}"#),
+        )
+        .unwrap();
+
+        let m = db.get(&id).unwrap().unwrap();
+        assert_eq!(m.content, "updated");
+        assert_eq!(m.metadata, Some(r#"{"tag": "new"}"#.to_string()));
+    }
+
+    #[test]
+    fn test_update_with_none_both() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db.insert("proj1", "original", &embedding, None).unwrap();
+
+        let result = db.update(&id, None, None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_update_nonexistent() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        let result = db.update("nonexistent", "content", &embedding);
+        let result = db.update("nonexistent", Some("content"), Some(&embedding), None);
         assert!(result.is_err());
     }
 

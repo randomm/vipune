@@ -191,23 +191,59 @@ impl MemoryStore {
     }
 
     #[must_use = "handle the error or results may be lost"]
-    /// Update a memory's content.
+    /// Update a memory's content and/or metadata.
     ///
-    /// Generates a new embedding for the updated content and persists it.
-    /// The memory ID, project ID, and creation timestamp remain unchanged.
+    /// - If content is provided: generates a new embedding and updates content
+    /// - If metadata is provided: updates metadata (full replacement, not merge)
+    /// - If both provided: updates both content (with new embedding) and metadata
+    /// - The memory ID, project ID, and creation timestamp remain unchanged.
     ///
     /// # Arguments
     ///
     /// * `id` - Memory ID to update
-    /// * `content` - New content for the memory
+    /// * `content` - Optional new content for the memory
+    /// * `metadata` - Optional JSON metadata string (replaces existing metadata)
     ///
     /// # Errors
     ///
-    /// Returns error if the memory doesn't exist.
-    pub fn update(&mut self, id: &str, content: &str) -> Result<(), Error> {
-        Self::validate_input_length(content)?;
-        let embedding = self.embedder()?.embed(content)?;
-        Ok(self.db.update(id, content, &embedding)?)
+    /// Returns error if:
+    /// - Both content and metadata are None
+    /// - Content is provided and exceeds 100,000 characters
+    /// - Memory doesn't exist
+    pub fn update(
+        &mut self,
+        id: &str,
+        content: Option<&str>,
+        metadata: Option<&str>,
+    ) -> Result<(), Error> {
+        if content.is_none() && metadata.is_none() {
+            return Err(Error::InvalidInput(
+                "At least one of content or metadata must be provided".to_string(),
+            ));
+        }
+
+        // Validate metadata: reject empty strings and invalid JSON
+        if let Some(meta) = metadata {
+            if meta.trim().is_empty() {
+                return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
+            }
+            // Validate that metadata is valid JSON
+            serde_json::from_str::<serde_json::Value>(meta).map_err(|e| {
+                Error::InvalidInput(format!("invalid metadata JSON: {}", e))
+            })?;
+        }
+
+        // If content is provided, validate and generate new embedding
+        let embedding = if let Some(text) = content {
+            Self::validate_input_length(text)?;
+            Some(self.embedder()?.embed(text)?)
+        } else {
+            None
+        };
+
+        Ok(self
+            .db
+            .update(id, content, embedding.as_deref(), metadata)?)
     }
 
     #[must_use = "handle the error or results may be lost"]

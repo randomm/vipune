@@ -985,3 +985,245 @@ fn test_ingest_with_metadata_succeeds() {
 
     std::fs::remove_file(db_path).ok();
 }
+
+/// Test that updating text-only preserves existing metadata.
+#[test]
+fn test_update_text_only_preserves_metadata() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store =
+        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+            .expect("Failed to create store");
+
+    let project_id = "test-project";
+
+    // Add memory with metadata
+    let id = match store
+        .add_with_conflict(
+            project_id,
+            "original content",
+            Some(r#"{"tag": "important"}"#),
+            true,
+        )
+        .expect("Failed to add")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Update only text
+    store
+        .update(&id, Some("updated content"), None)
+        .expect("Failed to update");
+
+    // Verify content updated but metadata preserved
+    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    assert_eq!(memory.content, "updated content");
+    assert_eq!(
+        memory.metadata.as_ref().unwrap(),
+        r#"{"tag": "important"}"#
+    );
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that invalid JSON metadata is rejected during update.
+#[test]
+fn test_update_with_invalid_json_metadata_returns_error() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store =
+        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+            .expect("Failed to create store");
+
+    let project_id = "test-project";
+
+    // Add memory
+    let id = match store
+        .add_with_conflict(project_id, "original content", None, true)
+        .expect("Failed to add")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Try to update with invalid JSON - should fail
+    let result = store.update(&id, None, Some(r#"{this is not valid json"#));
+    assert!(result.is_err());
+    match result {
+        Err(Error::InvalidInput(msg)) => {
+            assert!(msg.contains("invalid metadata JSON"));
+        }
+        _ => panic!("Expected InvalidInput error for invalid JSON"),
+    }
+
+    // Verify memory was not changed
+    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    assert_eq!(memory.content, "original content");
+    assert!(memory.metadata.is_none());
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that empty string metadata is rejected.
+#[test]
+fn test_update_with_empty_metadata_returns_error() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store =
+        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+            .expect("Failed to create store");
+
+    let project_id = "test-project";
+
+    // Add memory
+    let id = match store
+        .add_with_conflict(project_id, "original content", None, true)
+        .expect("Failed to add")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Try to update with empty metadata - should fail
+    let result = store.update(&id, None, Some(""));
+    assert!(result.is_err());
+    match result {
+        Err(Error::InvalidInput(msg)) => {
+            assert!(msg.contains("metadata cannot be empty"));
+        }
+        _ => panic!("Expected InvalidInput error for empty metadata"),
+    }
+
+    // Verify memory was not changed
+    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    assert_eq!(memory.content, "original content");
+    assert!(memory.metadata.is_none());
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that whitespace-only metadata is rejected.
+#[test]
+fn test_update_with_whitespace_only_metadata_returns_error() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store =
+        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+            .expect("Failed to create store");
+
+    let project_id = "test-project";
+
+    // Add memory
+    let id = match store
+        .add_with_conflict(project_id, "original content", None, true)
+        .expect("Failed to add")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Try to update with whitespace-only metadata - should fail
+    let result = store.update(&id, None, Some("   "));
+    assert!(result.is_err());
+    match result {
+        Err(Error::InvalidInput(msg)) => {
+            assert!(msg.contains("metadata cannot be empty"));
+        }
+        _ => panic!("Expected InvalidInput error for whitespace-only metadata"),
+    }
+
+    // Verify memory was not changed
+    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    assert_eq!(memory.content, "original content");
+    assert!(memory.metadata.is_none());
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that metadata-only update works correctly.
+#[test]
+fn test_update_metadata_only() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store =
+        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+            .expect("Failed to create store");
+
+    let project_id = "test-project";
+
+    // Add memory without metadata
+    let id = match store
+        .add_with_conflict(project_id, "original content", None, true)
+        .expect("Failed to add")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Update metadata only
+    store
+        .update(&id, None, Some(r#"{"tag": "new"}"#))
+        .expect("Failed to update");
+
+    // Verify metadata added but content unchanged
+    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    assert_eq!(memory.content, "original content");
+    assert_eq!(memory.metadata.as_ref().unwrap(), r#"{"tag": "new"}"#);
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that updating both text and metadata works.
+#[test]
+fn test_update_both_text_and_metadata() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store =
+        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+            .expect("Failed to create store");
+
+    let project_id = "test-project";
+
+    // Add memory with old metadata
+    let id = match store
+        .add_with_conflict(
+            project_id,
+            "old content",
+            Some(r#"{"old": "value"}"#),
+            true,
+        )
+        .expect("Failed to add")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Update both text and metadata
+    store
+        .update(
+            &id,
+            Some("new content"),
+            Some(r#"{"new": "value"}"#),
+        )
+        .expect("Failed to update");
+
+    // Verify both updated
+    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    assert_eq!(memory.content, "new content");
+    assert_eq!(memory.metadata.as_ref().unwrap(), r#"{"new": "value"}"#);
+
+    std::fs::remove_file(db_path).ok();
+}
