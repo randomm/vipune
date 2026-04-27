@@ -9,6 +9,7 @@
 
 pub mod embedding;
 pub mod fts;
+pub mod migrations;
 pub mod query_mod;
 pub mod search;
 
@@ -154,14 +155,22 @@ CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN
 impl Database {
     /// Open or create a SQLite database at the given path.
     ///
-    /// Initializes the schema if the database is new.
+    /// Initializes the schema if the database is new, then runs any pending migrations.
+    ///
+    /// **Schema creation vs. migrations**:
+    /// - Schema creation handles the initial table setup (CREATE TABLE IF NOT EXISTS).
+    /// - Migrations handle incremental changes from version to version.
+    /// - For fresh DBs, both run: `create_schema` sets up tables, migration 1 is a no-op baseline.
+    /// - For existing DBs: `create_schema` is a no-op (IF NOT EXISTS), migrations apply incrementally.
     ///
     /// # Errors
     ///
-    /// Returns error if the database cannot be opened or schema initialization fails.
+    /// Returns error if the database cannot be opened, schema initialization fails,
+    /// or migration fails.
     pub fn open(path: &Path) -> Result<Self> {
         let mut conn = Connection::open(path)?;
         create_schema(&mut conn)?;
+        migrations::run_migrations(&conn)?;
         Ok(Self { conn })
     }
 
