@@ -73,9 +73,11 @@ impl StoreWrapper {
         project_id: &str,
         query: &str,
         limit: usize,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
     ) -> Result<serde_json::Value, Error> {
         let mut store = self.0.lock().unwrap();
-        let memories = store.search(project_id, query, limit, 0.0)?;
+        let memories = store.search(project_id, query, limit, 0.0, memory_types, statuses)?;
 
         let results: Vec<serde_json::Value> = memories
             .into_iter()
@@ -105,9 +107,15 @@ impl StoreWrapper {
     }
 
     /// List recent memories.
-    pub(crate) fn list(&self, project_id: &str, limit: usize) -> Result<serde_json::Value, Error> {
+    pub(crate) fn list(
+        &self,
+        project_id: &str,
+        limit: usize,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
+    ) -> Result<serde_json::Value, Error> {
         let store = self.0.lock().unwrap();
-        let memories = store.list(project_id, limit)?;
+        let memories = store.list(project_id, limit, memory_types, statuses)?;
 
         let results: Vec<serde_json::Value> = memories
             .into_iter()
@@ -301,9 +309,28 @@ impl ToolHandler {
             ));
         }
 
+        // Convert filter params
+        let type_strs: Option<Vec<&str>> = params
+            .memory_types
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect());
+        let type_slice: Option<&[&str]> = type_strs.as_deref();
+
+        let status_strs: Option<Vec<&str>> = params
+            .statuses
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect());
+        let status_slice: Option<&[&str]> = status_strs.as_deref();
+
         let value = self
             .store
-            .search(&self.project_id, &params.query, limit)
+            .search(
+                &self.project_id,
+                &params.query,
+                limit,
+                type_slice,
+                status_slice,
+            )
             .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?;
 
         Ok(CallToolResult::success(vec![Content::text(
@@ -335,9 +362,22 @@ impl ToolHandler {
             ));
         }
 
+        // Convert filter params
+        let type_strs: Option<Vec<&str>> = params
+            .memory_types
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect());
+        let type_slice: Option<&[&str]> = type_strs.as_deref();
+
+        let status_strs: Option<Vec<&str>> = params
+            .statuses
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect());
+        let status_slice: Option<&[&str]> = status_strs.as_deref();
+
         let value = self
             .store
-            .list(&self.project_id, limit)
+            .list(&self.project_id, limit, type_slice, status_slice)
             .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?;
 
         Ok(CallToolResult::success(vec![Content::text(

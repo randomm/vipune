@@ -47,28 +47,42 @@ mod tool_handler_tests {
         let params = SearchMemoriesParams {
             query: "test query".to_string(),
             limit: Some(10),
+            memory_types: None,
+            statuses: None,
         };
 
         let json = serde_json::to_string(&params).unwrap();
         let decoded: SearchMemoriesParams = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.query, "test query");
         assert_eq!(decoded.limit, Some(10));
+        assert!(decoded.memory_types.is_none());
+        assert!(decoded.statuses.is_none());
     }
 
     /// Test list parameters serde.
     #[test]
     fn test_list_params_serde() {
-        let params = ListMemoriesParams { limit: Some(5) };
+        let params = ListMemoriesParams {
+            limit: Some(5),
+            memory_types: None,
+            statuses: None,
+        };
 
         let json = serde_json::to_string(&params).unwrap();
         let decoded: ListMemoriesParams = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.limit, Some(5));
+        assert!(decoded.memory_types.is_none());
+        assert!(decoded.statuses.is_none());
     }
 
     /// Test list parameters with no limit (default behavior).
     #[test]
     fn test_list_params_default_limit() {
-        let params = ListMemoriesParams { limit: None };
+        let params = ListMemoriesParams {
+            limit: None,
+            memory_types: None,
+            statuses: None,
+        };
         let json = serde_json::to_string(&params).unwrap();
         let decoded: ListMemoriesParams = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.limit, None);
@@ -119,14 +133,14 @@ mod tool_handler_tests {
         assert!(json_str.contains("added"));
 
         // Search for it
-        let search_result = wrapper.search(project_id, "rust programming", 5);
+        let search_result = wrapper.search(project_id, "rust programming", 5, None, None);
         assert!(search_result.is_ok());
         let search_value = search_result.unwrap();
         let search_str = serde_json::to_string(&search_value).unwrap();
         assert!(search_str.contains("rust is awesome"));
 
         // List it
-        let list_result = wrapper.list(project_id, 10);
+        let list_result = wrapper.list(project_id, 10, None, None);
         assert!(list_result.is_ok());
         let list_value = list_result.unwrap();
         let list_str = serde_json::to_string(&list_value).unwrap();
@@ -148,7 +162,7 @@ mod tool_handler_tests {
         assert!(result.is_ok());
 
         // Search for it
-        let search_result = wrapper.search(project_id, "rust", 5);
+        let search_result = wrapper.search(project_id, "rust", 5, None, None);
         assert!(search_result.is_ok());
         let search_value = search_result.unwrap();
 
@@ -202,7 +216,7 @@ mod tool_handler_tests {
         assert!(result.is_ok());
 
         // Search for it
-        let search_result = wrapper.search(project_id, "simple", 5);
+        let search_result = wrapper.search(project_id, "simple", 5, None, None);
         assert!(search_result.is_ok());
         let search_value = search_result.unwrap();
 

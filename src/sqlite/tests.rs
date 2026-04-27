@@ -25,6 +25,8 @@ mod tests {
                 None,
                 "2024-01-01T00:00:00Z",
                 "2024-01-01T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
         let _id2 = db
@@ -35,11 +37,13 @@ mod tests {
                 None,
                 "2024-01-02T00:00:00Z",
                 "2024-01-02T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
 
         // List since 2024-01-01T12:00:00Z should only return "new"
-        let results = db.list_since("proj1", "2024-01-01T12:00:00Z", 10).unwrap();
+        let results = db.list_since("proj1", "2024-01-01T12:00:00Z", 10, None, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content, "new");
     }
@@ -57,15 +61,17 @@ mod tests {
                 None,
                 "2024-01-01T00:00:00Z",
                 "2024-01-01T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
 
         // List since exact timestamp should NOT return the memory (exclusive)
-        let results = db.list_since("proj1", "2024-01-01T00:00:00Z", 10).unwrap();
+        let results = db.list_since("proj1", "2024-01-01T00:00:00Z", 10, None, None).unwrap();
         assert_eq!(results.len(), 0);
 
         // But list since 1ms before SHOULD return it
-        let results = db.list_since("proj1", "2023-12-31T23:59:59Z", 10).unwrap();
+        let results = db.list_since("proj1", "2023-12-31T23:59:59Z", 10, None, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, id);
     }
@@ -73,7 +79,7 @@ mod tests {
     #[test]
     fn test_list_since_invalid_timestamp() {
         let db = create_test_db();
-        let result = db.list_since("proj1", "invalid-timestamp", 10);
+        let result = db.list_since("proj1", "invalid-timestamp", 10, None, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid RFC3339"));
     }
@@ -91,12 +97,14 @@ mod tests {
                 None,
                 &format!("2024-01-{:02}T00:00:00Z", i + 1),
                 &format!("2024-01-{:02}T00:00:00Z", i + 1),
+                "fact",
+                "active",
             )
             .unwrap();
         }
 
         // Should only return 2 most recent
-        let results = db.list_since("proj1", "2024-01-01T00:00:00Z", 2).unwrap();
+        let results = db.list_since("proj1", "2024-01-01T00:00:00Z", 2, None, None).unwrap();
         assert_eq!(results.len(), 2);
     }
 
@@ -113,6 +121,8 @@ mod tests {
                 None,
                 "2024-01-01T00:00:00Z",
                 "2024-01-01T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
         let id2 = db
@@ -123,6 +133,8 @@ mod tests {
                 None,
                 "2024-01-02T00:00:00Z",
                 "2024-01-02T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
         let id3 = db
@@ -133,11 +145,13 @@ mod tests {
                 None,
                 "2024-01-03T00:00:00Z",
                 "2024-01-03T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
 
         // Should return newest first
-        let results = db.list_since("proj1", "2023-12-31T00:00:00Z", 10).unwrap();
+        let results = db.list_since("proj1", "2023-12-31T00:00:00Z", 10, None, None).unwrap();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].id, id3);
         assert_eq!(results[1].id, id2);
@@ -149,8 +163,8 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
 
-        let id1 = db.insert("proj1", "content 1", &embedding, None).unwrap();
-        let id2 = db.insert("proj1", "content 2", &embedding, None).unwrap();
+        let id1 = db.insert("proj1", "content 1", &embedding, None, "fact", "active").unwrap();
+        let id2 = db.insert("proj1", "content 2", &embedding, None, "fact", "active").unwrap();
 
         let results = db.get_many(&[&id1, &id2]).unwrap();
         assert_eq!(results.len(), 2);
@@ -165,9 +179,9 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
 
-        let id1 = db.insert("proj1", "first", &embedding, None).unwrap();
-        let id2 = db.insert("proj1", "second", &embedding, None).unwrap();
-        let id3 = db.insert("proj1", "third", &embedding, None).unwrap();
+        let id1 = db.insert("proj1", "first", &embedding, None, "fact", "active").unwrap();
+        let id2 = db.insert("proj1", "second", &embedding, None, "fact", "active").unwrap();
+        let id3 = db.insert("proj1", "third", &embedding, None, "fact", "active").unwrap();
 
         // Query in reverse order
         let results = db.get_many(&[&id3, &id1, &id2]).unwrap();
@@ -181,8 +195,8 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
 
-        let id1 = db.insert("proj1", "content 1", &embedding, None).unwrap();
-        let id2 = db.insert("proj1", "content 2", &embedding, None).unwrap();
+        let id1 = db.insert("proj1", "content 1", &embedding, None, "fact", "active").unwrap();
+        let id2 = db.insert("proj1", "content 2", &embedding, None, "fact", "active").unwrap();
 
         // Mix of valid and invalid IDs
         let results = db
@@ -219,7 +233,7 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
 
-        let id = db.insert("proj1", "content", &embedding, None).unwrap();
+        let id = db.insert("proj1", "content", &embedding, None, "fact", "active").unwrap();
 
         let results = db.get_many(&[&id]).unwrap();
         assert_eq!(results.len(), 1);
@@ -233,8 +247,8 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
 
-        let id1 = db.insert("proj1", "content 1", &embedding, None).unwrap();
-        let id2 = db.insert("proj1", "content 2", &embedding, None).unwrap();
+        let id1 = db.insert("proj1", "content 1", &embedding, None, "fact", "active").unwrap();
+        let id2 = db.insert("proj1", "content 2", &embedding, None, "fact", "active").unwrap();
 
         // Query with duplicate IDs
         let results = db.get_many(&[&id1, &id2, &id1, &id2]).unwrap();
@@ -262,6 +276,8 @@ mod tests {
                 None,
                 "2024-01-01T00:00:00Z",
                 "2024-01-01T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
         let _id2 = db
@@ -272,13 +288,15 @@ mod tests {
                 None,
                 "2024-01-02T00:00:00Z",
                 "2024-01-02T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
 
         // Query with UTC+01:00 offset works (RFC3339 parsing succeeds)
         // SQLite compares as strings: "2024-01-02T00:00:00Z" > "2024-01-01T11:00:00+01:00"
         let results = db
-            .list_since("proj1", "2024-01-01T11:00:00+01:00", 10)
+            .list_since("proj1", "2024-01-01T11:00:00+01:00", 10, None, None)
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content, "new");
@@ -286,15 +304,15 @@ mod tests {
         // Query with UTC-05:00 offset also works
         // SQLite compares as strings: "2024-01-02T00:00:00Z" > "2024-01-01T19:00:00-05:00"
         let results = db
-            .list_since("proj1", "2024-01-01T19:00:00-05:00", 10)
+            .list_since("proj1", "2024-01-01T19:00:00-05:00", 10, None, None)
             .unwrap();
         // String comparison: "2024-01-02..." is lexicographically greater than "2024-01-01..."
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content, "new");
 
-        // Query after the stored timestamp returns nothing (exclusive bound)
+        // Query after the stored timestamp returns nothing (Exclusive bound)
         // SQLite string comparison: "2024-01-02T00:00:00Z" is NOT > "2024-01-02T00:00:00Z"
-        let results = db.list_since("proj1", "2024-01-02T00:00:00Z", 10).unwrap();
+        let results = db.list_since("proj1", "2024-01-02T00:00:00Z", 10, None, None).unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -312,13 +330,15 @@ mod tests {
                 None,
                 "2024-01-01T00:00:00Z",
                 "2024-01-01T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
 
         // Query with and without fractional seconds - should behave identically
-        let results1 = db.list_since("proj1", "2023-12-31T23:59:59Z", 10).unwrap();
+        let results1 = db.list_since("proj1", "2023-12-31T23:59:59Z", 10, None, None).unwrap();
         let results2 = db
-            .list_since("proj1", "2023-12-31T23:59:59.000Z", 10)
+            .list_since("proj1", "2023-12-31T23:59:59.000Z", 10, None, None)
             .unwrap();
 
         assert_eq!(results1.len(), results2.len());
@@ -328,7 +348,7 @@ mod tests {
 
         // Precision equivalence with milliseconds
         let results3 = db
-            .list_since("proj1", "2023-12-31T23:59:59.999Z", 10)
+            .list_since("proj1", "2023-12-31T23:59:59.999Z", 10, None, None)
             .unwrap();
         // Should include the memory since it's before the timestamp
         assert_eq!(results3.len(), 1);
@@ -341,29 +361,29 @@ mod tests {
         let embedding = vec![0.1f32; 384];
 
         // Insert multiple memories
-        let id1 = db.insert("proj1", "first", &embedding, None).unwrap();
-        let id2 = db.insert("proj1", "second", &embedding, None).unwrap();
-        let id3 = db.insert("proj1", "third", &embedding, None).unwrap();
+        let id1 = db.insert("proj1", "first", &embedding, None, "fact", "active").unwrap();
+        let id2 = db.insert("proj1", "second", &embedding, None, "fact", "active").unwrap();
+        let id3 = db.insert("proj1", "third", &embedding, None, "fact", "active").unwrap();
 
         // Test ordering (newest first)
-        let results = db.list("proj1", 10).unwrap();
+        let results = db.list("proj1", 10, None, None).unwrap();
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].id, id3);
         assert_eq!(results[1].id, id2);
         assert_eq!(results[2].id, id1);
 
         // Test limit
-        let results = db.list("proj1", 2).unwrap();
+        let results = db.list("proj1", 2, None, None).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].id, id3);
 
         // Test project isolation
-        db.insert("proj2", "other", &embedding, None).unwrap();
-        let proj1_results = db.list("proj1", 10).unwrap();
+        db.insert("proj2", "other", &embedding, None, "fact", "active").unwrap();
+        let proj1_results = db.list("proj1", 10, None, None).unwrap();
         assert_eq!(proj1_results.len(), 3);
 
         // Test empty project
-        let empty_results = db.list("nonexistent", 10).unwrap();
+        let empty_results = db.list("nonexistent", 10, None, None).unwrap();
         assert_eq!(empty_results.len(), 0);
     }
 
@@ -372,7 +392,7 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         let id = db
-            .insert("proj1", "test content", &embedding, None)
+            .insert("proj1", "test content", &embedding, None, "fact", "active")
             .unwrap();
 
         let memory = db.get(&id).unwrap();
@@ -392,6 +412,8 @@ mod tests {
                 "test content",
                 &embedding,
                 Some(r#"{"key": "value"}"#),
+                "fact",
+                "active",
             )
             .unwrap();
 
@@ -403,7 +425,7 @@ mod tests {
     fn test_insert_invalid_embedding() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 256];
-        let result = db.insert("proj1", "test", &embedding, None);
+        let result = db.insert("proj1", "test", &embedding, None, "fact", "active");
         assert!(result.is_err());
     }
 
@@ -426,6 +448,8 @@ mod tests {
                 None,
                 "2024-01-01T00:00:00Z",
                 "2024-01-01T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
         let id2 = db
@@ -436,10 +460,12 @@ mod tests {
                 None,
                 "2024-01-02T00:00:00Z",
                 "2024-01-02T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
 
-        let memories = db.list("proj1", 10).unwrap();
+        let memories = db.list("proj1", 10, None, None).unwrap();
         assert_eq!(memories.len(), 2);
         assert_eq!(memories[0].id, id2); // Newest first
         assert_eq!(memories[1].id, id1);
@@ -450,11 +476,11 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         for i in 0..5 {
-            db.insert("proj1", &format!("content {}", i), &embedding, None)
+            db.insert("proj1", &format!("content {}", i), &embedding, None, "fact", "active")
                 .unwrap();
         }
 
-        let memories = db.list("proj1", 2).unwrap();
+        let memories = db.list("proj1", 2, None, None).unwrap();
         assert_eq!(memories.len(), 2);
     }
 
@@ -462,7 +488,7 @@ mod tests {
     fn test_update() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        let id = db.insert("proj1", "original", &embedding, None).unwrap();
+        let id = db.insert("proj1", "original", &embedding, None, "fact", "active").unwrap();
 
         db.update(&id, Some("updated"), Some(&embedding), None).unwrap();
 
@@ -482,7 +508,7 @@ mod tests {
     fn test_delete() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        let id = db.insert("proj1", "content", &embedding, None).unwrap();
+        let id = db.insert("proj1", "content", &embedding, None, "fact", "active").unwrap();
 
         let deleted = db.delete(&id).unwrap();
         assert!(deleted);
@@ -502,13 +528,13 @@ mod tests {
     fn test_project_isolation() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        db.insert("proj1", "proj1 content", &embedding, None)
+        db.insert("proj1", "proj1 content", &embedding, None, "fact", "active")
             .unwrap();
-        db.insert("proj2", "proj2 content", &embedding, None)
+        db.insert("proj2", "proj2 content", &embedding, None, "fact", "active")
             .unwrap();
 
-        let list1 = db.list("proj1", 10).unwrap();
-        let list2 = db.list("proj2", 10).unwrap();
+        let list1 = db.list("proj1", 10, None, None).unwrap();
+        let list2 = db.list("proj2", 10, None, None).unwrap();
 
         assert_eq!(list1.len(), 1);
         assert_eq!(list2.len(), 1);
@@ -521,7 +547,7 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; EMBEDDING_DIMS];
         let id = db
-            .insert("proj1", "test content", &embedding, None)
+            .insert("proj1", "test content", &embedding, None, "fact", "active")
             .unwrap();
 
         let memory = db.get(&id).unwrap().unwrap();
@@ -537,10 +563,10 @@ mod tests {
         let embedding1 = vec![0.1f32; EMBEDDING_DIMS];
         let embedding2 = vec![0.2f32; EMBEDDING_DIMS];
 
-        db.insert("proj1", "first", &embedding1, None).unwrap();
-        db.insert("proj1", "second", &embedding2, None).unwrap();
+        db.insert("proj1", "first", &embedding1, None, "fact", "active").unwrap();
+        db.insert("proj1", "second", &embedding2, None, "fact", "active").unwrap();
 
-        let memories = db.list("proj1", 10).unwrap();
+        let memories = db.list("proj1", 10, None, None).unwrap();
         assert_eq!(memories.len(), 2);
 
         for memory in &memories {
@@ -557,7 +583,9 @@ mod tests {
         full_embedding[1] = original[1];
         full_embedding[EMBEDDING_DIMS - 1] = original[2];
 
-        let id = db.insert("proj1", "test", &full_embedding, None).unwrap();
+        let id = db
+            .insert("proj1", "test", &full_embedding, None, "fact", "active")
+            .unwrap();
 
         let memory = db.get(&id).unwrap().unwrap();
         assert_eq!(memory.embedding.len(), EMBEDDING_DIMS);

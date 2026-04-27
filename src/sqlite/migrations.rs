@@ -79,9 +79,29 @@ fn migrate_v1(_conn: &Connection) -> SqliteResult<()> {
     Ok(())
 }
 
+/// Migration 2: Add memory type, lifecycle status, and supersession tracking.
+///
+/// Adds three columns to the memories table:
+/// - `type`: Memory type (fact/preference/procedure/guard/observation), defaults to 'fact'
+/// - `status`: Lifecycle status (active/candidate/superseded/deprecated), defaults to 'active'
+/// - `superseded_by`: ID of the memory that superseded this one (nullable)
+///
+/// Also creates indexes for efficient filtering by type and status.
+fn migrate_v2(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        "ALTER TABLE memories ADD COLUMN type TEXT NOT NULL DEFAULT 'fact';
+         ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+         ALTER TABLE memories ADD COLUMN superseded_by TEXT;
+         CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
+         CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
+         CREATE INDEX IF NOT EXISTS idx_memories_project_status ON memories(project_id, status);",
+    )?;
+    Ok(())
+}
+
 /// Returns all migrations in order. Index 0 = migration 1, etc.
 fn migrations() -> Vec<MigrationFn> {
-    vec![migrate_v1]
+    vec![migrate_v1, migrate_v2]
 }
 
 /// Returns the total number of migrations available (i.e., the max supported schema version).
@@ -180,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fresh_db_version_becomes_1() {
+    fn test_fresh_db_version_becomes_2() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
 
@@ -193,37 +213,37 @@ mod tests {
         // Run migrations
         run_migrations(&conn).unwrap();
 
-        // Version should now be 1
+        // Version should now be 2
         let final_version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(final_version, 1);
+        assert_eq!(final_version, 2);
     }
 
     #[test]
-    fn test_already_at_version_1_is_noop() {
+    fn test_already_at_version_2_is_noop() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
 
-        // Run migrations first time: 0 → 1
+        // Run migrations first time: 0 → 2
         run_migrations(&conn).unwrap();
 
         let version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
 
-        // Run again: should be no-op (already at version 1)
+        // Run again: should be no-op (already at version 2)
         run_migrations(&conn).unwrap();
 
         let version_after: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version_after, 1);
+        assert_eq!(version_after, 2);
     }
 
     #[test]
-    fn test_upgrade_from_v0_to_v1() {
+    fn test_upgrade_from_v0_to_v2() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
 
@@ -237,11 +257,11 @@ mod tests {
         // Run migrations
         run_migrations(&conn).unwrap();
 
-        // Should upgrade from 0 to 1
+        // Should upgrade from 0 to 2
         let final_version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(final_version, 1);
+        assert_eq!(final_version, 2);
     }
 
     #[test]
@@ -254,11 +274,11 @@ mod tests {
             run_migrations(&conn).unwrap();
         }
 
-        // Version should be 1 (not incrementing on re-run)
+        // Version should be 2 (not incrementing on re-run)
         let version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 
     #[test]
@@ -297,7 +317,7 @@ mod tests {
         let final_version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(final_version, 1);
+        assert_eq!(final_version, 2);
     }
 
     #[test]

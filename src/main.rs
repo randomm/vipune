@@ -186,16 +186,16 @@ mod tests {
         let cli = Cli::parse_from(["vipune", "update", "memory-id", "--text", "new content"]);
         matches!(
             cli.command,
-            Commands::Update { id, text, metadata }
-            if id == "memory-id" && text == Some("new content".to_string()) && metadata.is_none()
+            Commands::Update { id, text, metadata, memory_type, status }
+            if id == "memory-id" && text == Some("new content".to_string()) && metadata.is_none() && memory_type.is_none() && status.is_none()
         );
 
         // Update with metadata only
         let cli = Cli::parse_from(["vipune", "update", "memory-id", "-m", r#"{"tag": "new"}"#]);
         matches!(
             cli.command,
-            Commands::Update { id, text, metadata }
-            if id == "memory-id" && text.is_none() && metadata == Some(r#"{"tag": "new"}"#.to_string())
+            Commands::Update { id, text, metadata, memory_type, status }
+            if id == "memory-id" && text.is_none() && metadata == Some(r#"{"tag": "new"}"#.to_string()) && memory_type.is_none() && status.is_none()
         );
 
         // Update with both
@@ -210,8 +210,8 @@ mod tests {
         ]);
         matches!(
             cli.command,
-            Commands::Update { id, text, metadata }
-            if id == "memory-id" && text == Some("new".to_string()) && metadata == Some(r#"{"key":"val"}"#.to_string())
+            Commands::Update { id, text, metadata, memory_type, status }
+            if id == "memory-id" && text == Some("new".to_string()) && metadata == Some(r#"{"key":"val"}"#.to_string()) && memory_type.is_none() && status.is_none()
         );
     }
 

@@ -24,6 +24,8 @@ impl MemoryStore {
     /// * `query` - Search query text (1 to 100,000 characters)
     /// * `limit` - Maximum number of results to return
     /// * `recency_weight` - Weight for temporal decay (0.0 = pure semantic, 1.0 = max recency)
+    /// * `memory_types` - Optional filter by memory types
+    /// * `statuses` - Optional filter by memory statuses
     ///
     /// # Returns
     ///
@@ -44,6 +46,8 @@ impl MemoryStore {
         query: &str,
         limit: usize,
         recency_weight: f64,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
     ) -> Result<Vec<Memory>, Error> {
         // Validate limit to prevent resource exhaustion
         validate_limit(limit)?;
@@ -54,7 +58,9 @@ impl MemoryStore {
 
         validate_recency_weight(recency_weight).map_err(Error::Validation)?;
         let embedding = self.embedder()?.embed(query)?;
-        let mut memories = self.db.search(project_id, &embedding, limit)?;
+        let mut memories = self
+            .db
+            .search(project_id, &embedding, limit, memory_types, statuses)?;
 
         if recency_weight > 0.0 {
             let decay_config = DecayConfig::new()?;
@@ -98,6 +104,8 @@ impl MemoryStore {
     /// * `query` - Search query text (1 to 100,000 characters)
     /// * `limit` - Maximum number of results to return
     /// * `recency_weight` - Weight for temporal decay (0.0 = pure score, 1.0 = max recency)
+    /// * `memory_types` - Optional filter by memory types
+    /// * `statuses` - Optional filter by memory statuses
     ///
     /// # Returns
     ///
@@ -118,6 +126,8 @@ impl MemoryStore {
         query: &str,
         limit: usize,
         recency_weight: f64,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
     ) -> Result<Vec<Memory>, Error> {
         // Validate query before processing
         let query = query.trim();
@@ -135,7 +145,13 @@ impl MemoryStore {
         let candidate_pool = limit.saturating_mul(10).clamp(50, MAX_CANDIDATE_POOL);
 
         // 3. Run semantic search
-        let semantic_results = self.db.search(project_id, &embedding, candidate_pool)?;
+        let semantic_results = self.db.search(
+            project_id,
+            &embedding,
+            candidate_pool,
+            memory_types,
+            statuses,
+        )?;
 
         // 4. Run BM25 search
         let bm25_results = self.db.search_bm25(query, project_id, candidate_pool)?;

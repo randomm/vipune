@@ -29,6 +29,14 @@ pub struct SearchMemoriesParams {
     /// Maximum number of results to return.
     #[schemars(description = "Maximum number of results to return (default: 5).")]
     pub limit: Option<usize>,
+
+    /// Filter by memory types.
+    #[schemars(description = "Filter by memory types (e.g., fact, preference, procedure).")]
+    pub memory_types: Option<Vec<String>>,
+
+    /// Filter by statuses.
+    #[schemars(description = "Filter by statuses (e.g., active, candidate).")]
+    pub statuses: Option<Vec<String>>,
 }
 
 /// Parameters for the list_memories tool.
@@ -37,6 +45,14 @@ pub struct ListMemoriesParams {
     /// Maximum number of memories to list.
     #[schemars(description = "Maximum number of memories to list (default: 10).")]
     pub limit: Option<usize>,
+
+    /// Filter by memory types.
+    #[schemars(description = "Filter by memory types (e.g., fact, preference, procedure).")]
+    pub memory_types: Option<Vec<String>>,
+
+    /// Filter by statuses.
+    #[schemars(description = "Filter by statuses (e.g., active, candidate).")]
+    pub statuses: Option<Vec<String>>,
 }
 
 /// Response when a memory is successfully added.

@@ -3,11 +3,13 @@
 //! Provides a high-level API for storing, searching, and retrieving memories
 //! with automatic embedding generation via the ONNX model.
 
-mod crud;
+pub(crate) mod crud;
 mod search;
 
 // pub(crate): module internals hidden; public items re-exported explicitly via lib.rs
 pub(crate) mod store;
+
+pub mod lifecycle;
 
 pub use store::MemoryStore;
 

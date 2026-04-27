@@ -15,12 +15,28 @@ fn test_search_basic() {
     let embedding_other = vec![0.0f32; 384];
 
     let id_match = db
-        .insert("test-project", "matching content", &embedding_match, None)
+        .insert(
+            "test-project",
+            "matching content",
+            &embedding_match,
+            None,
+            "fact",
+            "active",
+        )
         .unwrap();
-    db.insert("test-project", "other content", &embedding_other, None)
-        .unwrap();
+    db.insert(
+        "test-project",
+        "other content",
+        &embedding_other,
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
 
-    let results = db.search("test-project", &embedding_match, 5).unwrap();
+    let results = db
+        .search("test-project", &embedding_match, 5, None, None)
+        .unwrap();
     assert!(!results.is_empty());
     assert_eq!(results[0].id, id_match);
     assert!(results[0].similarity.unwrap() > 0.9);
@@ -38,14 +54,37 @@ fn test_search_sorting() {
     let embedding_medium = vec![0.5f32; 384];
     let embedding_low = vec![0.0f32; 384];
 
-    db.insert("test-project", "low", &embedding_low, None)
-        .unwrap();
-    db.insert("test-project", "high", &embedding_high, None)
-        .unwrap();
-    db.insert("test-project", "medium", &embedding_medium, None)
-        .unwrap();
+    db.insert(
+        "test-project",
+        "low",
+        &embedding_low,
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
+    db.insert(
+        "test-project",
+        "high",
+        &embedding_high,
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
+    db.insert(
+        "test-project",
+        "medium",
+        &embedding_medium,
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
 
-    let results = db.search("test-project", &embedding_high, 10).unwrap();
+    let results = db
+        .search("test-project", &embedding_high, 10, None, None)
+        .unwrap();
     assert!(results[0].similarity.unwrap() >= results[1].similarity.unwrap());
     assert!(results[1].similarity.unwrap() >= results[2].similarity.unwrap());
 }
@@ -61,10 +100,19 @@ fn test_negative_similarity() {
     let embedding_pos = vec![1.0f32; 384];
     let embedding_neg = vec![-1.0f32; 384];
 
-    db.insert("test-project", "positive", &embedding_pos, None)
-        .unwrap();
+    db.insert(
+        "test-project",
+        "positive",
+        &embedding_pos,
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
 
-    let results = db.search("test-project", &embedding_neg, 10).unwrap();
+    let results = db
+        .search("test-project", &embedding_neg, 10, None, None)
+        .unwrap();
     assert!(!results.is_empty());
     assert!(results[0].similarity.unwrap() < 0.0);
 }
@@ -102,6 +150,8 @@ fn test_hybrid_search_basic() {
             "rust programming language",
             &embedding_rust,
             None,
+            "fact",
+            "active",
         )
         .unwrap();
     let _id_python = db
@@ -110,6 +160,8 @@ fn test_hybrid_search_basic() {
             "python code examples",
             &embedding_python,
             None,
+            "fact",
+            "active",
         )
         .unwrap();
     let _id_general = db
@@ -118,11 +170,15 @@ fn test_hybrid_search_basic() {
             "general software development",
             &embedding_general,
             None,
+            "fact",
+            "active",
         )
         .unwrap();
 
     // Test hybrid search combines semantic and BM25
-    let semantic_results = db.search("test-project", &embedding_rust, 50).unwrap();
+    let semantic_results = db
+        .search("test-project", &embedding_rust, 50, None, None)
+        .unwrap();
     let bm25_results = db.search_bm25("rust", "test-project", 50).unwrap();
 
     // Verify semantic search finds rust-related content
@@ -154,11 +210,20 @@ fn test_hybrid_search_empty_results() {
 
     // Add one memory
     let embedding = vec![0.5f32; 384];
-    db.insert("test-project", "some content", &embedding, None)
-        .unwrap();
+    db.insert(
+        "test-project",
+        "some content",
+        &embedding,
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
 
     // Query with non-matching text
-    let semantic_results = db.search("test-project", &vec![0.1f32; 384], 50).unwrap();
+    let semantic_results = db
+        .search("test-project", &vec![0.1f32; 384], 50, None, None)
+        .unwrap();
     let bm25_results = db
         .search_bm25("nonexistent term xyz", "test-project", 50)
         .unwrap();
@@ -195,6 +260,8 @@ fn test_hybrid_search_with_recency() {
             None,
             &old_time,
             &old_time,
+            "fact",
+            "active",
         )
         .unwrap();
 
@@ -207,11 +274,15 @@ fn test_hybrid_search_with_recency() {
             None,
             &new_time,
             &new_time,
+            "fact",
+            "active",
         )
         .unwrap();
 
     // Search without recency weighting - should find high-similarity first
-    let semantic_results = db.search("test-project", &embedding_good, 10).unwrap();
+    let semantic_results = db
+        .search("test-project", &embedding_good, 10, None, None)
+        .unwrap();
     if !semantic_results.is_empty() {
         let top_id = &semantic_results[0].id;
         // With zero recency weight, similarity dominates
@@ -234,7 +305,14 @@ fn test_integration_add_search_roundtrip() {
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", config).unwrap();
 
     let id = match store
-        .add_with_conflict("test-project", "semantic search is useful", None, false)
+        .add_with_conflict(
+            "test-project",
+            "semantic search is useful",
+            None,
+            false,
+            "fact",
+            "active",
+        )
         .unwrap()
     {
         crate::memory_types::AddResult::Added { id } => id,
@@ -242,7 +320,7 @@ fn test_integration_add_search_roundtrip() {
     };
 
     let results = store
-        .search("test-project", "finding information", 5, 0.0)
+        .search("test-project", "finding information", 5, 0.0, None, None)
         .unwrap();
     assert!(!results.is_empty());
 
@@ -264,7 +342,14 @@ fn test_integration_update_changes_embedding() {
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", config).unwrap();
 
     let id = match store
-        .add_with_conflict("test-project", "original content", None, false)
+        .add_with_conflict(
+            "test-project",
+            "original content",
+            None,
+            false,
+            "fact",
+            "active",
+        )
         .unwrap()
     {
         crate::memory_types::AddResult::Added { id } => id,

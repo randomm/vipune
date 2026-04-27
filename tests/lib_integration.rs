@@ -22,7 +22,14 @@ fn test_memory_store_add_then_search_returns_matching_memory() {
     // Add a memory
     let project_id = "test-project";
     let memory_id = match store
-        .add_with_conflict(project_id, "Alice works at Microsoft", None, false)
+        .add_with_conflict(
+            project_id,
+            "Alice works at Microsoft",
+            None,
+            false,
+            "fact",
+            "active",
+        )
         .expect("Failed to add memory")
     {
         vipune::AddResult::Added { id } => id,
@@ -33,7 +40,7 @@ fn test_memory_store_add_then_search_returns_matching_memory() {
 
     // Search for the memory
     let results = store
-        .search(project_id, "where does alice work", 10, 0.0)
+        .search(project_id, "where does alice work", 10, 0.0, None, None)
         .expect("Failed to search");
 
     assert_eq!(results.len(), 1);
@@ -67,7 +74,7 @@ fn test_add_with_empty_input_returns_error() {
     let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
         .expect("Failed to create store");
 
-    let result = store.add_with_conflict("test", "", None, false);
+    let result = store.add_with_conflict("test", "", None, false, "fact", "active");
     assert!(result.is_err());
     if !matches!(result.as_ref().unwrap_err(), Error::EmptyInput) {
         panic!("Expected EmptyInput error");
@@ -88,7 +95,7 @@ fn test_add_with_oversized_input_returns_error() {
 
     // Create input longer than MAX_INPUT_LENGTH
     let long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.add_with_conflict("test", &long_text, None, false);
+    let result = store.add_with_conflict("test", &long_text, None, false, "fact", "active");
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -114,7 +121,7 @@ fn test_search_with_empty_input_returns_error() {
     let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
         .expect("Failed to create store");
 
-    let result = store.search("test", "", 10, 0.0);
+    let result = store.search("test", "", 10, 0.0, None, None);
     assert!(result.is_err());
     if !matches!(result.as_ref().unwrap_err(), Error::EmptyInput) {
         panic!("Expected EmptyInput error");
@@ -135,7 +142,7 @@ fn test_search_with_oversized_input_returns_error() {
 
     // Create input longer than MAX_INPUT_LENGTH
     let long_query = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.search("test", &long_query, 10, 0.0);
+    let result = store.search("test", &long_query, 10, 0.0, None, None);
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -200,6 +207,8 @@ fn test_memory_with_stored_content_returns_expected_fields() {
             "Test content",
             Some(r#"{"key": "value"}"#),
             false,
+            "fact",
+            "active",
         )
         .expect("Failed to add memory")
     {
@@ -239,14 +248,28 @@ fn test_search_hybrid_with_test_memories_returns_fused_results() {
 
     // Add multiple memories
     match store
-        .add_with_conflict(project_id, "Authentication uses JWT tokens", None, false)
+        .add_with_conflict(
+            project_id,
+            "Authentication uses JWT tokens",
+            None,
+            false,
+            "fact",
+            "active",
+        )
         .expect("Failed to add memory 1")
     {
         vipune::AddResult::Added { .. } => {}
         _ => panic!("Expected AddResult::Added"),
     }
     match store
-        .add_with_conflict(project_id, "User management system", None, false)
+        .add_with_conflict(
+            project_id,
+            "User management system",
+            None,
+            false,
+            "fact",
+            "active",
+        )
         .expect("Failed to add memory 2")
     {
         vipune::AddResult::Added { .. } => {}
@@ -255,7 +278,7 @@ fn test_search_hybrid_with_test_memories_returns_fused_results() {
 
     // Search using hybrid
     let results = store
-        .search_hybrid(project_id, "auth token", 10, 0.0)
+        .search_hybrid(project_id, "auth token", 10, 0.0, None, None)
         .expect("Failed to search hybrid");
 
     assert!(!results.is_empty());
@@ -275,7 +298,7 @@ fn test_update_with_empty_input_returns_error() {
         .expect("Failed to create store");
 
     let memory_id = match store
-        .add_with_conflict("test", "Original content", None, false)
+        .add_with_conflict("test", "Original content", None, false, "fact", "active")
         .expect("Failed to add memory")
     {
         vipune::AddResult::Added { id } => id,
@@ -303,7 +326,7 @@ fn test_update_with_oversized_input_returns_error() {
         .expect("Failed to create store");
 
     let memory_id = match store
-        .add_with_conflict("test", "Original content", None, false)
+        .add_with_conflict("test", "Original content", None, false, "fact", "active")
         .expect("Failed to add memory")
     {
         vipune::AddResult::Added { id } => id,
@@ -339,7 +362,7 @@ fn test_search_with_zero_limit_returns_error() {
         .expect("Failed to create store");
 
     // Try to search with limit=0
-    let result = store.search("test", "query", 0, 0.0);
+    let result = store.search("test", "query", 0, 0.0, None, None);
     assert!(result.is_err());
     if let Error::InvalidInput(msg) = &result.as_ref().unwrap_err() {
         assert!(msg.contains("Limit must be greater than 0"));
@@ -361,7 +384,7 @@ fn test_search_with_limit_over_max_returns_error() {
         .expect("Failed to create store");
 
     // Try to search with excessively large limit
-    let result = store.search("test", "query", 10_001, 0.0);
+    let result = store.search("test", "query", 10_001, 0.0, None, None);
     assert!(result.is_err());
     if let Error::InvalidInput(msg) = &result.as_ref().unwrap_err() {
         assert!(msg.contains("exceeds maximum allowed"));
@@ -383,12 +406,12 @@ fn test_add_with_whitespace_only_input_returns_error() {
         .expect("Failed to create store");
 
     // Try to add whitespace-only content
-    let result = store.add_with_conflict("test", "   ", None, false);
+    let result = store.add_with_conflict("test", "   ", None, false, "fact", "active");
     assert!(result.is_err());
     assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
 
     // Try to search with whitespace-only query
-    let result = store.search("test", "\t\n", 10, 0.0);
+    let result = store.search("test", "\t\n", 10, 0.0, None, None);
     assert!(result.is_err());
     assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
 
@@ -475,7 +498,7 @@ fn test_list_with_zero_limit_returns_error() {
         .expect("Failed to create store");
 
     // Try to list with limit=0
-    let result = store.list("test", 0);
+    let result = store.list("test", 0, None, None);
     assert!(result.is_err());
     if let Error::InvalidInput(msg) = &result.as_ref().unwrap_err() {
         assert!(msg.contains("Limit must be greater than 0"));
@@ -497,7 +520,7 @@ fn test_list_with_limit_over_max_returns_error() {
         .expect("Failed to create store");
 
     // Try to list with excessively large limit
-    let result = store.list("test", 10_001);
+    let result = store.list("test", 10_001, None, None);
     assert!(result.is_err());
     if let Error::InvalidInput(msg) = &result.as_ref().unwrap_err() {
         assert!(msg.contains("exceeds maximum allowed"));
@@ -522,37 +545,50 @@ fn test_list_regression_coverage() {
 
     // Add multiple memories
     let _id1 = store
-        .add_with_conflict(project_id, "first memory", None, true)
+        .add_with_conflict(project_id, "first memory", None, true, "fact", "active")
         .expect("Failed to add memory");
     let _id2 = store
-        .add_with_conflict(project_id, "second memory", None, true)
+        .add_with_conflict(project_id, "second memory", None, true, "fact", "active")
         .expect("Failed to add memory");
     let _id3 = store
-        .add_with_conflict(project_id, "third memory", None, true)
+        .add_with_conflict(project_id, "third memory", None, true, "fact", "active")
         .expect("Failed to add memory");
 
     // Test ordering (newest first)
-    let results = store.list(project_id, 10).expect("Failed to list");
+    let results = store
+        .list(project_id, 10, None, None)
+        .expect("Failed to list");
     assert_eq!(results.len(), 3);
     assert_eq!(results[0].content, "third memory");
     assert_eq!(results[1].content, "second memory");
     assert_eq!(results[2].content, "first memory");
 
     // Test limit
-    let results = store.list(project_id, 2).expect("Failed to list");
+    let results = store
+        .list(project_id, 2, None, None)
+        .expect("Failed to list");
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].content, "third memory");
 
     // Test project isolation
     let _id4 = store
-        .add_with_conflict("other-project", "other memory", None, true)
+        .add_with_conflict(
+            "other-project",
+            "other memory",
+            None,
+            true,
+            "fact",
+            "active",
+        )
         .expect("Failed to add memory");
-    let project1_results = store.list(project_id, 10).expect("Failed to list");
+    let project1_results = store
+        .list(project_id, 10, None, None)
+        .expect("Failed to list");
     assert_eq!(project1_results.len(), 3);
 
     // Test empty project
     let empty_results = store
-        .list("nonexistent_project", 10)
+        .list("nonexistent_project", 10, None, None)
         .expect("Failed to list");
     assert_eq!(empty_results.len(), 0);
 
@@ -573,21 +609,21 @@ fn test_list_since_with_timezone_offset() {
 
     // Add memories with controlled timestamps
     let _old = store
-        .add_with_conflict(project_id, "old memory", None, true)
+        .add_with_conflict(project_id, "old memory", None, true, "fact", "active")
         .expect("Failed to add memory");
 
     // Wait at least 1ms to ensure different timestamps
     std::thread::sleep(std::time::Duration::from_millis(10));
 
     let _new = store
-        .add_with_conflict(project_id, "new memory", None, true)
+        .add_with_conflict(project_id, "new memory", None, true, "fact", "active")
         .expect("Failed to add memory");
 
     // Test with UTC timestamp (should succeed and only return newer)
     let now = chrono::Utc::now();
     let one_minute_ago = (now - chrono::Duration::minutes(1)).to_rfc3339();
     let results = store
-        .list_since(project_id, &one_minute_ago, 10)
+        .list_since(project_id, &one_minute_ago, 10, None, None)
         .expect("Failed to list");
     // Should only return "new memory" as it's more recent than one minute ago
     assert!(results.len() >= 1);
@@ -609,7 +645,7 @@ fn test_list_since_timestamp_precision_equivalence() {
     let project_id = "test-project";
 
     let _id = store
-        .add_with_conflict(project_id, "test memory", None, true)
+        .add_with_conflict(project_id, "test memory", None, true, "fact", "active")
         .expect("Failed to add memory");
 
     // Wait to ensure timestamp difference
@@ -620,11 +656,11 @@ fn test_list_since_timestamp_precision_equivalence() {
     let two_seconds_ago = (now - chrono::Duration::seconds(2)).to_rfc3339();
 
     let results1 = store
-        .list_since(project_id, &two_seconds_ago, 10)
+        .list_since(project_id, &two_seconds_ago, 10, None, None)
         .expect("Failed to list");
 
     let results2 = store
-        .list_since(project_id, &two_seconds_ago, 10)
+        .list_since(project_id, &two_seconds_ago, 10, None, None)
         .expect("Failed to list");
 
     // Results should be identical (same query, same results)
@@ -649,7 +685,7 @@ fn test_get_many_with_duplicate_ids() {
     let project_id = "test-project";
 
     let id1 = match store
-        .add_with_conflict(project_id, "first", None, true)
+        .add_with_conflict(project_id, "first", None, true, "fact", "active")
         .expect("Failed to add memory")
     {
         vipune::AddResult::Added { id } => id,
@@ -657,7 +693,7 @@ fn test_get_many_with_duplicate_ids() {
     };
 
     let id2 = match store
-        .add_with_conflict(project_id, "second", None, true)
+        .add_with_conflict(project_id, "second", None, true, "fact", "active")
         .expect("Failed to add memory")
     {
         vipune::AddResult::Added { id } => id,
@@ -689,7 +725,7 @@ fn test_add_at_exactly_max_input_length_returns_success() {
 
     // Create input exactly at MAX_INPUT_LENGTH
     let exact_text = "x".repeat(MAX_INPUT_LENGTH);
-    let result = store.add_with_conflict("test", &exact_text, None, false);
+    let result = store.add_with_conflict("test", &exact_text, None, false, "fact", "active");
     assert!(
         result.is_ok(),
         "Should accept input at exactly MAX_INPUT_LENGTH"
@@ -710,7 +746,7 @@ fn test_add_one_over_max_input_length_returns_error() {
 
     // Create input one character over MAX_INPUT_LENGTH
     let too_long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.add_with_conflict("test", &too_long_text, None, false);
+    let result = store.add_with_conflict("test", &too_long_text, None, false, "fact", "active");
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -736,7 +772,7 @@ fn test_search_hybrid_with_empty_input_returns_error() {
     let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
         .expect("Failed to create store");
 
-    let result = store.search_hybrid("test", "", 10, 0.0);
+    let result = store.search_hybrid("test", "", 10, 0.0, None, None);
     assert!(result.is_err());
     assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
 
@@ -754,7 +790,7 @@ fn test_search_hybrid_with_oversized_input_returns_error() {
         .expect("Failed to create store");
 
     let long_query = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.search_hybrid("test", &long_query, 10, 0.0);
+    let result = store.search_hybrid("test", &long_query, 10, 0.0, None, None);
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -854,7 +890,9 @@ fn test_ingest_force_policy_bypasses_conflicts() {
     };
 
     // Verify both memories exist
-    let results = store.list(project_id, 10).expect("Failed to list memories");
+    let results = store
+        .list(project_id, 10, None, None)
+        .expect("Failed to list memories");
     assert_eq!(
         results.len(),
         2,
@@ -1005,6 +1043,8 @@ fn test_update_text_only_preserves_metadata() {
             "original content",
             Some(r#"{"tag": "important"}"#),
             true,
+            "fact",
+            "active",
         )
         .expect("Failed to add")
     {
@@ -1039,7 +1079,7 @@ fn test_update_with_invalid_json_metadata_returns_error() {
 
     // Add memory
     let id = match store
-        .add_with_conflict(project_id, "original content", None, true)
+        .add_with_conflict(project_id, "original content", None, true, "fact", "active")
         .expect("Failed to add")
     {
         vipune::AddResult::Added { id } => id,
@@ -1078,7 +1118,7 @@ fn test_update_with_empty_metadata_returns_error() {
 
     // Add memory
     let id = match store
-        .add_with_conflict(project_id, "original content", None, true)
+        .add_with_conflict(project_id, "original content", None, true, "fact", "active")
         .expect("Failed to add")
     {
         vipune::AddResult::Added { id } => id,
@@ -1117,7 +1157,7 @@ fn test_update_with_whitespace_only_metadata_returns_error() {
 
     // Add memory
     let id = match store
-        .add_with_conflict(project_id, "original content", None, true)
+        .add_with_conflict(project_id, "original content", None, true, "fact", "active")
         .expect("Failed to add")
     {
         vipune::AddResult::Added { id } => id,
@@ -1156,7 +1196,7 @@ fn test_update_metadata_only() {
 
     // Add memory without metadata
     let id = match store
-        .add_with_conflict(project_id, "original content", None, true)
+        .add_with_conflict(project_id, "original content", None, true, "fact", "active")
         .expect("Failed to add")
     {
         vipune::AddResult::Added { id } => id,
@@ -1190,7 +1230,14 @@ fn test_update_both_text_and_metadata() {
 
     // Add memory with old metadata
     let id = match store
-        .add_with_conflict(project_id, "old content", Some(r#"{"old": "value"}"#), true)
+        .add_with_conflict(
+            project_id,
+            "old content",
+            Some(r#"{"old": "value"}"#),
+            true,
+            "fact",
+            "active",
+        )
         .expect("Failed to add")
     {
         vipune::AddResult::Added { id } => id,

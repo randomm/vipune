@@ -22,7 +22,14 @@ fn test_add_and_get() {
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
     let id = db
-        .insert("test-project", "test content", &embedding, Some("metadata"))
+        .insert(
+            "test-project",
+            "test content",
+            &embedding,
+            Some("metadata"),
+            "fact",
+            "active",
+        )
         .unwrap();
 
     let memory = db.get(&id).unwrap().unwrap();
@@ -44,7 +51,14 @@ fn test_update_memory() {
     let embedding_new = vec![0.8f32; 384];
 
     let id = db
-        .insert("test-project", "original", &embedding_old, None)
+        .insert(
+            "test-project",
+            "original",
+            &embedding_old,
+            None,
+            "fact",
+            "active",
+        )
         .unwrap();
 
     db.update(&id, Some("updated"), Some(&embedding_new), None)
@@ -80,7 +94,14 @@ fn test_delete_memory() {
     let embedding = vec![0.5f32; 384];
 
     let id = db
-        .insert("test-project", "to delete", &embedding, None)
+        .insert(
+            "test-project",
+            "to delete",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
         .unwrap();
     assert!(db.delete(&id).unwrap());
 
@@ -122,16 +143,23 @@ fn test_list_by_project() {
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
 
-    db.insert("project-a", "content a", &embedding, None)
+    db.insert("project-a", "content a", &embedding, None, "fact", "active")
         .unwrap();
-    db.insert("project-b", "content b", &embedding, None)
+    db.insert("project-b", "content b", &embedding, None, "fact", "active")
         .unwrap();
-    db.insert("project-a", "content a2", &embedding, None)
-        .unwrap();
+    db.insert(
+        "project-a",
+        "content a2",
+        &embedding,
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
 
-    let memories_a = db.list("project-a", 10).unwrap();
+    let memories_a = db.list("project-a", 10, None, None).unwrap();
     assert_eq!(memories_a.len(), 2);
 
-    let memories_b = db.list("project-b", 10).unwrap();
+    let memories_b = db.list("project-b", 10, None, None).unwrap();
     assert_eq!(memories_b.len(), 1);
 }

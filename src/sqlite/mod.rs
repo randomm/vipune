@@ -47,6 +47,15 @@ pub struct Memory {
     pub created_at: String,
     /// Last update timestamp in RFC3339 format.
     pub updated_at: String,
+    /// Memory type (fact, preference, procedure, guard, observation).
+    #[allow(dead_code)] // Library API: exposed for consumers
+    pub memory_type: String,
+    /// Lifecycle status (active, candidate, superseded, deprecated).
+    #[allow(dead_code)] // Library API: exposed for consumers
+    pub status: String,
+    /// ID of the memory that superseded this one (if any).
+    #[allow(dead_code)] // Library API: exposed for consumers
+    pub superseded_by: Option<String>,
 }
 
 /// Error types for SQLite operations.
@@ -64,6 +73,10 @@ pub enum Error {
     InvalidEmbedding(String),
     /// Invalid search limit value.
     InvalidLimit(String),
+    /// Entity not found.
+    NotFound(String),
+    /// Invalid input provided.
+    InvalidInput(String),
 }
 
 impl std::fmt::Display for Error {
@@ -87,6 +100,8 @@ impl std::fmt::Display for Error {
             Error::EmptyVector => write!(f, "Cannot compute similarity with empty vector"),
             Error::InvalidEmbedding(msg) => write!(f, "Invalid embedding: {}", msg),
             Error::InvalidLimit(msg) => write!(f, "Invalid limit: {}", msg),
+            Error::NotFound(msg) => write!(f, "Not found: {}", msg),
+            Error::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
         }
     }
 }
@@ -185,6 +200,8 @@ impl Database {
         content: &str,
         embedding: &[f32],
         metadata: Option<&str>,
+        memory_type: &str,
+        status: &str,
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -192,10 +209,10 @@ impl Database {
 
         self.conn.execute(
             r#"
-            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#,
-            params![&id, project_id, content, &blob, metadata, &now, &now],
+            params![&id, project_id, content, &blob, metadata, &now, &now, memory_type, status],
         )?;
 
         Ok(id)
@@ -213,16 +230,18 @@ impl Database {
         metadata: Option<&str>,
         created_at: &str,
         updated_at: &str,
+        memory_type: &str,
+        status: &str,
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let blob = vec_to_blob(embedding)?;
 
         self.conn.execute(
             r#"
-            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#,
-            params![&id, project_id, content, &blob, metadata, created_at, updated_at],
+            params![&id, project_id, content, &blob, metadata, created_at, updated_at, memory_type, status],
         )?;
 
         Ok(id)
@@ -238,7 +257,7 @@ impl Database {
     pub fn get(&self, id: &str) -> Result<Option<Memory>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, project_id, content, metadata, embedding, created_at, updated_at
+            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
             FROM memories
             WHERE id = ?1
             "#,
@@ -250,22 +269,82 @@ impl Database {
 
     /// List memories for a project, ordered by creation time (newest first).
     ///
+    /// # Arguments
+    ///
+    /// * `project_id` - Project identifier
+    /// * `limit` - Maximum number of results to return
+    /// * `memory_types` - Optional filter for memory types (None = no filter by type)
+    /// * `statuses` - Optional filter for lifecycle statuses (None = default to 'active')
+    ///
     /// # Errors
     ///
     /// Returns error if the limit is invalid or the query fails.
-    pub fn list(&self, project_id: &str, limit: usize) -> Result<Vec<Memory>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, project_id, content, metadata, embedding, created_at, updated_at
-            FROM memories
-            WHERE project_id = ?1
-            ORDER BY created_at DESC
-            LIMIT ?2
-            "#,
-        )?;
+    pub fn list(
+        &self,
+        project_id: &str,
+        limit: usize,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
+    ) -> Result<Vec<Memory>> {
+        let mut where_clauses = vec!["project_id = ?1".to_string()];
+        let mut param_index = 2usize;
+
+        // Status filter (default to active if None)
+        if let Some(statuses) = statuses {
+            if !statuses.is_empty() {
+                let placeholders: Vec<String> = (0..statuses.len())
+                    .map(|i| format!("?{}", param_index + i))
+                    .collect();
+                where_clauses.push(format!("status IN ({})", placeholders.join(", ")));
+                param_index += statuses.len();
+            }
+        } else {
+            where_clauses.push(format!("status = ?{}", param_index));
+            param_index += 1;
+        }
+
+        // Type filter (only if explicitly provided)
+        if let Some(types) = memory_types {
+            if !types.is_empty() {
+                let placeholders: Vec<String> = (0..types.len())
+                    .map(|i| format!("?{}", param_index + i))
+                    .collect();
+                where_clauses.push(format!("type IN ({})", placeholders.join(", ")));
+                param_index += types.len();
+            }
+        }
+
+        let where_clause = where_clauses.join(" AND ");
+        let query = format!(
+            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+             FROM memories WHERE {} ORDER BY created_at DESC LIMIT ?{}",
+            where_clause, param_index
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&project_id];
+        if let Some(statuses) = statuses {
+            if statuses.is_empty() {
+                // explicit empty = no status filter, but we didn't add a clause
+            } else {
+                for s in statuses {
+                    params.push(s);
+                }
+            }
+        } else {
+            params.push(&"active");
+        }
+        if let Some(types) = memory_types {
+            for t in types {
+                params.push(t);
+            }
+        }
+        let limit_param = limit as i64;
+        params.push(&limit_param);
 
         let memories: SqliteResult<Vec<Memory>> = stmt
-            .query_map(params![project_id, limit as i64], map_row_to_memory)?
+            .query_map(params.as_slice(), map_row_to_memory)?
             .collect();
 
         Ok(memories?)
@@ -370,6 +449,60 @@ impl Database {
         Ok(rows > 0)
     }
 
+    /// Atomically supersede an old memory with a new one.
+    ///
+    /// In a single transaction:
+    /// 1. Inserts the new memory
+    /// 2. Sets old memory's status to 'superseded' and superseded_by to new ID
+    #[allow(dead_code)] // Public API: used by CLI --supersedes flag and library consumers
+    pub fn supersede(
+        &self,
+        project_id: &str,
+        content: &str,
+        embedding: &[f32],
+        metadata: Option<&str>,
+        memory_type: &str,
+        old_id: &str,
+    ) -> Result<String> {
+        // Verify old memory exists
+        let old = self
+            .get(old_id)?
+            .ok_or_else(|| Error::NotFound(format!("memory to supersede not found: {}", old_id)))?;
+        if old.project_id != project_id {
+            return Err(Error::InvalidInput(
+                "cannot supersede memory from different project".to_string(),
+            ));
+        }
+
+        let new_id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let blob = vec_to_blob(embedding)?;
+
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                &new_id,
+                project_id,
+                content,
+                &blob,
+                metadata,
+                &now,
+                &now,
+                memory_type,
+                "active"
+            ],
+        )?;
+        tx.execute(
+            "UPDATE memories SET status = 'superseded', superseded_by = ?1, updated_at = ?2 WHERE id = ?3",
+            params![&new_id, &now, old_id],
+        )?;
+        tx.commit()?;
+
+        Ok(new_id)
+    }
+
     /// List memories for a project created since a given timestamp.
     ///
     /// Returns memories with `created_at > since_timestamp`, ordered by creation time (newest first).
@@ -380,6 +513,8 @@ impl Database {
     /// * `project_id` - Project identifier
     /// * `since_timestamp` - RFC3339-formatted timestamp (exclusive lower bound)
     /// * `limit` - Maximum number of results to return
+    /// * `memory_types` - Optional filter for memory types (None = no filter by type)
+    /// * `statuses` - Optional filter for lifecycle statuses (None = default to 'active')
     ///
     /// # Errors
     ///
@@ -393,7 +528,7 @@ impl Database {
     /// ```ignore
     /// use chrono::Utc;
     /// let one_hour_ago = (Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
-    /// let recent = db.list_since("project", &one_hour_ago, 10)?;
+    /// let recent = db.list_since("project", &one_hour_ago, 10, None, None)?;
     /// ```
     #[allow(dead_code)] // Public API for library consumers (e.g., kide)
     pub fn list_since(
@@ -401,26 +536,72 @@ impl Database {
         project_id: &str,
         since_timestamp: &str,
         limit: usize,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
     ) -> Result<Vec<Memory>> {
         // Validate timestamp format by parsing it
         let _parsed = chrono::DateTime::parse_from_rfc3339(since_timestamp)
             .map_err(|e| Error::Sqlite(format!("Invalid RFC3339 timestamp: {}", e)))?;
 
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT id, project_id, content, metadata, embedding, created_at, updated_at
-            FROM memories
-            WHERE project_id = ?1 AND created_at > ?2
-            ORDER BY created_at DESC
-            LIMIT ?3
-            "#,
-        )?;
+        let mut where_clauses = vec!["project_id = ?1".to_string(), "created_at > ?2".to_string()];
+        let mut param_index = 3usize;
+
+        // Status filter (default to active if None)
+        if let Some(statuses) = statuses {
+            if !statuses.is_empty() {
+                let placeholders: Vec<String> = (0..statuses.len())
+                    .map(|i| format!("?{}", param_index + i))
+                    .collect();
+                where_clauses.push(format!("status IN ({})", placeholders.join(", ")));
+                param_index += statuses.len();
+            }
+        } else {
+            where_clauses.push(format!("status = ?{}", param_index));
+            param_index += 1;
+        }
+
+        // Type filter (only if explicitly provided)
+        if let Some(types) = memory_types {
+            if !types.is_empty() {
+                let placeholders: Vec<String> = (0..types.len())
+                    .map(|i| format!("?{}", param_index + i))
+                    .collect();
+                where_clauses.push(format!("type IN ({})", placeholders.join(", ")));
+                param_index += types.len();
+            }
+        }
+
+        let where_clause = where_clauses.join(" AND ");
+        let query = format!(
+            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+             FROM memories WHERE {} ORDER BY created_at DESC LIMIT ?{}",
+            where_clause, param_index
+        );
+
+        let mut stmt = self.conn.prepare(&query)?;
+
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&project_id, &since_timestamp];
+        if let Some(statuses) = statuses {
+            if statuses.is_empty() {
+                // explicit empty = no status filter, but we didn't add a clause
+            } else {
+                for s in statuses {
+                    params.push(s);
+                }
+            }
+        } else {
+            params.push(&"active");
+        }
+        if let Some(types) = memory_types {
+            for t in types {
+                params.push(t);
+            }
+        }
+        let limit_param = limit as i64;
+        params.push(&limit_param);
 
         let memories: SqliteResult<Vec<Memory>> = stmt
-            .query_map(
-                params![project_id, since_timestamp, limit as i64],
-                map_row_to_memory,
-            )?
+            .query_map(params.as_slice(), map_row_to_memory)?
             .collect();
 
         Ok(memories?)
@@ -466,7 +647,7 @@ impl Database {
             .join(", ");
         let query = format!(
             r#"
-            SELECT id, project_id, content, metadata, embedding, created_at, updated_at
+            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
             FROM memories
             WHERE id IN ({})
             "#,
@@ -499,6 +680,9 @@ impl Database {
                         similarity: None,
                         created_at: row.get(5)?,
                         updated_at: row.get(6)?,
+                        memory_type: row.get(7)?,
+                        status: row.get(8)?,
+                        superseded_by: row.get(9)?,
                     },
                 ))
             })?
@@ -541,7 +725,7 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         let id = db
-            .insert("proj1", "test content", &embedding, None)
+            .insert("proj1", "test content", &embedding, None, "fact", "active")
             .unwrap();
 
         let memory = db.get(&id).unwrap();
@@ -561,6 +745,8 @@ mod tests {
                 "test content",
                 &embedding,
                 Some(r#"{"key": "value"}"#),
+                "fact",
+                "active",
             )
             .unwrap();
 
@@ -572,7 +758,7 @@ mod tests {
     fn test_insert_invalid_embedding() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 256];
-        let result = db.insert("proj1", "test", &embedding, None);
+        let result = db.insert("proj1", "test", &embedding, None, "fact", "active");
         assert!(result.is_err());
     }
 
@@ -595,6 +781,8 @@ mod tests {
                 None,
                 "2024-01-01T00:00:00Z",
                 "2024-01-01T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
         let id2 = db
@@ -605,10 +793,12 @@ mod tests {
                 None,
                 "2024-01-02T00:00:00Z",
                 "2024-01-02T00:00:00Z",
+                "fact",
+                "active",
             )
             .unwrap();
 
-        let memories = db.list("proj1", 10).unwrap();
+        let memories = db.list("proj1", 10, None, None).unwrap();
         assert_eq!(memories.len(), 2);
         assert_eq!(memories[0].id, id2); // Newest first
         assert_eq!(memories[1].id, id1);
@@ -619,11 +809,18 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         for i in 0..5 {
-            db.insert("proj1", &format!("content {}", i), &embedding, None)
-                .unwrap();
+            db.insert(
+                "proj1",
+                &format!("content {}", i),
+                &embedding,
+                None,
+                "fact",
+                "active",
+            )
+            .unwrap();
         }
 
-        let memories = db.list("proj1", 2).unwrap();
+        let memories = db.list("proj1", 2, None, None).unwrap();
         assert_eq!(memories.len(), 2);
     }
 
@@ -631,7 +828,9 @@ mod tests {
     fn test_update() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        let id = db.insert("proj1", "original", &embedding, None).unwrap();
+        let id = db
+            .insert("proj1", "original", &embedding, None, "fact", "active")
+            .unwrap();
 
         db.update(&id, Some("updated"), Some(&embedding), None)
             .unwrap();
@@ -645,7 +844,14 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         let id = db
-            .insert("proj1", "original", &embedding, Some(r#"{"tag": "old"}"#))
+            .insert(
+                "proj1",
+                "original",
+                &embedding,
+                Some(r#"{"tag": "old"}"#),
+                "fact",
+                "active",
+            )
             .unwrap();
 
         let new_embedding = vec![0.2f32; 384];
@@ -661,7 +867,9 @@ mod tests {
     fn test_update_metadata_only() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        let id = db.insert("proj1", "original", &embedding, None).unwrap();
+        let id = db
+            .insert("proj1", "original", &embedding, None, "fact", "active")
+            .unwrap();
 
         db.update(&id, None, None, Some(r#"{"tag": "new"}"#))
             .unwrap();
@@ -676,7 +884,14 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         let id = db
-            .insert("proj1", "original", &embedding, Some(r#"{"tag": "old"}"#))
+            .insert(
+                "proj1",
+                "original",
+                &embedding,
+                Some(r#"{"tag": "old"}"#),
+                "fact",
+                "active",
+            )
             .unwrap();
 
         let new_embedding = vec![0.2f32; 384];
@@ -697,7 +912,9 @@ mod tests {
     fn test_update_with_none_both() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        let id = db.insert("proj1", "original", &embedding, None).unwrap();
+        let id = db
+            .insert("proj1", "original", &embedding, None, "fact", "active")
+            .unwrap();
 
         let result = db.update(&id, None, None, None);
         assert!(result.is_err());
@@ -715,7 +932,9 @@ mod tests {
     fn test_delete() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        let id = db.insert("proj1", "content", &embedding, None).unwrap();
+        let id = db
+            .insert("proj1", "content", &embedding, None, "fact", "active")
+            .unwrap();
 
         let deleted = db.delete(&id).unwrap();
         assert!(deleted);
@@ -735,13 +954,13 @@ mod tests {
     fn test_project_isolation() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        db.insert("proj1", "proj1 content", &embedding, None)
+        db.insert("proj1", "proj1 content", &embedding, None, "fact", "active")
             .unwrap();
-        db.insert("proj2", "proj2 content", &embedding, None)
+        db.insert("proj2", "proj2 content", &embedding, None, "fact", "active")
             .unwrap();
 
-        let list1 = db.list("proj1", 10).unwrap();
-        let list2 = db.list("proj2", 10).unwrap();
+        let list1 = db.list("proj1", 10, None, None).unwrap();
+        let list2 = db.list("proj2", 10, None, None).unwrap();
 
         assert_eq!(list1.len(), 1);
         assert_eq!(list2.len(), 1);
@@ -754,7 +973,7 @@ mod tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; EMBEDDING_DIMS];
         let id = db
-            .insert("proj1", "test content", &embedding, None)
+            .insert("proj1", "test content", &embedding, None, "fact", "active")
             .unwrap();
 
         let memory = db.get(&id).unwrap().unwrap();
@@ -770,10 +989,12 @@ mod tests {
         let embedding1 = vec![0.1f32; EMBEDDING_DIMS];
         let embedding2 = vec![0.2f32; EMBEDDING_DIMS];
 
-        db.insert("proj1", "first", &embedding1, None).unwrap();
-        db.insert("proj1", "second", &embedding2, None).unwrap();
+        db.insert("proj1", "first", &embedding1, None, "fact", "active")
+            .unwrap();
+        db.insert("proj1", "second", &embedding2, None, "fact", "active")
+            .unwrap();
 
-        let memories = db.list("proj1", 10).unwrap();
+        let memories = db.list("proj1", 10, None, None).unwrap();
         assert_eq!(memories.len(), 2);
 
         for memory in &memories {
@@ -790,7 +1011,9 @@ mod tests {
         full_embedding[1] = original[1];
         full_embedding[EMBEDDING_DIMS - 1] = original[2];
 
-        let id = db.insert("proj1", "test", &full_embedding, None).unwrap();
+        let id = db
+            .insert("proj1", "test", &full_embedding, None, "fact", "active")
+            .unwrap();
 
         let memory = db.get(&id).unwrap().unwrap();
         assert_eq!(memory.embedding.len(), EMBEDDING_DIMS);
