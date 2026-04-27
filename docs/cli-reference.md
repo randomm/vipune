@@ -19,7 +19,7 @@ These flags apply to all commands:
 Store a memory.
 
 ```
-vipune add <text> [--metadata <json>] [--force]
+vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status <status>] [--supersedes <id>]
 ```
 
 **Arguments:**
@@ -28,17 +28,22 @@ vipune add <text> [--metadata <json>] [--force]
 **Flags:**
 - `-m, --metadata <json>` - Optional JSON metadata (e.g., `{"topic": "auth"}`)
 - `--force` - Bypass conflict detection and add regardless
+- `--memory-type <type>` - Memory type: `fact` (default), `preference`, `procedure`, `guard`, `observation`
+- `--status <status>` - Initial status: `active` (default) or `candidate`
+- `--supersedes <id>` - Atomically supersede an existing memory (mutually exclusive with `--force`)
 
 **Behavior:**
 - Generates semantic embedding for the text
 - Checks for similar existing memories (similarity ≥ threshold)
 - If conflicts found: returns exit code 2, lists conflicting memories
 - If `--force` used: skips conflict check and adds memory
+- If `--supersedes` used: atomically adds new memory and marks target as `superseded`
 
 **Exit codes:**
 - `0` - Successfully added
 - `1` - Error (invalid input, database error)
 - `2` - Conflicts detected (similar memories exist)
+- `3` - Content too long (exceeds embedding token limit)
 
 **Human output:**
 ```
@@ -77,6 +82,13 @@ Use --force to add anyway
 }
 ```
 
+**Supersede example:**
+```bash
+# Replace an outdated memory atomically
+vipune add "Alice now works at Google" --supersedes abc123-old-memory-id
+```
+This inserts the new memory and marks the old one as `superseded` in a single transaction.
+
 ---
 
 ### search
@@ -84,7 +96,7 @@ Use --force to add anyway
 Find memories by semantic similarity.
 
 ```
-vipune search <query> [--limit <n>] [--recency <weight>] [--hybrid]
+vipune search <query> [--limit <n>] [--recency <weight>] [--hybrid] [--memory-type <types>] [--status <statuses>] [--include-candidates]
 ```
 
 **Arguments:**
@@ -94,6 +106,9 @@ vipune search <query> [--limit <n>] [--recency <weight>] [--hybrid]
 - `-l, --limit <n>` - Maximum results to return (default: `5`)
 - `--recency <weight>` - Recency bias for scoring, 0.0 to 1.0 (default: from config, typically `0.3`)
 - `--hybrid` - Enables hybrid search combining semantic similarity with FTS5 full-text search using Reciprocal Rank Fusion (RRF)
+- `--memory-type <types>` - Filter by memory type (comma-separated, e.g., `guard,procedure`)
+- `--status <statuses>` - Filter by status (comma-separated, e.g., `active,candidate`)
+- `--include-candidates` - Shorthand to include both `active` and `candidate` memories
 
 **Behavior:**
 - Generates embedding for query
@@ -101,6 +116,7 @@ vipune search <query> [--limit <n>] [--recency <weight>] [--hybrid]
 - Combines semantic similarity with time decay for final score
 - Returns results sorted by final score (highest first)
 - All memories in current project scope
+- **Default filtering:** Only `active` memories are returned by default. Use `--status` or `--include-candidates` to include other statuses.
 
 **Recency scoring:**
 The final score combines: `(1 - recency_weight) * similarity + recency_weight * time_score`
@@ -198,15 +214,19 @@ Updated: 2024-01-15T10:30:00Z
 List all memories in the current project.
 
 ```
-vipune list [--limit <n>]
+vipune list [--limit <n>] [--memory-type <types>] [--status <statuses>] [--include-candidates]
 ```
 
 **Flags:**
 - `-l, --limit <n>` - Maximum results to return (default: `10`)
+- `--memory-type <types>` - Filter by memory type (comma-separated, e.g., `guard,procedure`)
+- `--status <statuses>` - Filter by status (comma-separated, e.g., `active,candidate`)
+- `--include-candidates` - Shorthand to include both `active` and `candidate` memories
 
 **Behavior:**
 - Returns memories ordered by creation time (newest first)
 - Limited to current project scope
+- **Default filtering:** Only `active` memories are returned by default. Use `--status` or `--include-candidates` to include other statuses.
 
 **Exit codes:**
 - `0` - Success (may return empty list)
@@ -272,17 +292,21 @@ Deleted memory: 123e4567-e89b-12d3-a456-426614174000
 Update a memory's content.
 
 ```
-vipune update <id> <text>
+vipune update <id> [text] [--metadata <json>]
 ```
 
 **Arguments:**
 - `id` - Memory ID (required)
-- `text` - New content (required)
+- `text` - New content (optional — if omitted, only metadata is updated)
+
+**Flags:**
+- `-m, --metadata <json>` - Replace metadata (must be valid JSON)
 
 **Behavior:**
-- Generates new embedding for updated content
-- Preserves: ID, project ID, creation timestamp
-- Updates: content, embedding, updated_at timestamp
+- If only `text` provided: generates new embedding, preserves metadata
+- If only `--metadata` provided: updates metadata without re-embedding
+- If both `text` and `--metadata` provided: updates both
+- Metadata must be valid JSON (validated on write)
 
 **Exit codes:**
 - `0` - Memory updated
@@ -298,6 +322,37 @@ Updated memory: 123e4567-e89b-12d3-a456-426614174000
 {
   "status": "updated",
   "id": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+---
+
+### validate
+
+Check if text content is within the embedding model's token limit.
+
+```
+vipune validate <text>
+```
+
+**Arguments:**
+- `text` - Text to validate (required)
+
+**Exit codes:**
+- `0` - Within token limit
+- `3` - Content exceeds token limit
+
+**Human output:**
+```
+Token count: 42/512 — within limit
+```
+
+**JSON output:**
+```json
+{
+  "token_count": 42,
+  "max_tokens": 512,
+  "within_limit": true
 }
 ```
 
@@ -350,12 +405,24 @@ vipune mcp
 | Tool | Description |
 |------|-------------|
 | `store_memory` | Store information for later recall |
-| `search_memories` | Find memories by meaning |
-| `list_memories` | List recent memories |
+| `search_memories` | Find memories by meaning, with type/status filters |
+| `list_memories` | List recent memories, with type/status filters |
 
 **Exit codes:**
 - `0` - Success
 - `1` - Error (initialization failed)
+
+**New v0.3 tool parameters:**
+
+`store_memory` accepts:
+- `text` — the information to remember (required)
+- `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
+
+Note: Memory type, status, and supersede are available via CLI but not yet exposed in the MCP `store_memory` tool.
+
+`search_memories` and `list_memories` accept optional:
+- `memory_types` — array of types to filter by (e.g., `["guard", "procedure"]`)
+- `status` — array of statuses to filter by (e.g., `["active", "candidate"]`)
 
 **Example MCP configuration (Claude Code):**
 ```json
@@ -368,6 +435,25 @@ vipune mcp
   }
 }
 ```
+
+---
+
+## Upgrading from v0.2
+
+v0.3 includes automatic schema migrations — no manual steps required. On first run after upgrading, vipune will add the new `type`, `status`, and `superseded_by` columns to your existing database. All existing memories default to type `fact` and status `active`.
+
+**Breaking change:** Content that previously was silently truncated when exceeding the embedding token limit now fails with exit code 3. Use `vipune validate <text>` to check content length before adding.
+
+---
+
+## Exit Codes Summary
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Error (invalid input, database error, not found) |
+| `2` | Conflicts detected (similar memories exist) |
+| `3` | Content too long (exceeds embedding token limit) |
 
 ---
 

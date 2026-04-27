@@ -180,12 +180,13 @@ vipune add "Auth uses JWT tokens" --metadata '{"topic": "authentication"}'
 
 | Command | Description |
 |---------|-------------|
-| `vipune add <text>` | Store a memory |
-| `vipune search <query>` | Find memories by meaning |
+| `vipune add <text>` | Store a memory (with type, status, conflict detection) |
+| `vipune search <query>` | Find memories by meaning (filters by type/status) |
 | `vipune get <id>` | Retrieve a memory by ID |
-| `vipune list` | List all memories |
+| `vipune list` | List memories (default: active only) |
 | `vipune delete <id>` | Delete a memory |
-| `vipune update <id> <text>` | Update a memory's content |
+| `vipune update <id> [text]` | Update content, metadata, type, or status |
+| `vipune validate <text>` | Check if text is within embedding token limits |
 | `vipune version` | Show version |
 
 [Complete CLI reference](docs/cli-reference.md) • [Quickstart guide](docs/quickstart.md) • [Search guide](docs/search.md) • [Architecture](docs/architecture.md)
@@ -197,7 +198,7 @@ vipune can also be used as a Rust crate for programmatic integration:
 ```toml
 # Cargo.toml
 [dependencies]
-vipune = "0.2"
+vipune = "0.3"
 ```
 
 ```rust
@@ -217,13 +218,15 @@ let memory_id = store.add(&project_id, "Alice works at Microsoft", None)
     .expect("Failed to add memory");
 
 // Search memories
-let results = store.search(&project_id, "where does alice work", 10, 0.0)
+let results = store.search(&project_id, "where does alice work", 10, 0.0, None, None)
     .expect("Failed to search");
 
 for memory in results {
     println!("{:.2}: {}", memory.similarity.unwrap_or(0.0), memory.content);
 }
 ```
+
+**v0.3 additions**: `MemoryType`, `MemoryStatus`, and filter parameters are available for type-aware memory management. See the [CLI reference](docs/cli-reference.md) for details.
 
 **See the crate documentation at [docs.rs](https://docs.rs/vipune) for complete API reference.**
 
@@ -296,6 +299,7 @@ vipune works with any agent that can run shell commands — no plugins, adapters
 - `0` - Success
 - `1` - Error (missing file, invalid input, etc.)
 - `2` - Conflicts detected (similar memories found)
+- `3` - Content too long (exceeds embedding token limit)
 
 ## Recency Scoring
 
