@@ -46,6 +46,13 @@ fn main() -> ExitCode {
     match run(&cli) {
         Ok(exit_code) => exit_code,
         Err(error) => {
+            // Map ContentTooLong errors to exit code 3
+            let exit_code = if matches!(error, Error::ContentTooLong { .. }) {
+                ExitCode::from(3)
+            } else {
+                ExitCode::from(1)
+            };
+
             if cli.json {
                 print_json(&ErrorResponse {
                     error: error.to_string(),
@@ -53,7 +60,7 @@ fn main() -> ExitCode {
             } else {
                 eprintln!("Error: {}", error);
             }
-            ExitCode::from(1)
+            exit_code
         }
     }
 }
@@ -186,6 +193,15 @@ mod tests {
     fn test_cli_parse_version() {
         let cli = Cli::parse_from(["vipune", "version"]);
         matches!(cli.command, Commands::Version);
+    }
+
+    #[test]
+    fn test_cli_parse_validate() {
+        let cli = Cli::parse_from(["vipune", "validate", "test text"]);
+        matches!(
+            cli.command,
+            Commands::Validate { text } if text == "test text"
+        );
     }
 
     #[test]

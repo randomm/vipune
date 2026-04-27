@@ -113,6 +113,17 @@ pub struct ConflictMemoryResponse {
     pub similarity: f64,
 }
 
+/// Response for token validation.
+#[derive(Serialize)]
+pub struct ValidateResponse {
+    /// Token count of the validated text.
+    pub token_count: usize,
+    /// Maximum allowed tokens for embedding.
+    pub max_tokens: usize,
+    /// Whether the text is within the embedding limit.
+    pub within_limit: bool,
+}
+
 /// Serialize a value as formatted JSON and print to stdout.
 ///
 /// Exits with status 1 if serialization fails.

@@ -17,6 +17,11 @@ use tokenizers::TruncationParams;
 /// All generated embeddings are 384-dimensional vectors.
 pub const EMBEDDING_DIMS: usize = 384;
 
+/// Maximum number of tokens allowed for embedding.
+///
+/// Content exceeding this limit will be rejected instead of silently truncated.
+pub const MAX_EMBEDDING_TOKENS: usize = 512;
+
 /// HuggingFace model ID for the embedding model.
 pub const EMBED_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 
@@ -111,6 +116,15 @@ impl EmbeddingEngine {
         })
     }
 
+    /// Count tokens in text without generating an embedding.
+    ///
+    /// Returns the number of tokens that would be generated for the given text.
+    /// This is used for validation before embedding operations.
+    pub fn token_count(&self, text: &str) -> Result<usize, Error> {
+        let encoding = self.tokenizer.encode(text, true)?;
+        Ok(encoding.get_ids().len())
+    }
+
     /// Generate embedding for a single text.
     ///
     /// Returns exactly 384-dimensional f32 vector, L2-normalized.
@@ -120,12 +134,22 @@ impl EmbeddingEngine {
     /// Empty strings return a zero vector. This provides graceful handling
     /// without requiring error recovery from callers.
     ///
-    /// # Token Truncation
+    /// # Token Limit
     ///
-    /// Texts exceeding 512 tokens are silently truncated via tokenizer truncation.
+    /// Texts exceeding 512 tokens are rejected with a ContentTooLong error instead
+    /// of being silently truncated.
     pub fn embed(&mut self, text: &str) -> Result<Vec<f32>, Error> {
         if text.is_empty() {
             return Ok(vec![0.0f32; EMBEDDING_DIMS]);
+        }
+
+        // Validate token count BEFORE embedding
+        let token_count = self.token_count(text)?;
+        if token_count > MAX_EMBEDDING_TOKENS {
+            return Err(Error::ContentTooLong {
+                token_count,
+                max_tokens: MAX_EMBEDDING_TOKENS,
+            });
         }
 
         let encoding = self.tokenizer.encode(text, true)?;
@@ -307,15 +331,153 @@ mod tests {
 
     #[ignore]
     #[test]
-    fn test_integration_long_text_truncation() {
+    fn test_integration_long_text_rejection() {
         let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
 
+        // Create text long enough to exceed 512 tokens
         let long_text = "This is a sentence. ".repeat(100);
-        let embedding = engine.embed(&long_text).expect("embed long text");
+        let encoding = engine
+            .tokenizer
+            .encode(long_text.as_str(), true)
+            .expect("encode long text");
+        let token_count = encoding.get_ids().len();
 
+        assert!(token_count > 512, "Test setup: need >512 tokens");
+
+        // Should error with ContentTooLong
+        let result = engine.embed(&long_text);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            Error::ContentTooLong {
+                token_count: tc,
+                max_tokens,
+            } => {
+                assert_eq!(tc, token_count);
+                assert_eq!(max_tokens, MAX_EMBEDDING_TOKENS);
+            }
+            _ => panic!("Expected ContentTooLong error"),
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn test_integration_boundary_511_tokens() {
+        let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
+
+        // Construct text with exactly 511 tokens
+        let mut text = String::new();
+        let mut token_count = 0;
+        while token_count < 511 {
+            let test_word = "word";
+            let encoding = engine
+                .tokenizer
+                .encode(format!("{} ", test_word).as_str(), true)
+                .unwrap();
+            let word_tokens = encoding.get_ids().len();
+
+            if token_count + word_tokens > 511 {
+                break;
+            }
+            text.push_str(test_word);
+            text.push_str(" ");
+            token_count += word_tokens;
+        }
+
+        assert_eq!(token_count, 511);
+
+        // Should succeed
+        let embedding = engine.embed(&text).expect("embed 511-token text");
         assert_eq!(embedding.len(), 384);
 
         let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 0.01);
+    }
+
+    #[ignore]
+    #[test]
+    fn test_integration_boundary_512_tokens() {
+        let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
+
+        // Construct text with exactly 512 tokens
+        let mut text = String::new();
+        let mut token_count = 0;
+        while token_count < 512 {
+            let test_word = "word";
+            let encoding = engine
+                .tokenizer
+                .encode(format!("{} ", test_word).as_str(), true)
+                .unwrap();
+            let word_tokens = encoding.get_ids().len();
+
+            if token_count + word_tokens > 512 {
+                break;
+            }
+            text.push_str(test_word);
+            text.push_str(" ");
+            token_count += word_tokens;
+        }
+
+        assert_eq!(token_count, 512);
+
+        // Should succeed
+        let embedding = engine.embed(&text).expect("embed 512-token text");
+        assert_eq!(embedding.len(), 384);
+
+        let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 0.01);
+    }
+
+    #[ignore]
+    #[test]
+    fn test_integration_boundary_513_tokens() {
+        let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
+
+        // Construct text with exactly 513 tokens
+        let mut text = String::new();
+        let mut token_count = 0;
+        while token_count < 513 {
+            let test_word = "word";
+            let encoding = engine
+                .tokenizer
+                .encode(format!("{} ", test_word).as_str(), true)
+                .unwrap();
+            let word_tokens = encoding.get_ids().len();
+
+            if token_count + word_tokens > 513 {
+                break;
+            }
+            text.push_str(test_word);
+            text.push_str(" ");
+            token_count += word_tokens;
+        }
+
+        assert_eq!(token_count, 513);
+
+        // Should fail with ContentTooLong
+        let result = engine.embed(&text);
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            Error::ContentTooLong {
+                token_count: tc,
+                max_tokens,
+            } => {
+                assert_eq!(tc, 513);
+                assert_eq!(max_tokens, MAX_EMBEDDING_TOKENS);
+            }
+            _ => panic!("Expected ContentTooLong error"),
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn test_token_count_method() {
+        let engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
+
+        let text = "hello world";
+        let token_count = engine.token_count(text).expect("count tokens");
+        assert!(token_count > 0);
+        assert!(token_count <= 512);
     }
 }

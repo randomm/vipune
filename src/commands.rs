@@ -4,7 +4,7 @@ use crate::errors::Error;
 use crate::memory::MemoryStore;
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
-use crate::{config, temporal};
+use crate::{config, embedding::EmbeddingEngine, temporal};
 use std::process::ExitCode;
 
 struct SearchContext {
@@ -17,6 +17,10 @@ struct SearchContext {
 /// Commands supported by vipune CLI.
 #[derive(clap::Subcommand)]
 pub enum Commands {
+    Validate {
+        /// Text to validate for embedding
+        text: String,
+    },
     Add {
         /// Memory text content
         text: String,
@@ -80,6 +84,7 @@ pub fn execute(
     json: bool,
 ) -> Result<ExitCode, Error> {
     match command {
+        Commands::Validate { text } => handle_validate(text, &config.embedding_model, json),
         Commands::Add {
             text,
             metadata,
@@ -110,6 +115,34 @@ pub fn execute(
         #[cfg(feature = "mcp")]
         Commands::Mcp => unreachable!("Mcp is handled before execute"),
     }
+}
+
+fn handle_validate(text: &str, model_id: &str, json: bool) -> Result<ExitCode, Error> {
+    let engine = EmbeddingEngine::new(model_id)?;
+    let token_count = engine.token_count(text)?;
+
+    if token_count > crate::embedding::MAX_EMBEDDING_TOKENS {
+        return Err(Error::ContentTooLong {
+            token_count,
+            max_tokens: crate::embedding::MAX_EMBEDDING_TOKENS,
+        });
+    }
+
+    if json {
+        print_json(&ValidateResponse {
+            token_count,
+            max_tokens: crate::embedding::MAX_EMBEDDING_TOKENS,
+            within_limit: true,
+        });
+    } else {
+        println!(
+            "Token count: {}/{} — within limit",
+            token_count,
+            crate::embedding::MAX_EMBEDDING_TOKENS
+        );
+    }
+
+    Ok(ExitCode::SUCCESS)
 }
 
 fn handle_add(
@@ -306,4 +339,25 @@ fn handle_version(json: bool) -> Result<ExitCode, Error> {
         println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_short_text() {
+        let short_text = "hello world";
+        let result = handle_validate(short_text, "not-a-real-model-should-fail", false);
+        // Should fail because model doesn't exist, not because of token count
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_long_text() {
+        let long_text = "a".repeat(1000);
+        let result = handle_validate(&long_text, "not-a-real-model-should-fail", false);
+        // Should fail because model doesn't exist, not because of token count
+        assert!(result.is_err());
+    }
 }
