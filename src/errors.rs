@@ -56,6 +56,13 @@ pub enum Error {
         actual_length: usize,
     },
 
+    /// Content exceeds maximum embedding token limit.
+    #[error("content exceeds {max_tokens}-token embedding limit (measured: {token_count} tokens)")]
+    ContentTooLong {
+        token_count: usize,
+        max_tokens: usize,
+    },
+
     /// Invalid timestamp in database record.
     #[error("Invalid timestamp format: {timestamp} ({error})")]
     InvalidTimestamp { timestamp: String, error: String },

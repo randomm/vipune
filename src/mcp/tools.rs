@@ -192,6 +192,13 @@ impl From<Error> for rmcp::ErrorData {
             Error::InvalidTimestamp { timestamp, error } => {
                 McpError::invalid_input(&format!("Invalid timestamp '{}': {}", timestamp, error))
             }
+            Error::ContentTooLong {
+                token_count,
+                max_tokens,
+            } => McpError::invalid_input(&format!(
+                "Content exceeds {}-token embedding limit (measured: {} tokens)",
+                max_tokens, token_count
+            )),
             // Not found → INVALID_REQUEST with not_found type
             Error::NotFound(msg) => rmcp::ErrorData::new(
                 rmcp::model::ErrorCode::INVALID_REQUEST,
