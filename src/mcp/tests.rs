@@ -132,4 +132,92 @@ mod tool_handler_tests {
         let list_str = serde_json::to_string(&list_value).unwrap();
         assert!(list_str.contains("rust is awesome"));
     }
+
+    /// Test that search results include metadata, project_id, and updated_at fields.
+    #[tokio::test]
+    async fn test_search_results_include_metadata_and_project_id() {
+        let (store, _dir) = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = super::super::tools::StoreWrapper::new(store.clone());
+        let project_id = "test-project";
+
+        // Ingest a memory with metadata
+        let metadata_json = serde_json::json!({"topic": "rust", "type": "fact"});
+        let metadata_str = serde_json::to_string(&metadata_json).unwrap();
+        let result = wrapper.ingest(project_id, "rust is awesome", &metadata_str, false);
+        assert!(result.is_ok());
+
+        // Search for it
+        let search_result = wrapper.search(project_id, "rust", 5);
+        assert!(search_result.is_ok());
+        let search_value = search_result.unwrap();
+
+        // Parse JSON to verify all fields are present
+        let search_str = serde_json::to_string(&search_value).unwrap();
+        assert!(search_str.contains("\"id\""));
+        assert!(search_str.contains("\"content\""));
+        assert!(search_str.contains("\"similarity\""));
+        assert!(search_str.contains("\"created_at\""));
+        assert!(search_str.contains("\"updated_at\""));
+        assert!(search_str.contains("\"project_id\""));
+        assert!(search_str.contains("\"metadata\""));
+        assert!(search_str.contains("rust is awesome"));
+        assert!(search_str.contains("test-project"));
+
+        // Verify the JSON structure by parsing it
+        let parsed: serde_json::Value = serde_json::from_str(&search_str).unwrap();
+        assert!(parsed.is_array());
+        let results = parsed.as_array().unwrap();
+        assert!(!results.is_empty());
+
+        let first_result = &results[0];
+        assert!(first_result.get("id").is_some());
+        assert!(first_result.get("content").is_some());
+        assert!(first_result.get("similarity").is_some());
+        assert!(first_result.get("created_at").is_some());
+        assert!(first_result.get("updated_at").is_some());
+        assert!(first_result.get("project_id").is_some());
+        assert!(first_result.get("metadata").is_some());
+
+        // Verify project_id matches
+        assert_eq!(
+            first_result["project_id"],
+            serde_json::Value::String("test-project".to_string())
+        );
+
+        // Verify metadata is parsed as a JSON object, not a string
+        assert_eq!(first_result["metadata"], metadata_json);
+    }
+
+    /// Test that search results serialize correctly when metadata is None.
+    #[tokio::test]
+    async fn test_search_results_with_null_metadata() {
+        let (store, _dir) = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = super::super::tools::StoreWrapper::new(store.clone());
+        let project_id = "test-project";
+
+        // Ingest a memory without metadata (null)
+        let result = wrapper.ingest(project_id, "simple fact", "null", false);
+        assert!(result.is_ok());
+
+        // Search for it
+        let search_result = wrapper.search(project_id, "simple", 5);
+        assert!(search_result.is_ok());
+        let search_value = search_result.unwrap();
+
+        // Parse JSON to verify metadata field is present and null
+        let search_str = serde_json::to_string(&search_value).unwrap();
+        assert!(search_str.contains("\"metadata\":null"));
+
+        // Verify the JSON structure by parsing it
+        let parsed: serde_json::Value = serde_json::from_str(&search_str).unwrap();
+        assert!(parsed.is_array());
+        let results = parsed.as_array().unwrap();
+        assert!(!results.is_empty());
+
+        let first_result = &results[0];
+        assert!(first_result.get("metadata").is_some());
+        assert_eq!(first_result["metadata"], serde_json::Value::Null);
+    }
 }

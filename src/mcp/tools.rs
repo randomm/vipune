@@ -80,11 +80,23 @@ impl StoreWrapper {
         let results: Vec<serde_json::Value> = memories
             .into_iter()
             .map(|m| {
+                // Parse metadata string to JSON value, or use null if None/invalid
+                let metadata_value = match m.metadata {
+                    Some(ref meta_str) if meta_str.trim() != "null" => {
+                        serde_json::from_str::<serde_json::Value>(meta_str)
+                            .unwrap_or_else(|_| serde_json::Value::String(meta_str.clone()))
+                    }
+                    _ => serde_json::Value::Null,
+                };
+
                 serde_json::json!({
                     "id": m.id,
                     "content": m.content,
                     "similarity": m.similarity.unwrap_or(0.0),
-                    "created_at": m.created_at
+                    "created_at": m.created_at,
+                    "updated_at": m.updated_at,
+                    "project_id": m.project_id,
+                    "metadata": metadata_value
                 })
             })
             .collect();
@@ -100,10 +112,22 @@ impl StoreWrapper {
         let results: Vec<serde_json::Value> = memories
             .into_iter()
             .map(|m| {
+                // Parse metadata string to JSON value, or use null if None/invalid
+                let metadata_value = match m.metadata {
+                    Some(ref meta_str) if meta_str.trim() != "null" => {
+                        serde_json::from_str::<serde_json::Value>(meta_str)
+                            .unwrap_or_else(|_| serde_json::Value::String(meta_str.clone()))
+                    }
+                    _ => serde_json::Value::Null,
+                };
+
                 serde_json::json!({
                     "id": m.id,
                     "content": m.content,
-                    "created_at": m.created_at
+                    "created_at": m.created_at,
+                    "updated_at": m.updated_at,
+                    "project_id": m.project_id,
+                    "metadata": metadata_value
                 })
             })
             .collect();
