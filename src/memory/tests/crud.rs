@@ -47,7 +47,8 @@ fn test_update_memory() {
         .insert("test-project", "original", &embedding_old, None)
         .unwrap();
 
-    db.update(&id, "updated", &embedding_new).unwrap();
+    db.update(&id, Some("updated"), Some(&embedding_new), None)
+        .unwrap();
 
     let memory = db.get(&id).unwrap().unwrap();
     assert_eq!(memory.content, "updated");
@@ -64,7 +65,7 @@ fn test_update_nonexistent() {
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
 
-    let result = db.update("does-not-exist", "content", &embedding);
+    let result = db.update("does-not-exist", Some("content"), Some(&embedding), None);
     assert!(result.is_err());
 }
 

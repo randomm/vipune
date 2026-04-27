@@ -283,7 +283,7 @@ fn test_update_with_empty_input_returns_error() {
     };
 
     // Try to update with empty string
-    let result = store.update(&memory_id, "");
+    let result = store.update(&memory_id, Some(""), None);
     assert!(result.is_err());
     if !matches!(result.as_ref().unwrap_err(), Error::EmptyInput) {
         panic!("Expected EmptyInput error");
@@ -312,7 +312,7 @@ fn test_update_with_oversized_input_returns_error() {
 
     // Try to update with oversized content
     let long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.update(&memory_id, &long_text);
+    let result = store.update(&memory_id, Some(&long_text), None);
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -993,9 +993,8 @@ fn test_update_text_only_preserves_metadata() {
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
     let config = Config::default();
-    let mut store =
-        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
-            .expect("Failed to create store");
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
 
     let project_id = "test-project";
 
@@ -1021,10 +1020,7 @@ fn test_update_text_only_preserves_metadata() {
     // Verify content updated but metadata preserved
     let memory = store.get(&id).expect("Failed to get").expect("Not found");
     assert_eq!(memory.content, "updated content");
-    assert_eq!(
-        memory.metadata.as_ref().unwrap(),
-        r#"{"tag": "important"}"#
-    );
+    assert_eq!(memory.metadata.as_ref().unwrap(), r#"{"tag": "important"}"#);
 
     std::fs::remove_file(db_path).ok();
 }
@@ -1036,9 +1032,8 @@ fn test_update_with_invalid_json_metadata_returns_error() {
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
     let config = Config::default();
-    let mut store =
-        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
-            .expect("Failed to create store");
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
 
     let project_id = "test-project";
 
@@ -1076,9 +1071,8 @@ fn test_update_with_empty_metadata_returns_error() {
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
     let config = Config::default();
-    let mut store =
-        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
-            .expect("Failed to create store");
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
 
     let project_id = "test-project";
 
@@ -1116,9 +1110,8 @@ fn test_update_with_whitespace_only_metadata_returns_error() {
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
     let config = Config::default();
-    let mut store =
-        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
-            .expect("Failed to create store");
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
 
     let project_id = "test-project";
 
@@ -1156,9 +1149,8 @@ fn test_update_metadata_only() {
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
     let config = Config::default();
-    let mut store =
-        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
-            .expect("Failed to create store");
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
 
     let project_id = "test-project";
 
@@ -1191,20 +1183,14 @@ fn test_update_both_text_and_metadata() {
     let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
 
     let config = Config::default();
-    let mut store =
-        MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
-            .expect("Failed to create store");
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
 
     let project_id = "test-project";
 
     // Add memory with old metadata
     let id = match store
-        .add_with_conflict(
-            project_id,
-            "old content",
-            Some(r#"{"old": "value"}"#),
-            true,
-        )
+        .add_with_conflict(project_id, "old content", Some(r#"{"old": "value"}"#), true)
         .expect("Failed to add")
     {
         vipune::AddResult::Added { id } => id,
@@ -1213,11 +1199,7 @@ fn test_update_both_text_and_metadata() {
 
     // Update both text and metadata
     store
-        .update(
-            &id,
-            Some("new content"),
-            Some(r#"{"new": "value"}"#),
-        )
+        .update(&id, Some("new content"), Some(r#"{"new": "value"}"#))
         .expect("Failed to update");
 
     // Verify both updated

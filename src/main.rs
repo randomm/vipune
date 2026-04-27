@@ -199,7 +199,15 @@ mod tests {
         );
 
         // Update with both
-        let cli = Cli::parse_from(["vipune", "update", "memory-id", "-t", "new", "-m", r#"{"key":"val"}"#]);
+        let cli = Cli::parse_from([
+            "vipune",
+            "update",
+            "memory-id",
+            "-t",
+            "new",
+            "-m",
+            r#"{"key":"val"}"#,
+        ]);
         matches!(
             cli.command,
             Commands::Update { id, text, metadata }

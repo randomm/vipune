@@ -244,7 +244,8 @@ mod tests {
 
         assert_eq!(db.search_bm25("original", "proj1", 10).unwrap().len(), 1);
 
-        db.update(&id, "updated text", &embedding).unwrap();
+        db.update(&id, Some("updated text"), Some(&embedding.as_slice()), None)
+            .unwrap();
         assert_eq!(db.search_bm25("updated", "proj1", 10).unwrap().len(), 1);
 
         db.delete(&id).unwrap();

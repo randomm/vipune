@@ -228,9 +228,8 @@ impl MemoryStore {
                 return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
             }
             // Validate that metadata is valid JSON
-            serde_json::from_str::<serde_json::Value>(meta).map_err(|e| {
-                Error::InvalidInput(format!("invalid metadata JSON: {}", e))
-            })?;
+            serde_json::from_str::<serde_json::Value>(meta)
+                .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
         }
 
         // If content is provided, validate and generate new embedding

@@ -464,7 +464,7 @@ mod tests {
         let embedding = vec![0.1f32; 384];
         let id = db.insert("proj1", "original", &embedding, None).unwrap();
 
-        db.update(&id, "updated", &embedding).unwrap();
+        db.update(&id, Some("updated"), Some(&embedding), None).unwrap();
 
         let m = db.get(&id).unwrap().unwrap();
         assert_eq!(m.content, "updated");
@@ -474,7 +474,7 @@ mod tests {
     fn test_update_nonexistent() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        let result = db.update("nonexistent", "content", &embedding);
+        let result = db.update("nonexistent", Some("content"), Some(&embedding), None);
         assert!(result.is_err());
     }
 
