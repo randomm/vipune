@@ -14,6 +14,28 @@ Use vipune to create a feedback cycle in your agent workflow:
 2. **Do the work** - Execute your task with the knowledge in mind
 3. **Store learnings** - `vipune add "important discovery"` after completing meaningful work
 
+### v0.3 memory types
+
+Memories can be categorized by type for routing and filtering:
+
+```bash
+# Store a guard (safety constraint)
+vipune add "Never deploy on Fridays" --memory-type guard
+
+# Store a procedure
+vipune add "Run cargo test before pushing" --memory-type procedure
+
+# Search only guard memories
+vipune search "deployment rules" --memory-type guard
+
+# Replace an outdated memory
+vipune add "Alice now works at Google" --supersedes <old-memory-id>
+```
+
+Available types: `fact` (default), `preference`, `procedure`, `guard`, `observation`
+
+Default search returns only `active` memories. Use `--include-candidates` to also see `candidate` memories.
+
 This pattern is especially useful for:
 - Avoiding duplicate implementations or analyses
 - Maintaining architectural consistency across multiple tasks
