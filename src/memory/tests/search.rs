@@ -271,7 +271,9 @@ fn test_integration_update_changes_embedding() {
         _ => panic!("Expected AddResult::Added"),
     };
 
-    store.update(&id, "completely different content").unwrap();
+    store
+        .update(&id, Some("completely different content"), None)
+        .unwrap();
 
     let memory = store.get(&id).unwrap().unwrap();
     assert_eq!(memory.content, "completely different content");
