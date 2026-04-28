@@ -17,6 +17,47 @@ pub struct StoreMemoryParams {
         description = "Optional structured labels like {\"topic\": \"auth\", \"type\": \"decision\"}."
     )]
     pub metadata: Option<serde_json::Value>,
+
+    /// Memory type: fact, preference, procedure, guard, observation (default: fact).
+    #[serde(default)]
+    #[schemars(
+        description = "Memory type: fact, preference, procedure, guard, observation (default: fact)."
+    )]
+    pub memory_type: Option<String>,
+
+    /// Memory status: active, candidate (default: active).
+    #[serde(default)]
+    #[schemars(description = "Memory status: active, candidate (default: active).")]
+    pub status: Option<String>,
+
+    /// ID of memory to supersede (creates new memory, marks old as superseded).
+    #[serde(default)]
+    #[schemars(
+        description = "ID of memory to supersede (creates new memory, marks old as superseded)."
+    )]
+    pub supersedes: Option<String>,
+}
+
+/// Parameters for the supersede_memory tool.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct SupersedeMemoryParams {
+    /// The new text content that replaces the old memory.
+    #[schemars(description = "The new text content that replaces the old memory.")]
+    pub new_text: String,
+
+    /// ID of the memory to supersede.
+    #[schemars(description = "ID of the memory to supersede.")]
+    pub old_memory_id: String,
+
+    /// Memory type for the new memory (default: same as old, or fact).
+    #[serde(default)]
+    #[schemars(description = "Memory type for the new memory (default: same as old, or fact).")]
+    pub memory_type: Option<String>,
+
+    /// Optional metadata for the new memory.
+    #[serde(default)]
+    #[schemars(description = "Optional metadata for the new memory.")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Parameters for the search_memories tool.
@@ -37,6 +78,17 @@ pub struct SearchMemoriesParams {
     /// Filter by statuses.
     #[schemars(description = "Filter by statuses (e.g., active, candidate).")]
     pub statuses: Option<Vec<String>>,
+
+    /// Recency weight for search results (0.0 = pure semantic, 1.0 = pure recency).
+    /// Defaults to config value (typically 0.3).
+    #[serde(default)]
+    #[schemars(description = "Recency weight (0.0-1.0). Default: config value (0.3).")]
+    pub recency_weight: Option<f64>,
+
+    /// Whether to use hybrid search (semantic + BM25). Default: config value.
+    #[serde(default)]
+    #[schemars(description = "Use hybrid search (semantic + BM25). Default: config value.")]
+    pub hybrid: Option<bool>,
 }
 
 /// Parameters for the list_memories tool.

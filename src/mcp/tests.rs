@@ -24,7 +24,12 @@ mod tool_handler_tests {
     #[test]
     fn test_mcp_server_initialization() {
         let (store, _dir) = create_test_store();
-        let _handler = ToolHandler::new(Arc::new(Mutex::new(store)), "test-project".to_string());
+        let config = Config::default();
+        let _handler = ToolHandler::new(
+            Arc::new(Mutex::new(store)),
+            "test-project".to_string(),
+            config,
+        );
     }
 
     /// Test that parameter structs are valid for serde.
@@ -33,12 +38,74 @@ mod tool_handler_tests {
         let params = StoreMemoryParams {
             text: "test memory".to_string(),
             metadata: Some(serde_json::json!({"topic": "test"})),
+            memory_type: None,
+            status: None,
+            supersedes: None,
         };
 
         let json = serde_json::to_string(&params).unwrap();
         let decoded: StoreMemoryParams = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.text, "test memory");
         assert!(decoded.metadata.is_some());
+        assert!(decoded.memory_type.is_none());
+        assert!(decoded.status.is_none());
+        assert!(decoded.supersedes.is_none());
+    }
+
+    /// Test that StoreMemoryParams with all fields serializes correctly.
+    #[test]
+    fn test_store_memory_params_with_all_fields() {
+        let params = StoreMemoryParams {
+            text: "test memory".to_string(),
+            metadata: Some(serde_json::json!({"topic": "test"})),
+            memory_type: Some("preference".to_string()),
+            status: Some("active".to_string()),
+            supersedes: Some("old-memory-id".to_string()),
+        };
+
+        let json = serde_json::to_string(&params).unwrap();
+        let decoded: StoreMemoryParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.text, "test memory");
+        assert!(decoded.metadata.is_some());
+        assert_eq!(decoded.memory_type, Some("preference".to_string()));
+        assert_eq!(decoded.status, Some("active".to_string()));
+        assert_eq!(decoded.supersedes, Some("old-memory-id".to_string()));
+    }
+
+    /// Test that SupersedeMemoryParams serializes and deserializes correctly.
+    #[test]
+    fn test_supersede_memory_params_serde() {
+        let params = SupersedeMemoryParams {
+            new_text: "updated memory".to_string(),
+            old_memory_id: "old-memory-id".to_string(),
+            memory_type: Some("fact".to_string()),
+            metadata: Some(serde_json::json!({"updated": true})),
+        };
+
+        let json = serde_json::to_string(&params).unwrap();
+        let decoded: SupersedeMemoryParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.new_text, "updated memory");
+        assert_eq!(decoded.old_memory_id, "old-memory-id");
+        assert_eq!(decoded.memory_type, Some("fact".to_string()));
+        assert_eq!(decoded.metadata, Some(serde_json::json!({"updated": true})));
+    }
+
+    /// Test that SupersedeMemoryParams with minimal fields works.
+    #[test]
+    fn test_supersede_memory_params_minimal() {
+        let params = SupersedeMemoryParams {
+            new_text: "updated memory".to_string(),
+            old_memory_id: "old-memory-id".to_string(),
+            memory_type: None,
+            metadata: None,
+        };
+
+        let json = serde_json::to_string(&params).unwrap();
+        let decoded: SupersedeMemoryParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.new_text, "updated memory");
+        assert_eq!(decoded.old_memory_id, "old-memory-id");
+        assert!(decoded.memory_type.is_none());
+        assert!(decoded.metadata.is_none());
     }
 
     /// Test search parameters serde.
@@ -49,6 +116,8 @@ mod tool_handler_tests {
             limit: Some(10),
             memory_types: None,
             statuses: None,
+            recency_weight: None,
+            hybrid: None,
         };
 
         let json = serde_json::to_string(&params).unwrap();
@@ -133,7 +202,7 @@ mod tool_handler_tests {
         assert!(json_str.contains("added"));
 
         // Search for it
-        let search_result = wrapper.search(project_id, "rust programming", 5, None, None);
+        let search_result = wrapper.search(project_id, "rust programming", 5, 0.0, None, None);
         assert!(search_result.is_ok());
         let search_value = search_result.unwrap();
         let search_str = serde_json::to_string(&search_value).unwrap();
@@ -162,7 +231,7 @@ mod tool_handler_tests {
         assert!(result.is_ok());
 
         // Search for it
-        let search_result = wrapper.search(project_id, "rust", 5, None, None);
+        let search_result = wrapper.search(project_id, "rust", 5, 0.0, None, None);
         assert!(search_result.is_ok());
         let search_value = search_result.unwrap();
 
@@ -216,7 +285,7 @@ mod tool_handler_tests {
         assert!(result.is_ok());
 
         // Search for it
-        let search_result = wrapper.search(project_id, "simple", 5, None, None);
+        let search_result = wrapper.search(project_id, "simple", 5, 0.0, None, None);
         assert!(search_result.is_ok());
         let search_value = search_result.unwrap();
 

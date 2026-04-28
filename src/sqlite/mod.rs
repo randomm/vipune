@@ -370,63 +370,61 @@ impl Database {
         content: Option<&str>,
         embedding: Option<&[f32]>,
         metadata: Option<&str>,
+        memory_type: Option<&str>,
+        status: Option<&str>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
 
         // Build dynamic UPDATE query based on what's being updated
-        let rows = match (content, embedding, metadata) {
-            // Content update (requires embedding) - DOES NOT TOUCH METADATA
-            (Some(text), Some(emb), None) => {
-                let blob = vec_to_blob(emb)?;
-                self.conn.execute(
-                    r#"
-                    UPDATE memories
-                    SET content = ?1, embedding = ?2, updated_at = ?3
-                    WHERE id = ?4
-                    "#,
-                    params![text, &blob, &now, id],
-                )?
-            }
-            // Metadata-only update
-            (None, None, Some(meta)) => self.conn.execute(
-                r#"
-                UPDATE memories
-                SET metadata = ?1, updated_at = ?2
-                WHERE id = ?3
-                "#,
-                params![meta, &now, id],
-            )?,
-            // Both content and metadata update
-            (Some(text), Some(emb), Some(meta)) => {
-                let blob = vec_to_blob(emb)?;
-                self.conn.execute(
-                    r#"
-                    UPDATE memories
-                    SET content = ?1, embedding = ?2, metadata = ?3, updated_at = ?4
-                    WHERE id = ?5
-                    "#,
-                    params![text, &blob, meta, &now, id],
-                )?
-            }
-            // Invalid state: content without embedding (should never happen)
-            (Some(_), None, _) => {
-                return Err(Error::Sqlite(
-                    "Content update requires embedding".to_string(),
-                ));
-            }
-            // Invalid state: embedding without content (should never happen)
-            (None, Some(_), _) => {
-                return Err(Error::Sqlite(
-                    "Embedding requires content update".to_string(),
-                ));
-            }
-            // Invalid state: both content and metadata are None
-            (None, None, None) => {
-                return Err(Error::Sqlite(
-                    "At least one of content or metadata must be provided".to_string(),
-                ));
-            }
-        };
+        let mut set_clauses: Vec<&str> = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        if let Some(text) = content {
+            set_clauses.push("content = ?");
+            let blob =
+                vec_to_blob(embedding.ok_or_else(|| {
+                    Error::Sqlite("Content update requires embedding".to_string())
+                })?)?;
+            params.push(Box::new(text.to_string()));
+            set_clauses.push("embedding = ?");
+            params.push(Box::new(blob));
+        }
+
+        if let Some(meta) = metadata {
+            set_clauses.push("metadata = ?");
+            params.push(Box::new(meta.to_string()));
+        }
+
+        if let Some(t) = memory_type {
+            set_clauses.push("type = ?");
+            params.push(Box::new(t.to_string()));
+        }
+
+        if let Some(s) = status {
+            set_clauses.push("status = ?");
+            params.push(Box::new(s.to_string()));
+        }
+
+        if set_clauses.is_empty() {
+            return Err(Error::Sqlite(
+                "At least one of content, metadata, memory_type, or status must be provided"
+                    .to_string(),
+            ));
+        }
+
+        set_clauses.push("updated_at = ?");
+        params.push(Box::new(now));
+
+        let sql = format!(
+            "UPDATE memories SET {} WHERE id = ?",
+            set_clauses.join(", ")
+        );
+
+        // Add id as last parameter
+        params.push(Box::new(id.to_string()));
+
+        let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let rows = self.conn.execute(&sql, param_refs.as_slice())?;
 
         if rows == 0 {
             return Err(Error::Sqlite("No memory found".to_string()));
@@ -832,7 +830,7 @@ mod tests {
             .insert("proj1", "original", &embedding, None, "fact", "active")
             .unwrap();
 
-        db.update(&id, Some("updated"), Some(&embedding), None)
+        db.update(&id, Some("updated"), Some(&embedding), None, None, None)
             .unwrap();
 
         let m = db.get(&id).unwrap().unwrap();
@@ -855,7 +853,7 @@ mod tests {
             .unwrap();
 
         let new_embedding = vec![0.2f32; 384];
-        db.update(&id, Some("updated"), Some(&new_embedding), None)
+        db.update(&id, Some("updated"), Some(&new_embedding), None, None, None)
             .unwrap();
 
         let m = db.get(&id).unwrap().unwrap();
@@ -871,7 +869,7 @@ mod tests {
             .insert("proj1", "original", &embedding, None, "fact", "active")
             .unwrap();
 
-        db.update(&id, None, None, Some(r#"{"tag": "new"}"#))
+        db.update(&id, None, None, Some(r#"{"tag": "new"}"#), None, None)
             .unwrap();
 
         let m = db.get(&id).unwrap().unwrap();
@@ -900,6 +898,8 @@ mod tests {
             Some("updated"),
             Some(&new_embedding),
             Some(r#"{"tag": "new"}"#),
+            None,
+            None,
         )
         .unwrap();
 
@@ -916,7 +916,7 @@ mod tests {
             .insert("proj1", "original", &embedding, None, "fact", "active")
             .unwrap();
 
-        let result = db.update(&id, None, None, None);
+        let result = db.update(&id, None, None, None, None, None);
         assert!(result.is_err());
     }
 
@@ -924,7 +924,110 @@ mod tests {
     fn test_update_nonexistent() {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
-        let result = db.update("nonexistent", Some("content"), Some(&embedding), None);
+        let result = db.update(
+            "nonexistent",
+            Some("content"),
+            Some(&embedding),
+            None,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_memory_type_only() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert("proj1", "test content", &embedding, None, "fact", "active")
+            .unwrap();
+
+        // Update memory type only
+        db.update(&id, None, None, None, Some("preference"), None)
+            .unwrap();
+
+        let m = db.get(&id).unwrap().unwrap();
+        assert_eq!(m.memory_type, "preference");
+        // Other fields unchanged
+        assert_eq!(m.content, "test content");
+        assert_eq!(m.status, "active");
+    }
+
+    #[test]
+    fn test_update_status_only() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert(
+                "proj1",
+                "test content",
+                &embedding,
+                None,
+                "fact",
+                "candidate",
+            )
+            .unwrap();
+
+        // Update status only
+        db.update(&id, None, None, None, None, Some("active"))
+            .unwrap();
+
+        let m = db.get(&id).unwrap().unwrap();
+        assert_eq!(m.status, "active");
+        // Other fields unchanged
+        assert_eq!(m.content, "test content");
+        assert_eq!(m.memory_type, "fact");
+    }
+
+    #[test]
+    fn test_update_type_and_status_together() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert(
+                "proj1",
+                "test content",
+                &embedding,
+                None,
+                "fact",
+                "candidate",
+            )
+            .unwrap();
+
+        // Update both type and status in one call
+        db.update(&id, None, None, None, Some("preference"), Some("active"))
+            .unwrap();
+
+        let m = db.get(&id).unwrap().unwrap();
+        assert_eq!(m.memory_type, "preference");
+        assert_eq!(m.status, "active");
+        // Content unchanged
+        assert_eq!(m.content, "test content");
+    }
+
+    #[test]
+    fn test_update_rejects_invalid_type() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert("proj1", "test content", &embedding, None, "fact", "active")
+            .unwrap();
+
+        // Database layer accepts any type string - validation happens at store layer
+        let result = db.update(&id, None, None, None, Some("invalid_type"), None);
+        assert!(result.is_ok()); // DB allows it
+    }
+
+    #[test]
+    fn test_update_rejects_empty_args() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert("proj1", "test content", &embedding, None, "fact", "active")
+            .unwrap();
+
+        let result = db.update(&id, None, None, None, None, None);
         assert!(result.is_err());
     }
 

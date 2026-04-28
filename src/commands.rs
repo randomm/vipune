@@ -13,6 +13,7 @@ struct SearchContext {
     limit: usize,
     recency: Option<f64>,
     hybrid: bool,
+    no_hybrid: bool,
     memory_type: Option<String>,
     status: Option<String>,
     include_candidates: bool,
@@ -64,6 +65,10 @@ pub enum Commands {
         /// Use hybrid search (semantic + BM25 with RRF fusion)
         #[arg(long)]
         hybrid: bool,
+
+        /// Disable hybrid search even when enabled in config
+        #[arg(long)]
+        no_hybrid: bool,
 
         /// Filter by memory type (comma-separated)
         #[arg(long)]
@@ -162,6 +167,7 @@ pub fn execute(
             limit,
             recency,
             hybrid,
+            no_hybrid,
             memory_type,
             status,
             include_candidates,
@@ -173,6 +179,7 @@ pub fn execute(
                 limit: *limit,
                 recency: *recency,
                 hybrid: *hybrid,
+                no_hybrid: *no_hybrid,
                 memory_type: memory_type.clone(),
                 status: status.clone(),
                 include_candidates: *include_candidates,
@@ -391,7 +398,8 @@ fn handle_search(
         .map(|v| v.iter().map(|s| s.as_str()).collect());
     let status_slice: Option<&[&str]> = status_strs.as_deref();
 
-    let memories = if opts.hybrid {
+    let use_hybrid = (opts.hybrid || config.hybrid) && !opts.no_hybrid;
+    let memories = if use_hybrid {
         store.search_hybrid(
             project_id,
             &opts.query,
@@ -527,13 +535,13 @@ fn handle_update(
     id: &str,
     text: Option<&str>,
     metadata: Option<&str>,
-    _memory_type: Option<&str>,
-    _status: Option<&str>,
+    memory_type: Option<&str>,
+    status: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    if text.is_none() && metadata.is_none() {
+    if text.is_none() && metadata.is_none() && memory_type.is_none() && status.is_none() {
         return Err(Error::InvalidInput(
-            "At least one of text or metadata must be provided".to_string(),
+            "At least one of text, metadata, memory_type, or status must be provided".to_string(),
         ));
     }
 
@@ -547,7 +555,7 @@ fn handle_update(
             .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
     }
 
-    store.update(id, text, metadata)?;
+    store.update(id, text, metadata, memory_type, status)?;
     if json {
         print_json(&UpdateResponse {
             status: "updated".to_string(),

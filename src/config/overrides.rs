@@ -15,12 +15,14 @@ pub fn apply_env_overrides(
     model_cache: &mut PathBuf,
     similarity_threshold: &mut f64,
     recency_weight: &mut f64,
+    hybrid: &mut bool,
 ) -> Result<(), Error> {
     env_parser::apply_database_path_override(database_path)?;
     env_parser::apply_embedding_model_override(embedding_model)?;
     env_parser::apply_model_cache_override(model_cache)?;
     env_parser::apply_similarity_threshold_override(similarity_threshold)?;
     env_parser::apply_recency_weight_override(recency_weight)?;
+    env_parser::apply_hybrid_override(hybrid)?;
     Ok(())
 }
 
@@ -37,6 +39,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
 
         unsafe {
@@ -51,6 +54,7 @@ mod tests {
         let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
+        let mut hybrid = false;
 
         apply_env_overrides(
             &mut database_path,
@@ -58,6 +62,7 @@ mod tests {
             &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
+            &mut hybrid,
         )
         .unwrap();
 
@@ -72,6 +77,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
     }
 
@@ -84,6 +90,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
 
         unsafe {
@@ -95,6 +102,7 @@ mod tests {
         let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
+        let mut hybrid = false;
 
         let result = apply_env_overrides(
             &mut database_path,
@@ -102,6 +110,7 @@ mod tests {
             &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
+            &mut hybrid,
         );
 
         assert!(matches!(result, Err(Error::Config(_))));
@@ -112,6 +121,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
     }
 
@@ -124,6 +134,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
 
         unsafe {
@@ -135,6 +146,7 @@ mod tests {
         let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
+        let mut hybrid = false;
 
         let result = apply_env_overrides(
             &mut database_path,
@@ -142,6 +154,7 @@ mod tests {
             &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
+            &mut hybrid,
         );
 
         assert!(matches!(result, Err(Error::Config(_))));
@@ -152,6 +165,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
     }
 
@@ -164,6 +178,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
 
         unsafe {
@@ -175,6 +190,7 @@ mod tests {
         let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
+        let mut hybrid = false;
 
         let result = apply_env_overrides(
             &mut database_path,
@@ -182,6 +198,7 @@ mod tests {
             &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
+            &mut hybrid,
         );
 
         assert!(matches!(result, Err(Error::Config(_))));
@@ -192,6 +209,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
     }
 
@@ -204,6 +222,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
 
         unsafe {
@@ -215,6 +234,7 @@ mod tests {
         let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
+        let mut hybrid = false;
 
         apply_env_overrides(
             &mut database_path,
@@ -222,6 +242,7 @@ mod tests {
             &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
+            &mut hybrid,
         )
         .unwrap();
 
@@ -233,6 +254,97 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
+        ]);
+    }
+
+    #[test]
+    fn test_hybrid_env_var_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
+        ]);
+
+        unsafe {
+            std::env::set_var("VIPUNE_HYBRID", "true");
+        }
+
+        let mut database_path = PathBuf::from("/default");
+        let mut embedding_model = "default/model".to_string();
+        let mut model_cache = PathBuf::from("/default/cache");
+        let mut similarity_threshold = 0.85;
+        let mut recency_weight = 0.3;
+        let mut hybrid = false;
+
+        apply_env_overrides(
+            &mut database_path,
+            &mut embedding_model,
+            &mut model_cache,
+            &mut similarity_threshold,
+            &mut recency_weight,
+            &mut hybrid,
+        )
+        .unwrap();
+
+        assert!(hybrid);
+
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
+        ]);
+    }
+
+    #[test]
+    fn test_hybrid_env_var_override_false() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
+        ]);
+
+        unsafe {
+            std::env::set_var("VIPUNE_HYBRID", "false");
+        }
+
+        let mut database_path = PathBuf::from("/default");
+        let mut embedding_model = "default/model".to_string();
+        let mut model_cache = PathBuf::from("/default/cache");
+        let mut similarity_threshold = 0.85;
+        let mut recency_weight = 0.3;
+        let mut hybrid = true;
+
+        apply_env_overrides(
+            &mut database_path,
+            &mut embedding_model,
+            &mut model_cache,
+            &mut similarity_threshold,
+            &mut recency_weight,
+            &mut hybrid,
+        )
+        .unwrap();
+
+        assert!(!hybrid);
+
+        cleanup_env_vars(&[
+            "VIPUNE_DATABASE_PATH",
+            "VIPUNE_EMBEDDING_MODEL",
+            "VIPUNE_MODEL_CACHE",
+            "VIPUNE_SIMILARITY_THRESHOLD",
+            "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
     }
 
@@ -245,6 +357,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
 
         unsafe {
@@ -256,6 +369,7 @@ mod tests {
         let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
+        let mut hybrid = false;
 
         let result = apply_env_overrides(
             &mut database_path,
@@ -263,6 +377,7 @@ mod tests {
             &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
+            &mut hybrid,
         );
 
         assert!(matches!(result, Err(Error::Config(_))));
@@ -273,6 +388,7 @@ mod tests {
             "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
+            "VIPUNE_HYBRID",
         ]);
     }
 }
