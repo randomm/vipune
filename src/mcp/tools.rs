@@ -220,6 +220,54 @@ impl StoreWrapper {
         Ok(serde_json::to_value(results)?)
     }
 
+    /// Search memories by hybrid (semantic + BM25 with RRF fusion).
+    #[allow(dead_code)] // Used when hybrid search is enabled in config
+    pub(crate) fn search_hybrid(
+        &self,
+        project_id: &str,
+        query: &str,
+        limit: usize,
+        recency_weight: f64,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
+    ) -> Result<serde_json::Value, Error> {
+        let mut store = self.0.lock().unwrap();
+        let memories = store.search_hybrid(
+            project_id,
+            query,
+            limit,
+            recency_weight,
+            memory_types,
+            statuses,
+        )?;
+
+        let results: Vec<serde_json::Value> = memories
+            .into_iter()
+            .map(|m| {
+                // Parse metadata string to JSON value, or use null if None/invalid
+                let metadata_value = match m.metadata {
+                    Some(ref meta_str) if meta_str.trim() != "null" => {
+                        serde_json::from_str::<serde_json::Value>(meta_str)
+                            .unwrap_or_else(|_| serde_json::Value::String(meta_str.clone()))
+                    }
+                    _ => serde_json::Value::Null,
+                };
+
+                serde_json::json!({
+                    "id": m.id,
+                    "content": m.content,
+                    "similarity": m.similarity.unwrap_or(0.0),
+                    "created_at": m.created_at,
+                    "updated_at": m.updated_at,
+                    "project_id": m.project_id,
+                    "metadata": metadata_value
+                })
+            })
+            .collect();
+
+        Ok(serde_json::to_value(results)?)
+    }
+
     /// List recent memories.
     pub(crate) fn list(
         &self,
@@ -479,18 +527,31 @@ impl ToolHandler {
         let status_slice: Option<&[&str]> = status_strs.as_deref();
 
         let recency_weight = params.recency_weight.unwrap_or(self.config.recency_weight);
+        let use_hybrid = params.hybrid.unwrap_or(self.config.hybrid);
 
-        let value = self
-            .store
-            .search(
-                &self.project_id,
-                &params.query,
-                limit,
-                recency_weight,
-                type_slice,
-                status_slice,
-            )
-            .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?;
+        let value = if use_hybrid {
+            self.store
+                .search_hybrid(
+                    &self.project_id,
+                    &params.query,
+                    limit,
+                    recency_weight,
+                    type_slice,
+                    status_slice,
+                )
+                .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
+        } else {
+            self.store
+                .search(
+                    &self.project_id,
+                    &params.query,
+                    limit,
+                    recency_weight,
+                    type_slice,
+                    status_slice,
+                )
+                .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
+        };
 
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string(&value).unwrap_or_default(),

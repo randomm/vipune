@@ -117,6 +117,7 @@ mod tool_handler_tests {
             memory_types: None,
             statuses: None,
             recency_weight: None,
+            hybrid: None,
         };
 
         let json = serde_json::to_string(&params).unwrap();

@@ -1262,3 +1262,285 @@ fn test_update_both_text_and_metadata() {
 
     std::fs::remove_file(db_path).ok();
 }
+
+/// Test that add_with_conflict creates independent active memories.
+///
+/// Note: This does NOT test the supersede lifecycle. Direct supersede testing requires
+/// Database-level access (not available through MemoryStore public API). This test
+/// verifies that multiple add_with_conflict calls create separate active memories.
+#[test]
+fn test_add_with_conflict_creates_multiple_active_memories() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
+
+    // Add memory A with type=fact, status=active using add_with_conflict (bypasses similarity check)
+    let memory_a_id = match store
+        .add_with_conflict(
+            &project_id,
+            "memory A content",
+            None,
+            true,
+            "fact",
+            "active",
+        )
+        .expect("Failed to add memory A")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Add another memory - both should be independent and active
+    let memory_b_id = match store
+        .add_with_conflict(
+            &project_id,
+            "memory B content",
+            None,
+            true,
+            "fact",
+            "active",
+        )
+        .expect("Failed to add memory B")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Verify both memories exist and are active
+    let memory_a = store
+        .get(&memory_a_id)
+        .expect("Failed to get memory A")
+        .expect("Memory A not found");
+    let memory_b = store
+        .get(&memory_b_id)
+        .expect("Failed to get memory B")
+        .expect("Memory B not found");
+
+    assert_eq!(memory_a.status, "active");
+    assert_eq!(memory_b.status, "active");
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that default search excludes candidate memories (only returns active).
+#[test]
+fn test_default_search_excludes_candidate() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
+
+    // Add active memory using add_with_conflict with force=true
+    let _active_id = match store
+        .add_with_conflict(&project_id, "active memory", None, true, "fact", "active")
+        .expect("Failed to add active")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Add candidate memory using add_with_conflict with force=true
+    let _candidate_id = match store
+        .add_with_conflict(
+            &project_id,
+            "candidate memory",
+            None,
+            true,
+            "fact",
+            "candidate",
+        )
+        .expect("Failed to add candidate")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Search with default status filter (statuses=None means active only)
+    let results = store
+        .search(&project_id, "memory", 10, 0.0, None, None)
+        .expect("Failed to search");
+
+    // Verify only active is returned
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].content, "active memory");
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that searching with explicit statuses includes both active and candidate.
+#[test]
+fn test_include_candidates_returns_both() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
+
+    // Add active memory
+    let _active_id = match store
+        .add_with_conflict(&project_id, "active memory", None, true, "fact", "active")
+        .expect("Failed to add active")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Add candidate memory
+    let _candidate_id = match store
+        .add_with_conflict(
+            &project_id,
+            "candidate memory",
+            None,
+            true,
+            "fact",
+            "candidate",
+        )
+        .expect("Failed to add candidate")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Search with explicit statuses=["active", "candidate"]
+    let statuses = ["active", "candidate"];
+    let results = store
+        .search(&project_id, "memory", 10, 0.0, None, Some(&statuses))
+        .expect("Failed to search");
+
+    // Verify both are returned
+    assert_eq!(results.len(), 2);
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that default list excludes non-active memories.
+#[test]
+fn test_default_list_excludes_non_active() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
+
+    // Add memories with various statuses using add_with_conflict with force=true
+    let _active_id = match store
+        .add_with_conflict(&project_id, "active memory", None, true, "fact", "active")
+        .expect("Failed to add active")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    let _candidate_id = match store
+        .add_with_conflict(
+            &project_id,
+            "candidate memory",
+            None,
+            true,
+            "fact",
+            "candidate",
+        )
+        .expect("Failed to add candidate")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    let _deprecated_id = match store
+        .add_with_conflict(
+            &project_id,
+            "deprecated memory",
+            None,
+            true,
+            "fact",
+            "deprecated",
+        )
+        .expect("Failed to add deprecated")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // List with statuses=None (default = active only)
+    let results = store
+        .list(&project_id, 10, None, None)
+        .expect("Failed to list");
+
+    // Verify only active returned
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].content, "active memory");
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that hybrid search respects status filter (BM25 filter fix from #102).
+#[test]
+fn test_hybrid_search_respects_status_filter() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
+
+    // Add active memory
+    let _active_id = match store
+        .add_with_conflict(
+            &project_id,
+            "rust programming language",
+            None,
+            true,
+            "fact",
+            "active",
+        )
+        .expect("Failed to add active")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Add candidate memory with similar text (would match BM25 if candidate was included)
+    let _candidate_id = match store
+        .add_with_conflict(
+            &project_id,
+            "old rust programming info",
+            None,
+            true,
+            "fact",
+            "candidate",
+        )
+        .expect("Failed to add candidate")
+    {
+        vipune::AddResult::Added { id } => id,
+        _ => panic!("Expected AddResult::Added"),
+    };
+
+    // Hybrid search with statuses=None (default = active only)
+    let results = store
+        .search_hybrid(&project_id, "rust programming", 10, 0.0, None, None)
+        .expect("Failed to search hybrid");
+
+    // Verify only active memories in results
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].content, "rust programming language");
+    assert_eq!(results[0].status, "active");
+
+    std::fs::remove_file(db_path).ok();
+}

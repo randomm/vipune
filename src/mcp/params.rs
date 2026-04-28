@@ -84,6 +84,11 @@ pub struct SearchMemoriesParams {
     #[serde(default)]
     #[schemars(description = "Recency weight (0.0-1.0). Default: config value (0.3).")]
     pub recency_weight: Option<f64>,
+
+    /// Whether to use hybrid search (semantic + BM25). Default: config value.
+    #[serde(default)]
+    #[schemars(description = "Use hybrid search (semantic + BM25). Default: config value.")]
+    pub hybrid: Option<bool>,
 }
 
 /// Parameters for the list_memories tool.

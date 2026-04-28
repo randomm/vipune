@@ -26,6 +26,8 @@ pub struct ConfigFile {
     /// Recency weight for search ranking.
     #[serde(default = "default_recency_weight")]
     pub recency_weight: f64,
+    // Note: `hybrid` is intentionally NOT in ConfigFile.
+    // Hybrid search default is controlled via VIPUNE_HYBRID env var or --hybrid CLI flag only.
 }
 
 fn default_threshold() -> f64 {

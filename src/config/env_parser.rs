@@ -72,6 +72,21 @@ pub fn apply_recency_weight_override(recency_weight: &mut f64) -> Result<(), Err
     Ok(())
 }
 
+/// Apply VIPUNE_HYBRID environment variable override.
+pub fn apply_hybrid_override(hybrid: &mut bool) -> Result<(), Error> {
+    if let Ok(val) = std::env::var("VIPUNE_HYBRID") {
+        match val.to_ascii_lowercase().as_str() {
+            "true" | "1" => *hybrid = true,
+            "false" | "0" | "" => *hybrid = false,
+            _ => {
+                // Invalid value — keep default, could log warning
+                // For consistency with other env vars, just keep default
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

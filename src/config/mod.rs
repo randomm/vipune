@@ -52,6 +52,10 @@ pub struct Config {
     /// Weight applied to recency in search ranking (0.0 = ignore time, 1.0 = prioritize recent).
     #[serde(default)]
     pub recency_weight: f64,
+
+    /// Whether to use hybrid search (semantic + BM25) by default.
+    #[serde(default)]
+    pub hybrid: bool,
 }
 
 impl Default for Config {
@@ -70,6 +74,7 @@ impl Default for Config {
             model_cache: vipune_dir.join("models"),
             similarity_threshold: 0.85,
             recency_weight: 0.3,
+            hybrid: false,
         }
     }
 }
@@ -93,6 +98,7 @@ impl Config {
             &mut config.model_cache,
             &mut config.similarity_threshold,
             &mut config.recency_weight,
+            &mut config.hybrid,
         )?;
 
         config.validate()?;
@@ -166,6 +172,7 @@ mod tests {
         assert!(config.model_cache.ends_with(".vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
         assert_eq!(config.recency_weight, 0.3);
+        assert!(!config.hybrid);
     }
 
     #[test]
