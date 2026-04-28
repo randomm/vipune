@@ -1544,3 +1544,87 @@ fn test_hybrid_search_respects_status_filter() {
 
     std::fs::remove_file(db_path).ok();
 }
+
+/// Test that MemoryStore::supersede correctly supersedes an old memory through the public API.
+///
+/// This verifies the full supersede lifecycle through the public MemoryStore interface:
+/// 1. Creates an original memory
+/// 2. Calls store.supersede() to create a new memory that supersedes it
+/// 3. Verifies the old memory has status "superseded" and superseded_by set
+/// 4. Verifies the new memory is created with correct content and status "active"
+#[test]
+fn test_supersede_through_public_api() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
+
+    // Step 1: Create an original memory
+    let original_id = match store.add_with_conflict(
+        &project_id,
+        "original memory content",
+        None,
+        true,
+        "fact",
+        "active",
+    ) {
+        Ok(vipune::AddResult::Added { id }) => id,
+        Ok(other) => panic!("Expected Added, got {:?}", other),
+        Err(e) => panic!("Failed to add memory: {}", e),
+    };
+
+    // Verify original is active
+    let original = store
+        .get(&original_id)
+        .expect("Failed to get original")
+        .expect("Original memory not found");
+    assert_eq!(original.status, "active");
+    assert_eq!(original.content, "original memory content");
+
+    // Step 2: Supersede the original memory through public API
+    let new_id = store
+        .supersede(
+            &project_id,
+            "updated memory content",
+            Some(r#"{"updated": true}"#),
+            "fact",
+            &original_id,
+        )
+        .expect("Failed to supersede");
+
+    // IDs should be different
+    assert_ne!(new_id, original_id);
+
+    // Step 3: Verify old memory is now superseded
+    let superseded = store
+        .get(&original_id)
+        .expect("Failed to get superseded memory")
+        .expect("Superseded memory not found");
+    assert_eq!(superseded.status, "superseded");
+    assert_eq!(
+        superseded
+            .superseded_by
+            .as_ref()
+            .expect("Missing superseded_by"),
+        &new_id
+    );
+
+    // Step 4: Verify new memory exists and is active
+    let new_memory = store
+        .get(&new_id)
+        .expect("Failed to get new memory")
+        .expect("New memory not found");
+    assert_eq!(new_memory.status, "active");
+    assert_eq!(new_memory.content, "updated memory content");
+    assert_eq!(
+        new_memory.metadata.as_ref().expect("Missing metadata"),
+        r#"{"updated": true}"#
+    );
+    assert_eq!(new_memory.memory_type, "fact");
+
+    std::fs::remove_file(db_path).ok();
+}

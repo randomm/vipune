@@ -487,4 +487,62 @@ impl MemoryStore {
 
         Ok(BatchIngestResult { results })
     }
+
+    #[must_use = "handle the error or results may be lost"]
+    /// Supersede an existing memory with a new one.
+    ///
+    /// Atomically replaces the old memory (marked as "superseded") with a new memory
+    /// that supersedes it. Both memories remain in the database but the old one
+    /// has status "superseded" and superseded_by pointing to the new ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `project_id` - Project identifier (e.g., git repo URL or user-defined)
+    /// * `content` - Text content for the new memory (1 to 100,000 characters)
+    /// * `metadata` - Optional JSON metadata string
+    /// * `memory_type` - Memory type string (fact, preference, procedure, guard, observation)
+    /// * `old_id` - ID of the memory to supersede
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(new_id)` - ID of the newly created memory
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Input is empty
+    /// - Input exceeds 100,000 characters
+    /// - memory_type is invalid
+    /// - old_id does not exist or belongs to a different project
+    /// - Embedding generation fails
+    /// - Database operations fail
+    pub fn supersede(
+        &mut self,
+        project_id: &str,
+        content: &str,
+        metadata: Option<&str>,
+        memory_type: &str,
+        old_id: &str,
+    ) -> Result<String, Error> {
+        Self::validate_input_length(content)?;
+
+        // Validate memory_type
+        crate::memory::lifecycle::MemoryType::from_str(memory_type)?;
+
+        // Use mock embedding if embedder is not loaded (test mode)
+        let embedding = if self.embedder.is_none() {
+            mock_embedding_for_content(content)
+        } else {
+            self.embedder()?.embed(content)?
+        };
+
+        Ok(self.db.supersede(
+            project_id,
+            content,
+            &embedding,
+            metadata,
+            memory_type,
+            old_id,
+        )?)
+    }
 }

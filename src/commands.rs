@@ -285,22 +285,7 @@ fn handle_add(
 
     // If supersedes is provided, use supersede flow
     if let Some(old_id) = supersedes {
-        // Use mock embedding if embedder is not loaded (test mode)
-        let embedding = if store.embedder.is_none() {
-            crate::memory::crud::mock_embedding_for_content(text)
-        } else {
-            store.embedder()?.embed(text)?
-        };
-
-        let metadata_str = metadata.map(|s| s.to_string());
-        let new_id = store.db.supersede(
-            project_id,
-            text,
-            &embedding,
-            metadata_str.as_deref(),
-            memory_type,
-            old_id,
-        )?;
+        let new_id = store.supersede(project_id, text, metadata, memory_type, old_id)?;
 
         if json {
             print_json(&AddResponse {
