@@ -139,10 +139,7 @@ impl StoreWrapper {
         let embedding = if store.embedder.is_none() {
             crate::memory::crud::mock_embedding_for_content(new_text)
         } else {
-            match store.embedder()?.embed(new_text) {
-                Ok(e) => e,
-                Err(err) => return Err(err.into()),
-            }
+            store.embedder()?.embed(new_text)?
         };
 
         let metadata_str = if metadata == "null" {
