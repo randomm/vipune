@@ -198,7 +198,7 @@ vipune can also be used as a Rust crate for programmatic integration:
 ```toml
 # Cargo.toml
 [dependencies]
-vipune = "0.3"
+vipune = "0.3.0"
 ```
 
 ```rust
@@ -226,7 +226,7 @@ for memory in results {
 }
 ```
 
-**v0.3 additions**: `MemoryType`, `MemoryStatus`, and filter parameters are available for type-aware memory management. See the [CLI reference](docs/cli-reference.md) for details.
+**v0.3 features**: `MemoryType`, `MemoryStatus`, `supersedes` flag, and filter parameters are available for type-aware memory management. See the [CLI reference](docs/cli-reference.md) for details.
 
 **See the crate documentation at [docs.rs](https://docs.rs/vipune) for complete API reference.**
 
@@ -246,6 +246,7 @@ vipune works with zero configuration. All paths use the user's home directory:
 - `VIPUNE_PROJECT` - Project identifier (overrides auto-detection)
 - `VIPUNE_SIMILARITY_THRESHOLD` - Conflict detection threshold, 0.0-1.0 (default: `0.85`)
 - `VIPUNE_RECENCY_WEIGHT` - Recency bias in search results, 0.0-1.0 (default: `0.3`)
+- `VIPUNE_HYBRID` - Enable hybrid search (semantic + BM25), true/false or 1/0
 
 **Config file (`~/.config/vipune/config.toml`):**
 ```toml
@@ -284,8 +285,9 @@ Add to your Cursor MCP configuration with the same JSON structure.
 ### Available Tools
 
 - **store_memory**: Store information for later recall
-- **search_memories**: Find memories by meaning
+- **search_memories**: Find memories by meaning (supports `hybrid` param)
 - **list_memories**: List recent memories
+- **supersede_memory**: Replace an existing memory with new content
 
 ## Agent Integration
 

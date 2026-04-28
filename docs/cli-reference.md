@@ -106,6 +106,7 @@ vipune search <query> [--limit <n>] [--recency <weight>] [--hybrid] [--memory-ty
 - `-l, --limit <n>` - Maximum results to return (default: `5`)
 - `--recency <weight>` - Recency bias for scoring, 0.0 to 1.0 (default: from config, typically `0.3`)
 - `--hybrid` - Enables hybrid search combining semantic similarity with FTS5 full-text search using Reciprocal Rank Fusion (RRF)
+- `--no-hybrid` - Disables hybrid search even when enabled in config (useful to force pure semantic search)
 - `--memory-type <types>` - Filter by memory type (comma-separated, e.g., `guard,procedure`)
 - `--status <statuses>` - Filter by status (comma-separated, e.g., `active,candidate`)
 - `--include-candidates` - Shorthand to include both `active` and `candidate` memories
@@ -407,6 +408,7 @@ vipune mcp
 | `store_memory` | Store information for later recall |
 | `search_memories` | Find memories by meaning, with type/status filters |
 | `list_memories` | List recent memories, with type/status filters |
+| `supersede_memory` | Replace an existing memory with new content |
 
 **Exit codes:**
 - `0` - Success
@@ -417,12 +419,23 @@ vipune mcp
 `store_memory` accepts:
 - `text` — the information to remember (required)
 - `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
+- `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
+- `status` — initial status: `active` (default) or `candidate`
+- `supersedes` — ID of memory to supersede (atomically replaces old memory)
 
-Note: Memory type, status, and supersede are available via CLI but not yet exposed in the MCP `store_memory` tool.
+`supersede_memory` accepts:
+- `new_text` — the new content that replaces the old memory (required)
+- `old_memory_id` — ID of the memory to supersede (required)
+- `memory_type` — optional type for the new memory (default: `fact`)
+- `metadata` — optional structured labels as JSON
 
 `search_memories` and `list_memories` accept optional:
 - `memory_types` — array of types to filter by (e.g., `["guard", "procedure"]`)
-- `status` — array of statuses to filter by (e.g., `["active", "candidate"]`)
+- `statuses` — array of statuses to filter by (e.g., `["active", "candidate"]`)
+
+`search_memories` also accepts:
+- `recency_weight` — recency bias for scoring, 0.0 to 1.0 (default: config value)
+- `hybrid` — use hybrid search (semantic + BM25), true/false (default: config value)
 
 **Example MCP configuration (Claude Code):**
 ```json
