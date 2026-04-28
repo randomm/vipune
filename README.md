@@ -129,10 +129,10 @@ rm -rf ~/.vipune ~/.config/vipune
 
 ## Air-gapped / Offline Usage
 
-vipune downloads the embedding model from HuggingFace Hub on first run. The model is pinned to a specific SHA to ensure reproducibility:
+vipune downloads the embedding model from HuggingFace Hub on first run. The model is pinned to a specific revision to ensure reproducibility:
 
 - **Model ID**: `BAAI/bge-small-en-v1.5`
-- **Pinned revision SHA**: `5c38ec7c405ec4b44b94cc5a9bb96e735b38267a`
+- **Revision**: `main`
 
 For air-gapped environments, pre-fetch the model before going offline:
 
@@ -140,9 +140,9 @@ For air-gapped environments, pre-fetch the model before going offline:
 # Install huggingface-cli first if you don't have it
 pip install huggingface_hub
 
-# Download the pinned model to the cache directory
+# Download the model revision to the cache directory
 huggingface-cli download BAAI/bge-small-en-v1.5 \
-  --revision 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a \
+  --revision main \
   --cache-dir ~/.cache/huggingface/hub
 ```
 

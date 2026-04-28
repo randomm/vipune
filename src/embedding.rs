@@ -25,8 +25,8 @@ pub const MAX_EMBEDDING_TOKENS: usize = 512;
 /// HuggingFace model ID for the embedding model.
 pub const EMBED_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 
-/// Pinned revision SHA for the embedding model to ensure reproducibility.
-pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
+/// Branch or revision for the embedding model.
+pub const EMBED_MODEL_REVISION: &str = "main";
 
 /// ONNX embedding engine for synchronous text-to-vector conversion.
 ///
@@ -261,8 +261,7 @@ mod tests {
     #[test]
     fn test_embed_model_constants() {
         assert_eq!(EMBED_MODEL_ID, "BAAI/bge-small-en-v1.5");
-        assert_eq!(EMBED_MODEL_REVISION.len(), 40); // SHA-1 is 40 hex chars
-        assert!(EMBED_MODEL_REVISION.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(!EMBED_MODEL_REVISION.is_empty());
     }
 
     #[test]
