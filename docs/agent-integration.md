@@ -69,6 +69,12 @@ After completing work, store important findings:
 - `vipune list` shows recent memories
 - `vipune --help` displays all available commands
 
+**MCP tools** are also available (via `vipune mcp`):
+- `store_memory(text, metadata?, memory_type?, status?, supersedes?)` — store with optional type/status/supersede
+- `search_memories(query, limit?, memory_types?, statuses?, recency_weight?, hybrid?)` — find by meaning
+- `list_memories(limit?, memory_types?, statuses?)` — list recent
+- `supersede_memory(new_text, old_memory_id, memory_type?, metadata?)` — replace existing memory
+
 Keep entries focused: one atomic fact per memory for better retrieval.
 
 This memory persists across sessions and is scoped to your git project.
