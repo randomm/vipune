@@ -154,7 +154,9 @@ impl MemoryStore {
         )?;
 
         // 4. Run BM25 search
-        let bm25_results = self.db.search_bm25(query, project_id, candidate_pool)?;
+        let bm25_results =
+            self.db
+                .search_bm25(query, project_id, candidate_pool, memory_types, statuses)?;
 
         // 5. Fuse with RRF (use default config)
         let fused = rrf::rrf_fusion(vec![semantic_results, bm25_results], None)?;

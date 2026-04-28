@@ -179,7 +179,9 @@ fn test_hybrid_search_basic() {
     let semantic_results = db
         .search("test-project", &embedding_rust, 50, None, None)
         .unwrap();
-    let bm25_results = db.search_bm25("rust", "test-project", 50).unwrap();
+    let bm25_results = db
+        .search_bm25("rust", "test-project", 50, None, None)
+        .unwrap();
 
     // Verify semantic search finds rust-related content
     assert!(!semantic_results.is_empty());
@@ -225,7 +227,7 @@ fn test_hybrid_search_empty_results() {
         .search("test-project", &vec![0.1f32; 384], 50, None, None)
         .unwrap();
     let bm25_results = db
-        .search_bm25("nonexistent term xyz", "test-project", 50)
+        .search_bm25("nonexistent term xyz", "test-project", 50, None, None)
         .unwrap();
 
     // One may be empty, but fusion should handle it
@@ -357,7 +359,7 @@ fn test_integration_update_changes_embedding() {
     };
 
     store
-        .update(&id, Some("completely different content"), None)
+        .update(&id, Some("completely different content"), None, None, None)
         .unwrap();
 
     let memory = store.get(&id).unwrap().unwrap();

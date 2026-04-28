@@ -1,7 +1,6 @@
 //! FTS5 full-text search and BM25 ranking (Issue #40).
 
 use super::{Database, Error, Memory};
-use rusqlite::params;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -118,10 +117,25 @@ impl Database {
 
     /// Search memories using FTS5 BM25 ranking.
     ///
+    /// # Arguments
+    ///
+    /// * `query` - Search query text
+    /// * `project_id` - Project identifier
+    /// * `limit` - Maximum number of results
+    /// * `memory_types` - Optional filter by memory types (None = no filter)
+    /// * `statuses` - Optional filter by statuses (None = default to 'active')
+    ///
     /// # Errors
     ///
     /// Returns error if the FTS5 search fails.
-    pub fn search_bm25(&self, query: &str, project_id: &str, limit: usize) -> Result<Vec<Memory>> {
+    pub fn search_bm25(
+        &self,
+        query: &str,
+        project_id: &str,
+        limit: usize,
+        memory_types: Option<&[&str]>,
+        statuses: Option<&[&str]>,
+    ) -> Result<Vec<Memory>> {
         super::search::validate_limit(limit)?;
 
         // Auto-initialize FTS5 if not available
@@ -136,20 +150,75 @@ impl Database {
             return Ok(Vec::new());
         }
 
-        let sql = r#"
+        let mut where_clauses = vec![
+            "memories_fts MATCH ?1".to_string(),
+            "m.project_id = ?2".to_string(),
+        ];
+        let mut param_index = 3usize;
+
+        // Status filter (default to active if None)
+        if let Some(statuses) = statuses {
+            if !statuses.is_empty() {
+                let placeholders: Vec<String> = (0..statuses.len())
+                    .map(|i| format!("?{}", param_index + i))
+                    .collect();
+                where_clauses.push(format!("m.status IN ({})", placeholders.join(", ")));
+                param_index += statuses.len();
+            }
+        } else {
+            where_clauses.push(format!("m.status = ?{}", param_index));
+            param_index += 1;
+        }
+
+        // Type filter (only if explicitly provided)
+        if let Some(types) = memory_types {
+            if !types.is_empty() {
+                let placeholders: Vec<String> = (0..types.len())
+                    .map(|i| format!("?{}", param_index + i))
+                    .collect();
+                where_clauses.push(format!("m.type IN ({})", placeholders.join(", ")));
+                param_index += types.len();
+            }
+        }
+
+        let where_clause = where_clauses.join(" AND ");
+        let sql = format!(
+            r#"
             SELECT m.id, m.project_id, m.content, m.metadata, m.embedding, m.created_at, m.updated_at, m.type, m.status, m.superseded_by,
                    bm25(memories_fts) as bm25_score
             FROM memories_fts
             JOIN memories m ON m.rowid = memories_fts.rowid
-            WHERE memories_fts MATCH ? AND m.project_id = ?
+            WHERE {}
             ORDER BY bm25(memories_fts)
-            LIMIT ?
-        "#;
+            LIMIT ?{}
+            "#,
+            where_clause, param_index
+        );
 
-        let mut stmt = self.conn.prepare(sql)?;
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&escaped_query, &project_id];
+        if let Some(statuses) = statuses {
+            if statuses.is_empty() {
+                // explicit empty = no status filter, but we didn't add a clause
+            } else {
+                for s in statuses {
+                    params.push(s);
+                }
+            }
+        } else {
+            params.push(&"active");
+        }
+        if let Some(types) = memory_types {
+            for t in types {
+                params.push(t);
+            }
+        }
+        let limit_i64 = limit as i64;
+        params.push(&limit_i64);
 
         let memories: rusqlite::Result<Vec<Memory>> = stmt
-            .query_map(params![escaped_query, project_id, limit as i64], |row| {
+            .query_map(params.as_slice(), |row| {
                 let blob: Vec<u8> = row.get(4)?;
                 let embedding = super::embedding::blob_to_vec(&blob).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
@@ -240,7 +309,7 @@ mod tests {
         db.insert("proj1", "python data", &embedding, None, "fact", "active")
             .unwrap();
 
-        let results = db.search_bm25("rust", "proj1", 10).unwrap();
+        let results = db.search_bm25("rust", "proj1", 10, None, None).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].content.contains("rust"));
     }
@@ -253,21 +322,46 @@ mod tests {
             .insert("proj1", "original text", &embedding, None, "fact", "active")
             .unwrap();
 
-        assert_eq!(db.search_bm25("original", "proj1", 10).unwrap().len(), 1);
+        assert_eq!(
+            db.search_bm25("original", "proj1", 10, None, None)
+                .unwrap()
+                .len(),
+            1
+        );
 
-        db.update(&id, Some("updated text"), Some(&embedding.as_slice()), None)
-            .unwrap();
-        assert_eq!(db.search_bm25("updated", "proj1", 10).unwrap().len(), 1);
+        db.update(
+            &id,
+            Some("updated text"),
+            Some(&embedding.as_slice()),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            db.search_bm25("updated", "proj1", 10, None, None)
+                .unwrap()
+                .len(),
+            1
+        );
 
         db.delete(&id).unwrap();
-        assert_eq!(db.search_bm25("updated", "proj1", 10).unwrap().len(), 0);
+        assert_eq!(
+            db.search_bm25("updated", "proj1", 10, None, None)
+                .unwrap()
+                .len(),
+            0
+        );
     }
 
     #[test]
     fn test_fts5_limit_validation() {
         let db = create_test_db();
-        assert!(db.search_bm25("test", "proj1", 0).is_err());
-        assert!(db.search_bm25("test", "proj1", 100_000).is_err());
+        assert!(db.search_bm25("test", "proj1", 0, None, None).is_err());
+        assert!(
+            db.search_bm25("test", "proj1", 100_000, None, None)
+                .is_err()
+        );
     }
 
     #[test]
@@ -303,7 +397,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            db.search_bm25("test with \"quotes\"", "proj1", 10)
+            db.search_bm25("test with \"quotes\"", "proj1", 10, None, None)
                 .unwrap()
                 .len(),
             1
@@ -311,7 +405,7 @@ mod tests {
 
         // Test that backslash in query is properly escaped
         assert_eq!(
-            db.search_bm25("test with\\slash", "proj1", 10)
+            db.search_bm25("test with\\slash", "proj1", 10, None, None)
                 .unwrap()
                 .len(),
             1
@@ -326,7 +420,7 @@ mod tests {
             .unwrap();
 
         // Empty query returns no results
-        let results = db.search_bm25("", "proj1", 10).unwrap();
+        let results = db.search_bm25("", "proj1", 10, None, None).unwrap();
         assert_eq!(results.len(), 0);
     }
 
@@ -354,7 +448,9 @@ mod tests {
         .unwrap();
 
         // Multi-word phrase should find matching content
-        let results = db.search_bm25("rust programming", "proj1", 10).unwrap();
+        let results = db
+            .search_bm25("rust programming", "proj1", 10, None, None)
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].content.contains("programming"));
     }
@@ -374,7 +470,7 @@ mod tests {
         .unwrap();
 
         // Test basic Unicode matching
-        let results = db.search_bm25("café", "proj1", 10).unwrap();
+        let results = db.search_bm25("café", "proj1", 10, None, None).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].content.contains("café"));
     }
@@ -401,7 +497,12 @@ mod tests {
         {
             let db = Database::open(&path).unwrap();
             db.initialize_fts().unwrap();
-            assert_eq!(db.search_bm25("before", "proj1", 10).unwrap().len(), 1);
+            assert_eq!(
+                db.search_bm25("before", "proj1", 10, None, None)
+                    .unwrap()
+                    .len(),
+                1
+            );
         }
     }
 
@@ -446,9 +547,140 @@ mod tests {
             let db = Database::open(&path).unwrap();
             db.initialize_fts().unwrap();
 
-            assert_eq!(db.search_bm25("first", "proj1", 10).unwrap().len(), 1);
-            assert_eq!(db.search_bm25("second", "proj1", 10).unwrap().len(), 1);
-            assert_eq!(db.search_bm25("third", "proj1", 10).unwrap().len(), 1);
+            assert_eq!(
+                db.search_bm25("first", "proj1", 10, None, None)
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                db.search_bm25("second", "proj1", 10, None, None)
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                db.search_bm25("third", "proj1", 10, None, None)
+                    .unwrap()
+                    .len(),
+                1
+            );
         }
+    }
+
+    #[test]
+    fn test_bm25_search_filters_by_status() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        db.insert("proj1", "test content", &embedding, None, "fact", "active")
+            .unwrap();
+        db.insert(
+            "proj1",
+            "test content",
+            &embedding,
+            None,
+            "fact",
+            "superseded",
+        )
+        .unwrap();
+        db.insert(
+            "proj1",
+            "test content",
+            &embedding,
+            None,
+            "fact",
+            "candidate",
+        )
+        .unwrap();
+
+        // With explicit status filter
+        let results = db
+            .search_bm25("test", "proj1", 10, None, Some(&["active"]))
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "active");
+
+        let results = db
+            .search_bm25("test", "proj1", 10, None, Some(&["active", "candidate"]))
+            .unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_bm25_search_default_excludes_non_active() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        db.insert("proj1", "active memory", &embedding, None, "fact", "active")
+            .unwrap();
+        db.insert(
+            "proj1",
+            "candidate memory",
+            &embedding,
+            None,
+            "fact",
+            "candidate",
+        )
+        .unwrap();
+        db.insert(
+            "proj1",
+            "superseded memory",
+            &embedding,
+            None,
+            "fact",
+            "superseded",
+        )
+        .unwrap();
+
+        // With statuses=None, should default to active only
+        let results = db.search_bm25("memory", "proj1", 10, None, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "active");
+    }
+
+    #[test]
+    fn test_bm25_search_filters_by_type() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        db.insert(
+            "proj1",
+            "a fact about rust programming",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+        db.insert(
+            "proj1",
+            "a preference for python data",
+            &embedding,
+            None,
+            "preference",
+            "active",
+        )
+        .unwrap();
+        db.insert(
+            "proj1",
+            "a procedure for testing code",
+            &embedding,
+            None,
+            "procedure",
+            "active",
+        )
+        .unwrap();
+
+        // Filter by type - search for content that matches fact memory
+        let results = db
+            .search_bm25("rust", "proj1", 10, Some(&["fact"]), None)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].memory_type, "fact");
+
+        // Search for python with multiple type filter
+        let results = db
+            .search_bm25("python", "proj1", 10, Some(&["fact", "preference"]), None)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].memory_type, "preference");
     }
 }

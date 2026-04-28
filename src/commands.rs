@@ -527,13 +527,13 @@ fn handle_update(
     id: &str,
     text: Option<&str>,
     metadata: Option<&str>,
-    _memory_type: Option<&str>,
-    _status: Option<&str>,
+    memory_type: Option<&str>,
+    status: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    if text.is_none() && metadata.is_none() {
+    if text.is_none() && metadata.is_none() && memory_type.is_none() && status.is_none() {
         return Err(Error::InvalidInput(
-            "At least one of text or metadata must be provided".to_string(),
+            "At least one of text, metadata, memory_type, or status must be provided".to_string(),
         ));
     }
 
@@ -547,7 +547,7 @@ fn handle_update(
             .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
     }
 
-    store.update(id, text, metadata)?;
+    store.update(id, text, metadata, memory_type, status)?;
     if json {
         print_json(&UpdateResponse {
             status: "updated".to_string(),

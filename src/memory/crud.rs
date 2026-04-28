@@ -246,22 +246,29 @@ impl MemoryStore {
     /// * `id` - Memory ID to update
     /// * `content` - Optional new content for the memory
     /// * `metadata` - Optional JSON metadata string (replaces existing metadata)
+    /// * `memory_type` - Optional memory type to update
+    /// * `status` - Optional lifecycle status to update
     ///
     /// # Errors
     ///
     /// Returns error if:
-    /// - Both content and metadata are None
+    /// - All content, metadata, memory_type, and status are None
     /// - Content is provided and exceeds 100,000 characters
     /// - Memory doesn't exist
+    /// - memory_type is invalid
+    /// - status is "superseded" (use --supersedes flag instead)
     pub fn update(
         &mut self,
         id: &str,
         content: Option<&str>,
         metadata: Option<&str>,
+        memory_type: Option<&str>,
+        status: Option<&str>,
     ) -> Result<(), Error> {
-        if content.is_none() && metadata.is_none() {
+        if content.is_none() && metadata.is_none() && memory_type.is_none() && status.is_none() {
             return Err(Error::InvalidInput(
-                "At least one of content or metadata must be provided".to_string(),
+                "At least one of content, metadata, memory_type, or status must be provided"
+                    .to_string(),
             ));
         }
 
@@ -275,6 +282,21 @@ impl MemoryStore {
                 .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
         }
 
+        // Validate memory_type if provided
+        if let Some(t) = memory_type {
+            crate::memory::lifecycle::MemoryType::from_str(t)?;
+        }
+
+        // Validate status if provided - reject "superseded"
+        if let Some(s) = status {
+            if s.to_lowercase() == "superseded" {
+                return Err(Error::InvalidInput(
+                    "Cannot set status to 'superseded'. Use --supersedes flag instead.".to_string(),
+                ));
+            }
+            crate::memory::lifecycle::MemoryStatus::from_str(s)?;
+        }
+
         // If content is provided, validate and generate new embedding
         let embedding = if let Some(text) = content {
             Self::validate_input_length(text)?;
@@ -283,9 +305,14 @@ impl MemoryStore {
             None
         };
 
-        Ok(self
-            .db
-            .update(id, content, embedding.as_deref(), metadata)?)
+        Ok(self.db.update(
+            id,
+            content,
+            embedding.as_deref(),
+            metadata,
+            memory_type,
+            status,
+        )?)
     }
 
     #[must_use = "handle the error or results may be lost"]

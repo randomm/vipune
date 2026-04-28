@@ -3,7 +3,9 @@
 use crate::errors::Error;
 use crate::mcp::params::*;
 use crate::memory::MemoryStore;
+use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory_types::ConflictMemory as InternalConflictMemory;
+use crate::memory_types::IngestPolicy;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
@@ -25,6 +27,7 @@ impl StoreWrapper {
     }
 
     /// Store a memory with conflict detection.
+    #[allow(dead_code)] // Used for backward compatibility
     pub(crate) fn ingest(
         &self,
         project_id: &str,
@@ -34,9 +37,9 @@ impl StoreWrapper {
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let mut store = self.0.lock().unwrap();
         let policy = if force {
-            crate::memory_types::IngestPolicy::Force
+            IngestPolicy::Force
         } else {
-            crate::memory_types::IngestPolicy::ConflictAware
+            IngestPolicy::ConflictAware
         };
 
         match store
@@ -67,17 +70,128 @@ impl StoreWrapper {
         }
     }
 
+    /// Store a memory with explicit type and status.
+    #[allow(dead_code)] // Used by store_memory with type/status
+    pub(crate) fn ingest_with_type_status(
+        &self,
+        project_id: &str,
+        text: &str,
+        metadata: &str,
+        force: bool,
+        memory_type: &str,
+        status: &str,
+    ) -> Result<serde_json::Value, rmcp::ErrorData> {
+        let mut store = self.0.lock().unwrap();
+        let policy = if force {
+            IngestPolicy::Force
+        } else {
+            IngestPolicy::ConflictAware
+        };
+
+        match store
+            .ingest_with_type_status(
+                project_id,
+                text,
+                Some(metadata),
+                policy,
+                memory_type,
+                status,
+            )
+            .map_err(|e| -> rmcp::ErrorData { e.into() })?
+        {
+            crate::memory_types::AddResult::Added { id } => {
+                Ok(serde_json::to_value(SuccessResponse {
+                    id,
+                    status: "added".to_string(),
+                })
+                .map_err(McpError::from_serde_error)?)
+            }
+            crate::memory_types::AddResult::Conflicts {
+                proposed,
+                conflicts,
+            } => Err(McpError::conflict(
+                &proposed,
+                conflicts
+                    .into_iter()
+                    .map(|c: InternalConflictMemory| ConflictMemory {
+                        id: c.id,
+                        content: c.content,
+                        similarity: c.similarity,
+                    })
+                    .collect(),
+            )),
+        }
+    }
+
+    /// Supersede an existing memory with new content.
+    #[allow(dead_code)] // Used by supersede_memory tool
+    pub(crate) fn supersede(
+        &self,
+        project_id: &str,
+        new_text: &str,
+        metadata: &str,
+        memory_type: &str,
+        old_memory_id: &str,
+    ) -> Result<serde_json::Value, rmcp::ErrorData> {
+        let mut store = self.0.lock().unwrap();
+
+        // Use mock embedding if embedder is not loaded (test mode)
+        let embedding = if store.embedder.is_none() {
+            crate::memory::crud::mock_embedding_for_content(new_text)
+        } else {
+            match store.embedder()?.embed(new_text) {
+                Ok(e) => e,
+                Err(err) => return Err(err.into()),
+            }
+        };
+
+        let metadata_str = if metadata == "null" {
+            None
+        } else {
+            Some(metadata)
+        };
+
+        let new_id = match store.db.supersede(
+            project_id,
+            new_text,
+            &embedding,
+            metadata_str,
+            memory_type,
+            old_memory_id,
+        ) {
+            Ok(id) => id,
+            Err(err) => {
+                let err: Error = err.into();
+                return Err(err.into());
+            }
+        };
+
+        serde_json::to_value(SuccessResponse {
+            id: new_id,
+            status: "superseded".to_string(),
+        })
+        .map_err(McpError::from_serde_error)
+    }
+
     /// Search memories by semantic meaning.
     pub(crate) fn search(
         &self,
         project_id: &str,
         query: &str,
         limit: usize,
+        recency_weight: f64,
         memory_types: Option<&[&str]>,
         statuses: Option<&[&str]>,
     ) -> Result<serde_json::Value, Error> {
         let mut store = self.0.lock().unwrap();
-        let memories = store.search(project_id, query, limit, 0.0, memory_types, statuses)?;
+        let memories = store.search(
+            project_id,
+            query,
+            limit,
+            recency_weight,
+            memory_types,
+            statuses,
+        )?;
 
         let results: Vec<serde_json::Value> = memories
             .into_iter()
@@ -149,14 +263,20 @@ pub struct ToolHandler {
     tool_router: ToolRouter<Self>,
     store: StoreWrapper,
     project_id: String,
+    config: crate::config::Config,
 }
 
 impl ToolHandler {
-    pub fn new(store: Arc<Mutex<MemoryStore>>, project_id: String) -> Self {
+    pub fn new(
+        store: Arc<Mutex<MemoryStore>>,
+        project_id: String,
+        config: crate::config::Config,
+    ) -> Self {
         Self {
             tool_router: Self::tool_router(),
             store: StoreWrapper(store),
             project_id,
+            config,
         }
     }
 }
@@ -263,6 +383,22 @@ impl ToolHandler {
             return Err(McpError::invalid_input("Text cannot be empty"));
         }
 
+        // Parse and validate memory_type (default: "fact")
+        let memory_type = params.memory_type.as_deref().unwrap_or("fact");
+        let _ = MemoryType::from_str(memory_type)
+            .map_err(|e| McpError::invalid_input(&format!("Invalid memory type: {}", e)))?;
+
+        // Parse and validate status (default: "active")
+        let status_str = params.status.as_deref().unwrap_or("active");
+        let status_val = MemoryStatus::from_str(status_str)
+            .map_err(|e| McpError::invalid_input(&format!("Invalid status: {}", e)))?;
+        if !status_val.is_valid_for_insert() {
+            return Err(McpError::invalid_input(&format!(
+                "Status '{}' is not valid for new memory. Must be 'active' or 'candidate'.",
+                status_str
+            )));
+        }
+
         // Serialize metadata
         let metadata_str = match &params.metadata {
             Some(meta) => serde_json::to_string(meta)
@@ -270,9 +406,29 @@ impl ToolHandler {
             None => "null".to_string(),
         };
 
-        let value = self
-            .store
-            .ingest(&self.project_id, &params.text, &metadata_str, false)?;
+        // Handle supersedes path
+        if let Some(supersedes_id) = &params.supersedes {
+            let value = self.store.supersede(
+                &self.project_id,
+                &params.text,
+                &metadata_str,
+                memory_type,
+                supersedes_id,
+            )?;
+            return Ok(CallToolResult::success(vec![Content::text(
+                serde_json::to_string(&value).unwrap_or_default(),
+            )]));
+        }
+
+        // Normal ingest path with type and status
+        let value = self.store.ingest_with_type_status(
+            &self.project_id,
+            &params.text,
+            &metadata_str,
+            false,
+            memory_type,
+            status_str,
+        )?;
 
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string(&value).unwrap_or_default(),
@@ -322,12 +478,15 @@ impl ToolHandler {
             .map(|v| v.iter().map(|s| s.as_str()).collect());
         let status_slice: Option<&[&str]> = status_strs.as_deref();
 
+        let recency_weight = params.recency_weight.unwrap_or(self.config.recency_weight);
+
         let value = self
             .store
             .search(
                 &self.project_id,
                 &params.query,
                 limit,
+                recency_weight,
                 type_slice,
                 status_slice,
             )
@@ -379,6 +538,53 @@ impl ToolHandler {
             .store
             .list(&self.project_id, limit, type_slice, status_slice)
             .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&value).unwrap_or_default(),
+        )]))
+    }
+
+    /// Replace an existing memory with new content.
+    ///
+    /// The old memory is marked as superseded and a new memory is created.
+    /// Use this when information has changed and the old version should no
+    /// longer appear in search results.
+    #[tool(
+        name = "supersede_memory",
+        description = "Replace an existing memory with new content. The old memory is marked as superseded and a new memory is created. Use this when information has changed and the old version should no longer appear in search results."
+    )]
+    async fn supersede_memory(
+        &self,
+        Parameters(params): Parameters<SupersedeMemoryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        // Validate input
+        if params.new_text.trim().is_empty() {
+            return Err(McpError::invalid_input("new_text cannot be empty"));
+        }
+
+        if params.old_memory_id.trim().is_empty() {
+            return Err(McpError::invalid_input("old_memory_id cannot be empty"));
+        }
+
+        // Parse and validate memory_type (default: "fact")
+        let memory_type = params.memory_type.as_deref().unwrap_or("fact");
+        let _ = MemoryType::from_str(memory_type)
+            .map_err(|e| McpError::invalid_input(&format!("Invalid memory type: {}", e)))?;
+
+        // Serialize metadata
+        let metadata_str = match &params.metadata {
+            Some(meta) => serde_json::to_string(meta)
+                .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?,
+            None => "null".to_string(),
+        };
+
+        let value = self.store.supersede(
+            &self.project_id,
+            &params.new_text,
+            &metadata_str,
+            memory_type,
+            &params.old_memory_id,
+        )?;
 
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string(&value).unwrap_or_default(),

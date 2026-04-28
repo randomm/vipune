@@ -34,7 +34,7 @@ pub fn run_mcp(embedding_model: String, project_id: &str, db_path: PathBuf) -> R
     let store = Arc::new(Mutex::new(store));
 
     // Create tool handler
-    let handler = ToolHandler::new(store, project_id.to_string());
+    let handler = ToolHandler::new(store, project_id.to_string(), config);
 
     // Create tokio runtime (single-threaded since MCP stdio handles requests sequentially)
     let runtime = tokio::runtime::Builder::new_current_thread()
