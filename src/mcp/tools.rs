@@ -464,7 +464,7 @@ impl ToolHandler {
                 supersedes_id,
             )?;
             return Ok(CallToolResult::success(vec![Content::text(
-                serde_json::to_string(&value).unwrap_or_default(),
+                serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
             )]));
         }
 
@@ -479,7 +479,7 @@ impl ToolHandler {
         )?;
 
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string(&value).unwrap_or_default(),
+            serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
         )]))
     }
 
@@ -554,7 +554,7 @@ impl ToolHandler {
         };
 
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string(&value).unwrap_or_default(),
+            serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
         )]))
     }
 
@@ -601,7 +601,7 @@ impl ToolHandler {
             .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?;
 
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string(&value).unwrap_or_default(),
+            serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
         )]))
     }
 
@@ -648,7 +648,7 @@ impl ToolHandler {
         )?;
 
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string(&value).unwrap_or_default(),
+            serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
         )]))
     }
 }

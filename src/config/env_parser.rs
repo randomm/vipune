@@ -79,8 +79,10 @@ pub fn apply_hybrid_override(hybrid: &mut bool) -> Result<(), Error> {
             "true" | "1" => *hybrid = true,
             "false" | "0" | "" => *hybrid = false,
             _ => {
-                // Invalid value — keep default, could log warning
-                // For consistency with other env vars, just keep default
+                eprintln!(
+                    "warning: VIPUNE_HYBRID='{}' is not a valid boolean (expected true/false/1/0), keeping default",
+                    val
+                );
             }
         }
     }
