@@ -380,7 +380,6 @@ fn handle_search(
     let type_strs: Option<Vec<&str>> = type_vec
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let type_slice: Option<&[&str]> = type_strs.as_deref();
 
     let status_vec: Option<Vec<String>> = if opts.include_candidates {
         Some(vec!["active".to_string(), "candidate".to_string()])
@@ -392,17 +391,20 @@ fn handle_search(
     let status_strs: Option<Vec<&str>> = status_vec
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let status_slice: Option<&[&str]> = status_strs.as_deref();
 
     let use_hybrid = (opts.hybrid || config.hybrid) && !opts.no_hybrid;
+    let search_options = crate::memory::SearchOptions {
+        memory_types: type_strs,
+        statuses: status_strs,
+        touch: !opts.no_touch,
+    };
     let memories = if use_hybrid {
         store.search_hybrid(
             project_id,
             &opts.query,
             opts.limit,
             recency_weight,
-            type_slice,
-            status_slice,
+            search_options,
         )?
     } else {
         store.search(
@@ -410,18 +412,9 @@ fn handle_search(
             &opts.query,
             opts.limit,
             recency_weight,
-            type_slice,
-            status_slice,
+            search_options,
         )?
     };
-
-    // Update retrieval telemetry unless disabled
-    if !opts.no_touch {
-        let ids: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
-        if !ids.is_empty() {
-            store.db.touch_memories(&ids).ok();
-        }
-    }
 
     if json {
         let results: Vec<SearchResultItem> = memories

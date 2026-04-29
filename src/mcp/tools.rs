@@ -171,14 +171,15 @@ impl StoreWrapper {
     }
 
     /// Search memories by semantic meaning.
+    #[allow(dead_code)] // Used in tests but not in actual MCP flow (server uses store.search directly)
     pub(crate) fn search(
         &self,
         project_id: &str,
         query: &str,
         limit: usize,
         recency_weight: f64,
-        memory_types: Option<&[&str]>,
-        statuses: Option<&[&str]>,
+        memory_types: Option<Vec<&str>>,
+        statuses: Option<Vec<&str>>,
     ) -> Result<serde_json::Value, Error> {
         let mut store = self.0.lock().unwrap();
         let memories = store.search(
@@ -186,8 +187,11 @@ impl StoreWrapper {
             query,
             limit,
             recency_weight,
-            memory_types,
-            statuses,
+            crate::memory::SearchOptions {
+                memory_types,
+                statuses,
+                touch: true,
+            },
         )?;
 
         let results: Vec<serde_json::Value> = memories
@@ -218,24 +222,28 @@ impl StoreWrapper {
     }
 
     /// Search memories by hybrid (semantic + BM25 with RRF fusion).
-    #[allow(dead_code)] // Used when hybrid search is enabled in config
+    #[allow(dead_code)] // MCP tool, available for future use
     pub(crate) fn search_hybrid(
         &self,
         project_id: &str,
         query: &str,
         limit: usize,
         recency_weight: f64,
-        memory_types: Option<&[&str]>,
-        statuses: Option<&[&str]>,
+        memory_types: Option<Vec<&str>>,
+        statuses: Option<Vec<&str>>,
     ) -> Result<serde_json::Value, Error> {
         let mut store = self.0.lock().unwrap();
+        let options = crate::memory::SearchOptions {
+            memory_types,
+            statuses,
+            touch: true,
+        };
         let memories = store.search_hybrid(
             project_id,
             query,
             limit,
             recency_weight,
-            memory_types,
-            statuses,
+            options,
         )?;
 
         let results: Vec<serde_json::Value> = memories
@@ -510,25 +518,26 @@ impl ToolHandler {
             ));
         }
 
-        // Convert filter params
-        let type_strs: Option<Vec<&str>> = params
-            .memory_types
-            .as_ref()
-            .map(|v| v.iter().map(|s| s.as_str()).collect());
-        let type_slice: Option<&[&str]> = type_strs.as_deref();
-
-        let status_strs: Option<Vec<&str>> = params
-            .statuses
-            .as_ref()
-            .map(|v| v.iter().map(|s| s.as_str()).collect());
-        let status_slice: Option<&[&str]> = status_strs.as_deref();
-
+        // Convert filter params - move into the block where they're used
         let recency_weight = params.recency_weight.unwrap_or(self.config.recency_weight);
         let use_hybrid = params.hybrid.unwrap_or(self.config.hybrid);
         let no_touch = params.no_touch.unwrap_or(false);
 
         let memories = {
             let mut store = self.store.0.lock().unwrap();
+            let type_strs: Option<Vec<&str>> = params
+                .memory_types
+                .as_ref()
+                .map(|v| v.iter().map(|s| s.as_str()).collect());
+            let status_strs: Option<Vec<&str>> = params
+                .statuses
+                .as_ref()
+                .map(|v| v.iter().map(|s| s.as_str()).collect());
+            let search_options = crate::memory::SearchOptions {
+                memory_types: type_strs,
+                statuses: status_strs,
+                touch: !no_touch,
+            };
             if use_hybrid {
                 store
                     .search_hybrid(
@@ -536,8 +545,7 @@ impl ToolHandler {
                         &params.query,
                         limit,
                         recency_weight,
-                        type_slice,
-                        status_slice,
+                        search_options,
                     )
                     .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
             } else {
@@ -547,21 +555,11 @@ impl ToolHandler {
                         &params.query,
                         limit,
                         recency_weight,
-                        type_slice,
-                        status_slice,
+                        search_options,
                     )
                     .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
             }
         };
-
-        // Update retrieval telemetry unless disabled
-        if !no_touch {
-            let store = self.store.0.lock().unwrap();
-            let ids: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
-            if !ids.is_empty() {
-                store.db.touch_memories(&ids).ok();
-            }
-        }
 
         // Build JSON response manually (Memory doesn't derive Serialize)
         let results: Vec<serde_json::Value> = memories

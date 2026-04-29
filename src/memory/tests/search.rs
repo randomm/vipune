@@ -322,7 +322,13 @@ fn test_integration_add_search_roundtrip() {
     };
 
     let results = store
-        .search("test-project", "finding information", 5, 0.0, None, None)
+        .search(
+            "test-project",
+            "finding information",
+            5,
+            0.0,
+            crate::memory::SearchOptions::default(),
+        )
         .unwrap();
     assert!(!results.is_empty());
 

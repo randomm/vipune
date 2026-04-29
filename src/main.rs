@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn test_cli_parse_get() {
         let cli = Cli::parse_from(["vipune", "get", "memory-id"]);
-        matches!(cli.command, Commands::Get { id } if id == "memory-id");
+        matches!(cli.command, Commands::Get { id, no_touch: _ } if id == "memory-id");
     }
 
     #[test]

@@ -40,7 +40,13 @@ fn test_memory_store_add_then_search_returns_matching_memory() {
 
     // Search for the memory
     let results = store
-        .search(project_id, "where does alice work", 10, 0.0, None, None)
+        .search(
+            project_id,
+            "where does alice work",
+            10,
+            0.0,
+            vipune::memory::SearchOptions::default(),
+        )
         .expect("Failed to search");
 
     assert_eq!(results.len(), 1);
@@ -121,7 +127,13 @@ fn test_search_with_empty_input_returns_error() {
     let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
         .expect("Failed to create store");
 
-    let result = store.search("test", "", 10, 0.0, None, None);
+    let result = store.search(
+        "test",
+        "",
+        10,
+        0.0,
+        vipune::memory::SearchOptions::default(),
+    );
     assert!(result.is_err());
     if !matches!(result.as_ref().unwrap_err(), Error::EmptyInput) {
         panic!("Expected EmptyInput error");
@@ -142,7 +154,13 @@ fn test_search_with_oversized_input_returns_error() {
 
     // Create input longer than MAX_INPUT_LENGTH
     let long_query = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.search("test", &long_query, 10, 0.0, None, None);
+    let result = store.search(
+        "test",
+        &long_query,
+        10,
+        0.0,
+        vipune::memory::SearchOptions::default(),
+    );
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -278,7 +296,13 @@ fn test_search_hybrid_with_test_memories_returns_fused_results() {
 
     // Search using hybrid
     let results = store
-        .search_hybrid(project_id, "auth token", 10, 0.0, None, None)
+        .search_hybrid(
+            project_id,
+            "auth token",
+            10,
+            0.0,
+            vipune::memory::SearchOptions::default(),
+        )
         .expect("Failed to search hybrid");
 
     assert!(!results.is_empty());
@@ -362,7 +386,13 @@ fn test_search_with_zero_limit_returns_error() {
         .expect("Failed to create store");
 
     // Try to search with limit=0
-    let result = store.search("test", "query", 0, 0.0, None, None);
+    let result = store.search(
+        "test",
+        "query",
+        0,
+        0.0,
+        vipune::memory::SearchOptions::default(),
+    );
     assert!(result.is_err());
     if let Error::InvalidInput(msg) = &result.as_ref().unwrap_err() {
         assert!(msg.contains("Limit must be greater than 0"));
@@ -384,7 +414,13 @@ fn test_search_with_limit_over_max_returns_error() {
         .expect("Failed to create store");
 
     // Try to search with excessively large limit
-    let result = store.search("test", "query", 10_001, 0.0, None, None);
+    let result = store.search(
+        "test",
+        "query",
+        10_001,
+        0.0,
+        vipune::memory::SearchOptions::default(),
+    );
     assert!(result.is_err());
     if let Error::InvalidInput(msg) = &result.as_ref().unwrap_err() {
         assert!(msg.contains("exceeds maximum allowed"));
@@ -411,7 +447,13 @@ fn test_add_with_whitespace_only_input_returns_error() {
     assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
 
     // Try to search with whitespace-only query
-    let result = store.search("test", "\t\n", 10, 0.0, None, None);
+    let result = store.search(
+        "test",
+        "\t\n",
+        10,
+        0.0,
+        vipune::memory::SearchOptions::default(),
+    );
     assert!(result.is_err());
     assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
 
@@ -772,7 +814,13 @@ fn test_search_hybrid_with_empty_input_returns_error() {
     let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
         .expect("Failed to create store");
 
-    let result = store.search_hybrid("test", "", 10, 0.0, None, None);
+    let result = store.search_hybrid(
+        "test",
+        "",
+        10,
+        0.0,
+        vipune::memory::SearchOptions::default(),
+    );
     assert!(result.is_err());
     assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
 
@@ -790,7 +838,13 @@ fn test_search_hybrid_with_oversized_input_returns_error() {
         .expect("Failed to create store");
 
     let long_query = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.search_hybrid("test", &long_query, 10, 0.0, None, None);
+    let result = store.search_hybrid(
+        "test",
+        &long_query,
+        10,
+        0.0,
+        vipune::memory::SearchOptions::default(),
+    );
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -1366,7 +1420,13 @@ fn test_default_search_excludes_candidate() {
 
     // Search with default status filter (statuses=None means active only)
     let results = store
-        .search(&project_id, "memory", 10, 0.0, None, None)
+        .search(
+            &project_id,
+            "memory",
+            10,
+            0.0,
+            vipune::memory::SearchOptions::default(),
+        )
         .expect("Failed to search");
 
     // Verify only active is returned
@@ -1414,9 +1474,18 @@ fn test_include_candidates_returns_both() {
     };
 
     // Search with explicit statuses=["active", "candidate"]
-    let statuses = ["active", "candidate"];
+    let statuses = vec!["active", "candidate"];
     let results = store
-        .search(&project_id, "memory", 10, 0.0, None, Some(&statuses))
+        .search(
+            &project_id,
+            "memory",
+            10,
+            0.0,
+            vipune::memory::SearchOptions {
+                statuses: Some(statuses),
+                ..Default::default()
+            },
+        )
         .expect("Failed to search");
 
     // Verify both are returned
@@ -1534,7 +1603,13 @@ fn test_hybrid_search_respects_status_filter() {
 
     // Hybrid search with statuses=None (default = active only)
     let results = store
-        .search_hybrid(&project_id, "rust programming", 10, 0.0, None, None)
+        .search_hybrid(
+            &project_id,
+            "rust programming",
+            10,
+            0.0,
+            vipune::memory::SearchOptions::default(),
+        )
         .expect("Failed to search hybrid");
 
     // Verify only active memories in results
@@ -1657,7 +1732,13 @@ fn test_search_increments_retrieval_count() {
 
     // Search for it (twice to verify count increases)
     store
-        .search(project_id, "rust programming", 10, 0.0, None, None)
+        .search(
+            project_id,
+            "rust programming",
+            10,
+            0.0,
+            vipune::memory::SearchOptions { touch: true, ..Default::default() },
+        )
         .expect("Failed to search");
 
     // Get the memory to check retrieval_count
@@ -1672,7 +1753,13 @@ fn test_search_increments_retrieval_count() {
 
     // Search again
     store
-        .search(project_id, "rust language", 10, 0.0, None, None)
+        .search(
+            project_id,
+            "rust language",
+            10,
+            0.0,
+            vipune::memory::SearchOptions { touch: true, ..Default::default() },
+        )
         .expect("Failed to search again");
 
     // Verify count incremented
@@ -1709,7 +1796,7 @@ fn test_get_no_touch_preserves_count() {
         };
 
     // Manually touch it (simulating user retrieval)
-    store.db.touch_memories(&[&memory_id]).ok();
+    store.touch_memories(&[&memory_id]).ok();
 
     // Get the memory to see count
     let memory = store

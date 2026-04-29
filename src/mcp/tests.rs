@@ -118,6 +118,7 @@ mod tool_handler_tests {
             statuses: None,
             recency_weight: None,
             hybrid: None,
+            no_touch: None,
         };
 
         let json = serde_json::to_string(&params).unwrap();
@@ -135,6 +136,7 @@ mod tool_handler_tests {
             limit: Some(5),
             memory_types: None,
             statuses: None,
+            no_touch: None,
         };
 
         let json = serde_json::to_string(&params).unwrap();
@@ -151,6 +153,7 @@ mod tool_handler_tests {
             limit: None,
             memory_types: None,
             statuses: None,
+            no_touch: None,
         };
         let json = serde_json::to_string(&params).unwrap();
         let decoded: ListMemoriesParams = serde_json::from_str(&json).unwrap();
@@ -202,7 +205,7 @@ mod tool_handler_tests {
         assert!(json_str.contains("added"));
 
         // Search for it
-        let search_result = wrapper.search(project_id, "rust programming", 5, 0.0, None, None);
+        let search_result = wrapper.search(project_id, "rust programming", 5, 0.0, None::<Vec<&str>>, None);
         assert!(search_result.is_ok());
         let search_value = search_result.unwrap();
         let search_str = serde_json::to_string(&search_value).unwrap();
@@ -231,7 +234,7 @@ mod tool_handler_tests {
         assert!(result.is_ok());
 
         // Search for it
-        let search_result = wrapper.search(project_id, "rust", 5, 0.0, None, None);
+        let search_result = wrapper.search(project_id, "rust", 5, 0.0, None::<Vec<&str>>, None);
         assert!(search_result.is_ok());
         let search_value = search_result.unwrap();
 
@@ -285,7 +288,7 @@ mod tool_handler_tests {
         assert!(result.is_ok());
 
         // Search for it
-        let search_result = wrapper.search(project_id, "simple", 5, 0.0, None, None);
+        let search_result = wrapper.search(project_id, "simple", 5, 0.0, None::<Vec<&str>>, None);
         assert!(search_result.is_ok());
         let search_value = search_result.unwrap();
 

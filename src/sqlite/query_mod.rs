@@ -85,7 +85,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
                 FROM memories
                 WHERE id = ?1
                 "#,

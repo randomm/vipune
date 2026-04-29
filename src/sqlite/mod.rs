@@ -26,6 +26,7 @@ use uuid::Uuid;
 /// Contains the stored memory content, metadata, embedding, and timestamps. The similarity
 /// field is populated only during search operations.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct Memory {
     /// Unique identifier for this memory.
     pub id: String,
@@ -36,7 +37,6 @@ pub struct Memory {
     /// Optional user-provided metadata (JSON string).
     pub metadata: Option<String>,
     /// The embedding vector (384-dimensional f32 values).
-    #[allow(dead_code)] // Library API: exposed for consumers, unused in CLI
     pub embedding: Vec<f32>,
 
     /// Similarity score (search-dependent):
@@ -48,13 +48,10 @@ pub struct Memory {
     /// Last update timestamp in RFC3339 format.
     pub updated_at: String,
     /// Memory type (fact, preference, procedure, guard, observation).
-    #[allow(dead_code)] // Library API: exposed for consumers
     pub memory_type: String,
     /// Lifecycle status (active, candidate, superseded, deprecated).
-    #[allow(dead_code)] // Library API: exposed for consumers
     pub status: String,
     /// ID of the memory that superseded this one (if any).
-    #[allow(dead_code)] // Library API: exposed for consumers
     pub superseded_by: Option<String>,
     /// Number of times this memory was retrieved via search or get.
     pub retrieval_count: i64,
@@ -320,7 +317,7 @@ impl Database {
 
         let where_clause = where_clauses.join(" AND ");
         let query = format!(
-            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
              FROM memories WHERE {} ORDER BY created_at DESC LIMIT ?{}",
             where_clause, param_index
         );
@@ -456,7 +453,6 @@ impl Database {
     /// In a single transaction:
     /// 1. Inserts the new memory
     /// 2. Sets old memory's status to 'superseded' and superseded_by to new ID
-    #[allow(dead_code)] // Public API: used by CLI --supersedes flag and library consumers
     pub fn supersede(
         &self,
         project_id: &str,
@@ -714,6 +710,7 @@ impl Database {
     /// Called by CLI handlers and MCP handlers after retrieving memories via search/get.
     /// This method is NOT called internally by supersede or other operations that don't
     /// represent user-initiated retrieval.
+    #[allow(dead_code)] // Library API: unused when MCP feature is disabled
     pub fn touch_memories(&self, ids: &[&str]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
