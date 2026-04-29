@@ -36,7 +36,7 @@ pub(crate) fn mock_embedding_for_content(content: &str) -> Vec<f32> {
 }
 
 impl MemoryStore {
-    #[must_use = "handle the error or results may be lost"]
+    #[must_use = "the new memory ID is needed for downstream operations"]
     /// Add a memory with conflict detection.
     ///
     /// Checks for similar existing memories before adding. If conflicts are found
@@ -74,12 +74,7 @@ impl MemoryStore {
     ) -> Result<AddResult, Error> {
         Self::validate_input_length(content)?;
 
-        // Use mock embedding if embedder is not loaded (test mode)
-        let embedding = if self.embedder.is_none() {
-            mock_embedding_for_content(content)
-        } else {
-            self.embedder()?.embed(content)?
-        };
+        let embedding = self.get_embedding(content)?;
 
         if force {
             let id = self.db.insert(
@@ -486,5 +481,55 @@ impl MemoryStore {
         }
 
         Ok(BatchIngestResult { results })
+    }
+
+    /// Get the embedding for content, using mock if embedder unavailable.
+    fn get_embedding(&mut self, content: &str) -> Result<Vec<f32>, Error> {
+        if self.embedder.is_none() {
+            Ok(mock_embedding_for_content(content))
+        } else {
+            Ok(self.embedder()?.embed(content)?)
+        }
+    }
+
+    #[allow(dead_code)] // Public API for library consumers (e.g., kide)
+    #[must_use = "the new memory ID is needed for downstream operations"]
+    /// Supersede an existing memory with a new one.
+    ///
+    /// Atomically replaces the old memory (marked as "superseded") with a new memory
+    /// that supersedes it. Both memories remain in the database but the old one
+    /// has status "superseded" and superseded_by pointing to the new ID.
+    pub fn supersede(
+        &mut self,
+        project_id: &str,
+        content: &str,
+        metadata: Option<&str>,
+        memory_type: &str,
+        old_id: &str,
+    ) -> Result<String, Error> {
+        Self::validate_input_length(content)?;
+
+        // Validate metadata: reject empty strings and invalid JSON
+        if let Some(meta) = metadata {
+            if meta.trim().is_empty() {
+                return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
+            }
+            serde_json::from_str::<serde_json::Value>(meta)
+                .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
+        }
+
+        // Validate memory_type
+        crate::memory::lifecycle::MemoryType::from_str(memory_type)?;
+
+        let embedding = self.get_embedding(content)?;
+
+        Ok(self.db.supersede(
+            project_id,
+            content,
+            &embedding,
+            metadata,
+            memory_type,
+            old_id,
+        )?)
     }
 }
