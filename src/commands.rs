@@ -17,6 +17,7 @@ struct SearchContext {
     memory_type: Option<String>,
     status: Option<String>,
     include_candidates: bool,
+    no_touch: bool,
 }
 
 /// Commands supported by vipune CLI.
@@ -81,10 +82,18 @@ pub enum Commands {
         /// Include candidate memories in results
         #[arg(long)]
         include_candidates: bool,
+
+        /// Do not update retrieval telemetry (retrieval_count, last_retrieved_at)
+        #[arg(long)]
+        no_touch: bool,
     },
     Get {
         /// Memory ID
         id: String,
+
+        /// Do not update retrieval telemetry
+        #[arg(long)]
+        no_touch: bool,
     },
     List {
         /// Maximum number of results (default: 10)
@@ -171,6 +180,7 @@ pub fn execute(
             memory_type,
             status,
             include_candidates,
+            no_touch,
         } => handle_search(
             store,
             &project_id,
@@ -183,11 +193,12 @@ pub fn execute(
                 memory_type: memory_type.clone(),
                 status: status.clone(),
                 include_candidates: *include_candidates,
+                no_touch: *no_touch,
             },
             config,
             json,
         ),
-        Commands::Get { id } => handle_get(store, id, json),
+        Commands::Get { id, no_touch } => handle_get(store, id, *no_touch, json),
         Commands::List {
             limit,
             memory_type,
@@ -403,6 +414,15 @@ fn handle_search(
             status_slice,
         )?
     };
+
+    // Update retrieval telemetry unless disabled
+    if !opts.no_touch {
+        let ids: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
+        if !ids.is_empty() {
+            store.db.touch_memories(&ids).ok();
+        }
+    }
+
     if json {
         let results: Vec<SearchResultItem> = memories
             .into_iter()
@@ -426,10 +446,21 @@ fn handle_search(
     Ok(ExitCode::SUCCESS)
 }
 
-fn handle_get(store: &mut MemoryStore, id: &str, json: bool) -> Result<ExitCode, Error> {
+fn handle_get(
+    store: &mut MemoryStore,
+    id: &str,
+    no_touch: bool,
+    json: bool,
+) -> Result<ExitCode, Error> {
     let memory = store
         .get(id)?
         .ok_or_else(|| Error::NotFound("memory not found".to_string()))?;
+
+    // Update retrieval telemetry unless disabled
+    if !no_touch {
+        store.db.touch_memories(&[id]).ok();
+    }
+
     if json {
         print_json(&GetResponse {
             id: memory.id.clone(),

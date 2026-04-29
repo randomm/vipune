@@ -78,7 +78,7 @@ impl Database {
 
         let where_clause = where_clauses.join(" AND ");
         let query = format!(
-            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
              FROM memories WHERE {} ORDER BY created_at DESC",
             where_clause
         );
@@ -117,6 +117,8 @@ impl Database {
                 row.get::<_, String>(7)?,
                 row.get::<_, String>(8)?,
                 row.get::<_, Option<String>>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
 
@@ -132,6 +134,8 @@ impl Database {
                 type_val,
                 status_val,
                 superseded_by,
+                retrieval_count,
+                last_retrieved_at,
             ) = row_result?;
             let stored_embedding = embedding::blob_to_vec(&blob).map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
@@ -157,6 +161,8 @@ impl Database {
                 memory_type: type_val,
                 status: status_val,
                 superseded_by,
+                retrieval_count,
+                last_retrieved_at,
             });
         }
 

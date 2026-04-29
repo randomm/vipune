@@ -99,9 +99,22 @@ fn migrate_v2(conn: &Connection) -> SqliteResult<()> {
     Ok(())
 }
 
+/// Migration 3: Add retrieval telemetry columns.
+///
+/// Adds two columns for tracking memory access:
+/// - `retrieval_count`: Number of times this memory was retrieved (search/get)
+/// - `last_retrieved_at`: RFC3339 timestamp of last retrieval
+fn migrate_v3(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        "ALTER TABLE memories ADD COLUMN retrieval_count INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE memories ADD COLUMN last_retrieved_at TEXT;",
+    )?;
+    Ok(())
+}
+
 /// Returns all migrations in order. Index 0 = migration 1, etc.
 fn migrations() -> Vec<MigrationFn> {
-    vec![migrate_v1, migrate_v2]
+    vec![migrate_v1, migrate_v2, migrate_v3]
 }
 
 /// Returns the total number of migrations available (i.e., the max supported schema version).
@@ -200,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fresh_db_version_becomes_2() {
+    fn test_fresh_db_version_becomes_3() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
 
@@ -213,37 +226,37 @@ mod tests {
         // Run migrations
         run_migrations(&conn).unwrap();
 
-        // Version should now be 2
+        // Version should now be 3
         let final_version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(final_version, 2);
+        assert_eq!(final_version, 3);
     }
 
     #[test]
-    fn test_already_at_version_2_is_noop() {
+    fn test_already_at_version_3_is_noop() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
 
-        // Run migrations first time: 0 → 2
+        // Run migrations first time: 0 → 3
         run_migrations(&conn).unwrap();
 
         let version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
 
-        // Run again: should be no-op (already at version 2)
+        // Run again: should be no-op (already at version 3)
         run_migrations(&conn).unwrap();
 
         let version_after: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version_after, 2);
+        assert_eq!(version_after, 3);
     }
 
     #[test]
-    fn test_upgrade_from_v0_to_v2() {
+    fn test_upgrade_from_v0_to_v3() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
 
@@ -257,11 +270,11 @@ mod tests {
         // Run migrations
         run_migrations(&conn).unwrap();
 
-        // Should upgrade from 0 to 2
+        // Should upgrade from 0 to 3
         let final_version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(final_version, 2);
+        assert_eq!(final_version, 3);
     }
 
     #[test]
@@ -274,11 +287,11 @@ mod tests {
             run_migrations(&conn).unwrap();
         }
 
-        // Version should be 2 (not incrementing on re-run)
+        // Version should be 3 (not incrementing on re-run)
         let version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     #[test]
@@ -317,7 +330,7 @@ mod tests {
         let final_version: i32 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(final_version, 2);
+        assert_eq!(final_version, 3);
     }
 
     #[test]

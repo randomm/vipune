@@ -46,6 +46,8 @@ pub fn map_row_to_memory(row: &Row) -> SqliteResult<Memory> {
         memory_type: row.get(7)?,
         status: row.get(8)?,
         superseded_by: row.get(9)?,
+        retrieval_count: row.get(10)?,
+        last_retrieved_at: row.get(11)?,
     })
 }
 
@@ -97,6 +99,8 @@ mod tests {
         assert_eq!(memory.metadata, Some(r#"{"key":"value"}"#.to_string()));
         assert_eq!(memory.embedding.len(), EMBEDDING_DIMS);
         assert!(memory.similarity.is_none());
+        assert_eq!(memory.retrieval_count, 0);
+        assert!(memory.last_retrieved_at.is_none());
     }
 
     #[test]
@@ -111,7 +115,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
                 FROM memories
                 WHERE id = ?1
                 "#,
@@ -131,8 +135,8 @@ mod tests {
         let blob = super::super::embedding::vec_to_blob(&vec![0.1f32; EMBEDDING_DIMS]).unwrap();
         conn.execute(
             r#"
-            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status)
-            VALUES ('test-id', 'proj1', 'test', ?1, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'fact', 'active')
+            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, retrieval_count, last_retrieved_at)
+            VALUES ('test-id', 'proj1', 'test', ?1, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'fact', 'active', 0, NULL)
             "#,
             params![blob],
         )
@@ -141,7 +145,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
                 FROM memories
                 WHERE id = ?1
                 "#,

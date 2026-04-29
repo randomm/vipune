@@ -525,33 +525,71 @@ impl ToolHandler {
 
         let recency_weight = params.recency_weight.unwrap_or(self.config.recency_weight);
         let use_hybrid = params.hybrid.unwrap_or(self.config.hybrid);
+        let no_touch = params.no_touch.unwrap_or(false);
 
-        let value = if use_hybrid {
-            self.store
-                .search_hybrid(
-                    &self.project_id,
-                    &params.query,
-                    limit,
-                    recency_weight,
-                    type_slice,
-                    status_slice,
-                )
-                .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
-        } else {
-            self.store
-                .search(
-                    &self.project_id,
-                    &params.query,
-                    limit,
-                    recency_weight,
-                    type_slice,
-                    status_slice,
-                )
-                .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
+        let memories = {
+            let mut store = self.store.0.lock().unwrap();
+            if use_hybrid {
+                store
+                    .search_hybrid(
+                        &self.project_id,
+                        &params.query,
+                        limit,
+                        recency_weight,
+                        type_slice,
+                        status_slice,
+                    )
+                    .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
+            } else {
+                store
+                    .search(
+                        &self.project_id,
+                        &params.query,
+                        limit,
+                        recency_weight,
+                        type_slice,
+                        status_slice,
+                    )
+                    .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
+            }
         };
 
+        // Update retrieval telemetry unless disabled
+        if !no_touch {
+            let store = self.store.0.lock().unwrap();
+            let ids: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
+            if !ids.is_empty() {
+                store.db.touch_memories(&ids).ok();
+            }
+        }
+
+        // Build JSON response manually (Memory doesn't derive Serialize)
+        let results: Vec<serde_json::Value> = memories
+            .into_iter()
+            .map(|m| {
+                let metadata_value = match m.metadata {
+                    Some(ref meta_str) if meta_str.trim() != "null" => {
+                        serde_json::from_str::<serde_json::Value>(meta_str)
+                            .unwrap_or_else(|_| serde_json::Value::String(meta_str.clone()))
+                    }
+                    _ => serde_json::Value::Null,
+                };
+                serde_json::json!({
+                    "id": m.id,
+                    "content": m.content,
+                    "similarity": m.similarity.unwrap_or(0.0),
+                    "created_at": m.created_at,
+                    "updated_at": m.updated_at,
+                    "project_id": m.project_id,
+                    "metadata": metadata_value,
+                    "retrieval_count": m.retrieval_count,
+                    "last_retrieved_at": m.last_retrieved_at
+                })
+            })
+            .collect();
+
         Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
+            serde_json::to_string(&results).map_err(McpError::from_serde_error)?,
         )]))
     }
 
