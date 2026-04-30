@@ -78,8 +78,8 @@ impl StoreWrapper {
         text: &str,
         metadata: &str,
         force: bool,
-        memory_type: &str,
-        status: &str,
+        memory_type: MemoryType,
+        status: MemoryStatus,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let mut store = self.0.lock().unwrap();
         let policy = if force {
@@ -130,17 +130,10 @@ impl StoreWrapper {
         project_id: &str,
         new_text: &str,
         metadata: &str,
-        memory_type: &str,
+        memory_type: MemoryType,
         old_memory_id: &str,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let mut store = self.0.lock().unwrap();
-
-        // Use mock embedding if embedder is not loaded (test mode)
-        let embedding = if store.embedder.is_none() {
-            crate::memory::crud::mock_embedding_for_content(new_text)
-        } else {
-            store.embedder()?.embed(new_text)?
-        };
 
         let metadata_str = if metadata == "null" {
             None
@@ -148,17 +141,15 @@ impl StoreWrapper {
             Some(metadata)
         };
 
-        let new_id = match store.db.supersede(
+        let new_id = match store.supersede(
             project_id,
             new_text,
-            &embedding,
             metadata_str,
             memory_type,
             old_memory_id,
         ) {
             Ok(id) => id,
             Err(err) => {
-                let err: Error = err.into();
                 return Err(err.into());
             }
         };
@@ -430,7 +421,7 @@ impl ToolHandler {
 
         // Parse and validate memory_type (default: "fact")
         let memory_type = params.memory_type.as_deref().unwrap_or("fact");
-        let _ = MemoryType::from_str(memory_type)
+        let memory_type_val = MemoryType::from_str(memory_type)
             .map_err(|e| McpError::invalid_input(&format!("Invalid memory type: {}", e)))?;
 
         // Parse and validate status (default: "active")
@@ -457,7 +448,7 @@ impl ToolHandler {
                 &self.project_id,
                 &params.text,
                 &metadata_str,
-                memory_type,
+                memory_type_val,
                 supersedes_id,
             )?;
             return Ok(CallToolResult::success(vec![Content::text(
@@ -471,8 +462,8 @@ impl ToolHandler {
             &params.text,
             &metadata_str,
             false,
-            memory_type,
-            status_str,
+            memory_type_val,
+            status_val,
         )?;
 
         Ok(CallToolResult::success(vec![Content::text(
@@ -652,7 +643,7 @@ impl ToolHandler {
 
         // Parse and validate memory_type (default: "fact")
         let memory_type = params.memory_type.as_deref().unwrap_or("fact");
-        let _ = MemoryType::from_str(memory_type)
+        let memory_type_val = MemoryType::from_str(memory_type)
             .map_err(|e| McpError::invalid_input(&format!("Invalid memory type: {}", e)))?;
 
         // Serialize metadata
@@ -666,7 +657,7 @@ impl ToolHandler {
             &self.project_id,
             &params.new_text,
             &metadata_str,
-            memory_type,
+            memory_type_val,
             &params.old_memory_id,
         )?;
 

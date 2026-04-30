@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use vipune::errors::Error;
 use vipune::{
-    Config, IngestPolicy, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT, MemoryStore, detect_project,
+    Config, IngestPolicy, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT, MemoryStatus, MemoryStore,
+    MemoryType, detect_project,
 };
 
 /// Test basic memory add and search operations.
@@ -27,8 +28,8 @@ fn test_memory_store_add_then_search_returns_matching_memory() {
             "Alice works at Microsoft",
             None,
             false,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .expect("Failed to add memory")
     {
@@ -80,7 +81,14 @@ fn test_add_with_empty_input_returns_error() {
     let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
         .expect("Failed to create store");
 
-    let result = store.add_with_conflict("test", "", None, false, "fact", "active");
+    let result = store.add_with_conflict(
+        "test",
+        "",
+        None,
+        false,
+        MemoryType::Fact,
+        MemoryStatus::Active,
+    );
     assert!(result.is_err());
     if !matches!(result.as_ref().unwrap_err(), Error::EmptyInput) {
         panic!("Expected EmptyInput error");
@@ -101,7 +109,14 @@ fn test_add_with_oversized_input_returns_error() {
 
     // Create input longer than MAX_INPUT_LENGTH
     let long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.add_with_conflict("test", &long_text, None, false, "fact", "active");
+    let result = store.add_with_conflict(
+        "test",
+        &long_text,
+        None,
+        false,
+        MemoryType::Fact,
+        MemoryStatus::Active,
+    );
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -225,8 +240,8 @@ fn test_memory_with_stored_content_returns_expected_fields() {
             "Test content",
             Some(r#"{"key": "value"}"#),
             false,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .expect("Failed to add memory")
     {
@@ -271,8 +286,8 @@ fn test_search_hybrid_with_test_memories_returns_fused_results() {
             "Authentication uses JWT tokens",
             None,
             false,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .expect("Failed to add memory 1")
     {
@@ -285,8 +300,8 @@ fn test_search_hybrid_with_test_memories_returns_fused_results() {
             "User management system",
             None,
             false,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .expect("Failed to add memory 2")
     {
@@ -322,7 +337,14 @@ fn test_update_with_empty_input_returns_error() {
         .expect("Failed to create store");
 
     let memory_id = match store
-        .add_with_conflict("test", "Original content", None, false, "fact", "active")
+        .add_with_conflict(
+            "test",
+            "Original content",
+            None,
+            false,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add memory")
     {
         vipune::AddResult::Added { id } => id,
@@ -350,7 +372,14 @@ fn test_update_with_oversized_input_returns_error() {
         .expect("Failed to create store");
 
     let memory_id = match store
-        .add_with_conflict("test", "Original content", None, false, "fact", "active")
+        .add_with_conflict(
+            "test",
+            "Original content",
+            None,
+            false,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add memory")
     {
         vipune::AddResult::Added { id } => id,
@@ -442,7 +471,14 @@ fn test_add_with_whitespace_only_input_returns_error() {
         .expect("Failed to create store");
 
     // Try to add whitespace-only content
-    let result = store.add_with_conflict("test", "   ", None, false, "fact", "active");
+    let result = store.add_with_conflict(
+        "test",
+        "   ",
+        None,
+        false,
+        MemoryType::Fact,
+        MemoryStatus::Active,
+    );
     assert!(result.is_err());
     assert!(matches!(result.as_ref().unwrap_err(), Error::EmptyInput));
 
@@ -587,13 +623,34 @@ fn test_list_regression_coverage() {
 
     // Add multiple memories
     let _id1 = store
-        .add_with_conflict(project_id, "first memory", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "first memory",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add memory");
     let _id2 = store
-        .add_with_conflict(project_id, "second memory", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "second memory",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add memory");
     let _id3 = store
-        .add_with_conflict(project_id, "third memory", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "third memory",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add memory");
 
     // Test ordering (newest first)
@@ -619,8 +676,8 @@ fn test_list_regression_coverage() {
             "other memory",
             None,
             true,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .expect("Failed to add memory");
     let project1_results = store
@@ -651,14 +708,28 @@ fn test_list_since_with_timezone_offset() {
 
     // Add memories with controlled timestamps
     let _old = store
-        .add_with_conflict(project_id, "old memory", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "old memory",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add memory");
 
     // Wait at least 1ms to ensure different timestamps
     std::thread::sleep(std::time::Duration::from_millis(10));
 
     let _new = store
-        .add_with_conflict(project_id, "new memory", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "new memory",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add memory");
 
     // Test with UTC timestamp (should succeed and only return newer)
@@ -687,7 +758,14 @@ fn test_list_since_timestamp_precision_equivalence() {
     let project_id = "test-project";
 
     let _id = store
-        .add_with_conflict(project_id, "test memory", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "test memory",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add memory");
 
     // Wait to ensure timestamp difference
@@ -727,7 +805,14 @@ fn test_get_many_with_duplicate_ids() {
     let project_id = "test-project";
 
     let id1 = match store
-        .add_with_conflict(project_id, "first", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "first",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add memory")
     {
         vipune::AddResult::Added { id } => id,
@@ -735,7 +820,14 @@ fn test_get_many_with_duplicate_ids() {
     };
 
     let id2 = match store
-        .add_with_conflict(project_id, "second", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "second",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add memory")
     {
         vipune::AddResult::Added { id } => id,
@@ -767,7 +859,14 @@ fn test_add_at_exactly_max_input_length_returns_success() {
 
     // Create input exactly at MAX_INPUT_LENGTH
     let exact_text = "x".repeat(MAX_INPUT_LENGTH);
-    let result = store.add_with_conflict("test", &exact_text, None, false, "fact", "active");
+    let result = store.add_with_conflict(
+        "test",
+        &exact_text,
+        None,
+        false,
+        MemoryType::Fact,
+        MemoryStatus::Active,
+    );
     assert!(
         result.is_ok(),
         "Should accept input at exactly MAX_INPUT_LENGTH"
@@ -788,7 +887,14 @@ fn test_add_one_over_max_input_length_returns_error() {
 
     // Create input one character over MAX_INPUT_LENGTH
     let too_long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.add_with_conflict("test", &too_long_text, None, false, "fact", "active");
+    let result = store.add_with_conflict(
+        "test",
+        &too_long_text,
+        None,
+        false,
+        MemoryType::Fact,
+        MemoryStatus::Active,
+    );
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -1097,8 +1203,8 @@ fn test_update_text_only_preserves_metadata() {
             "original content",
             Some(r#"{"tag": "important"}"#),
             true,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .expect("Failed to add")
     {
@@ -1133,7 +1239,14 @@ fn test_update_with_invalid_json_metadata_returns_error() {
 
     // Add memory
     let id = match store
-        .add_with_conflict(project_id, "original content", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "original content",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add")
     {
         vipune::AddResult::Added { id } => id,
@@ -1172,7 +1285,14 @@ fn test_update_with_empty_metadata_returns_error() {
 
     // Add memory
     let id = match store
-        .add_with_conflict(project_id, "original content", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "original content",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add")
     {
         vipune::AddResult::Added { id } => id,
@@ -1211,7 +1331,14 @@ fn test_update_with_whitespace_only_metadata_returns_error() {
 
     // Add memory
     let id = match store
-        .add_with_conflict(project_id, "original content", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "original content",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add")
     {
         vipune::AddResult::Added { id } => id,
@@ -1250,7 +1377,14 @@ fn test_update_metadata_only() {
 
     // Add memory without metadata
     let id = match store
-        .add_with_conflict(project_id, "original content", None, true, "fact", "active")
+        .add_with_conflict(
+            project_id,
+            "original content",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add")
     {
         vipune::AddResult::Added { id } => id,
@@ -1289,8 +1423,8 @@ fn test_update_both_text_and_metadata() {
             "old content",
             Some(r#"{"old": "value"}"#),
             true,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .expect("Failed to add")
     {
@@ -1340,8 +1474,8 @@ fn test_add_with_conflict_creates_multiple_active_memories() {
             "memory A content",
             None,
             true,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .expect("Failed to add memory A")
     {
@@ -1356,8 +1490,8 @@ fn test_add_with_conflict_creates_multiple_active_memories() {
             "memory B content",
             None,
             true,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .expect("Failed to add memory B")
     {
@@ -1395,7 +1529,14 @@ fn test_default_search_excludes_candidate() {
 
     // Add active memory using add_with_conflict with force=true
     let _active_id = match store
-        .add_with_conflict(&project_id, "active memory", None, true, "fact", "active")
+        .add_with_conflict(
+            &project_id,
+            "active memory",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add active")
     {
         vipune::AddResult::Added { id } => id,
@@ -1409,8 +1550,8 @@ fn test_default_search_excludes_candidate() {
             "candidate memory",
             None,
             true,
-            "fact",
-            "candidate",
+            MemoryType::Fact,
+            MemoryStatus::Candidate,
         )
         .expect("Failed to add candidate")
     {
@@ -1450,7 +1591,14 @@ fn test_include_candidates_returns_both() {
 
     // Add active memory
     let _active_id = match store
-        .add_with_conflict(&project_id, "active memory", None, true, "fact", "active")
+        .add_with_conflict(
+            &project_id,
+            "active memory",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add active")
     {
         vipune::AddResult::Added { id } => id,
@@ -1464,8 +1612,8 @@ fn test_include_candidates_returns_both() {
             "candidate memory",
             None,
             true,
-            "fact",
-            "candidate",
+            MemoryType::Fact,
+            MemoryStatus::Candidate,
         )
         .expect("Failed to add candidate")
     {
@@ -1508,7 +1656,14 @@ fn test_default_list_excludes_non_active() {
 
     // Add memories with various statuses using add_with_conflict with force=true
     let _active_id = match store
-        .add_with_conflict(&project_id, "active memory", None, true, "fact", "active")
+        .add_with_conflict(
+            &project_id,
+            "active memory",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
         .expect("Failed to add active")
     {
         vipune::AddResult::Added { id } => id,
@@ -1521,8 +1676,8 @@ fn test_default_list_excludes_non_active() {
             "candidate memory",
             None,
             true,
-            "fact",
-            "candidate",
+            MemoryType::Fact,
+            MemoryStatus::Candidate,
         )
         .expect("Failed to add candidate")
     {
@@ -1536,8 +1691,8 @@ fn test_default_list_excludes_non_active() {
             "deprecated memory",
             None,
             true,
-            "fact",
-            "deprecated",
+            MemoryType::Fact,
+            MemoryStatus::Deprecated,
         )
         .expect("Failed to add deprecated")
     {
@@ -1576,8 +1731,8 @@ fn test_hybrid_search_respects_status_filter() {
             "rust programming language",
             None,
             true,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .expect("Failed to add active")
     {
@@ -1592,8 +1747,8 @@ fn test_hybrid_search_respects_status_filter() {
             "old rust programming info",
             None,
             true,
-            "fact",
-            "candidate",
+            MemoryType::Fact,
+            MemoryStatus::Candidate,
         )
         .expect("Failed to add candidate")
     {
@@ -1644,8 +1799,8 @@ fn test_supersede_through_public_api() {
         "original memory content",
         None,
         true,
-        "fact",
-        "active",
+        MemoryType::Fact,
+        MemoryStatus::Active,
     ) {
         Ok(vipune::AddResult::Added { id }) => id,
         Ok(other) => panic!("Expected Added, got {:?}", other),
@@ -1666,7 +1821,7 @@ fn test_supersede_through_public_api() {
             &project_id,
             "updated memory content",
             Some(r#"{"updated": true}"#),
-            "fact",
+            MemoryType::Fact,
             &original_id,
         )
         .expect("Failed to supersede");

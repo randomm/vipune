@@ -275,10 +275,8 @@ fn handle_add(
     supersedes: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    // Validate memory_type
-    let _ = MemoryType::from_str(memory_type)?;
-
-    // Validate status
+    // Parse memory_type and status
+    let memory_type_val = MemoryType::from_str(memory_type)?;
     let status_val = MemoryStatus::from_str(status)?;
     if !status_val.is_valid_for_insert() {
         return Err(Error::InvalidInput(format!(
@@ -296,7 +294,7 @@ fn handle_add(
 
     // If supersedes is provided, use supersede flow
     if let Some(old_id) = supersedes {
-        let new_id = store.supersede(project_id, text, metadata, memory_type, old_id)?;
+        let new_id = store.supersede(project_id, text, metadata, memory_type_val, old_id)?;
 
         if json {
             print_json(&AddResponse {
@@ -315,7 +313,14 @@ fn handle_add(
         IngestPolicy::ConflictAware
     };
 
-    match store.ingest_with_type_status(project_id, text, metadata, policy, memory_type, status)? {
+    match store.ingest_with_type_status(
+        project_id,
+        text,
+        metadata,
+        policy,
+        memory_type_val,
+        status_val,
+    )? {
         AddResult::Added { id } => {
             if json {
                 print_json(&AddResponse {
@@ -575,7 +580,11 @@ fn handle_update(
             .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
     }
 
-    store.update(id, text, metadata, memory_type, status)?;
+    // Parse memory_type and status to enums
+    let memory_type_val = memory_type.map(MemoryType::from_str).transpose()?;
+    let status_val = status.map(MemoryStatus::from_str).transpose()?;
+
+    store.update(id, text, metadata, memory_type_val, status_val)?;
     if json {
         print_json(&UpdateResponse {
             status: "updated".to_string(),
