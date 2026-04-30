@@ -89,6 +89,12 @@ pub struct SearchMemoriesParams {
     #[serde(default)]
     #[schemars(description = "Use hybrid search (semantic + BM25). Default: config value.")]
     pub hybrid: Option<bool>,
+
+    /// Whether to skip updating retrieval telemetry (retrieval_count, last_retrieved_at).
+    /// Default: false (telemetry is updated).
+    #[serde(default)]
+    #[schemars(description = "Skip updating retrieval telemetry (default: false).")]
+    pub no_touch: Option<bool>,
 }
 
 /// Parameters for the list_memories tool.
@@ -105,6 +111,11 @@ pub struct ListMemoriesParams {
     /// Filter by statuses.
     #[schemars(description = "Filter by statuses (e.g., active, candidate).")]
     pub statuses: Option<Vec<String>>,
+
+    /// Whether to skip updating retrieval telemetry. Default: false.
+    #[serde(default)]
+    #[schemars(description = "Skip updating retrieval telemetry (default: false).")]
+    pub no_touch: Option<bool>,
 }
 
 /// Response when a memory is successfully added.

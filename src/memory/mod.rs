@@ -4,13 +4,14 @@
 //! with automatic embedding generation via the ONNX model.
 
 pub(crate) mod crud;
-mod search;
+pub mod search;
 
 // pub(crate): module internals hidden; public items re-exported explicitly via lib.rs
 pub(crate) mod store;
 
 pub mod lifecycle;
 
+pub use search::SearchOptions;
 pub use store::MemoryStore;
 
 #[cfg(test)]

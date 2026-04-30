@@ -17,6 +17,7 @@ struct SearchContext {
     memory_type: Option<String>,
     status: Option<String>,
     include_candidates: bool,
+    no_touch: bool,
 }
 
 /// Commands supported by vipune CLI.
@@ -81,10 +82,18 @@ pub enum Commands {
         /// Include candidate memories in results
         #[arg(long)]
         include_candidates: bool,
+
+        /// Do not update retrieval telemetry (retrieval_count, last_retrieved_at)
+        #[arg(long)]
+        no_touch: bool,
     },
     Get {
         /// Memory ID
         id: String,
+
+        /// Do not update retrieval telemetry
+        #[arg(long)]
+        no_touch: bool,
     },
     List {
         /// Maximum number of results (default: 10)
@@ -171,6 +180,7 @@ pub fn execute(
             memory_type,
             status,
             include_candidates,
+            no_touch,
         } => handle_search(
             store,
             &project_id,
@@ -183,11 +193,12 @@ pub fn execute(
                 memory_type: memory_type.clone(),
                 status: status.clone(),
                 include_candidates: *include_candidates,
+                no_touch: *no_touch,
             },
             config,
             json,
         ),
-        Commands::Get { id } => handle_get(store, id, json),
+        Commands::Get { id, no_touch } => handle_get(store, id, *no_touch, json),
         Commands::List {
             limit,
             memory_type,
@@ -369,7 +380,6 @@ fn handle_search(
     let type_strs: Option<Vec<&str>> = type_vec
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let type_slice: Option<&[&str]> = type_strs.as_deref();
 
     let status_vec: Option<Vec<String>> = if opts.include_candidates {
         Some(vec!["active".to_string(), "candidate".to_string()])
@@ -381,17 +391,19 @@ fn handle_search(
     let status_strs: Option<Vec<&str>> = status_vec
         .as_ref()
         .map(|v| v.iter().map(|s| s.as_str()).collect());
-    let status_slice: Option<&[&str]> = status_strs.as_deref();
 
     let use_hybrid = (opts.hybrid || config.hybrid) && !opts.no_hybrid;
+    let search_options = crate::memory::SearchOptions {
+        memory_types: type_strs,
+        statuses: status_strs,
+    };
     let memories = if use_hybrid {
         store.search_hybrid(
             project_id,
             &opts.query,
             opts.limit,
             recency_weight,
-            type_slice,
-            status_slice,
+            search_options,
         )?
     } else {
         store.search(
@@ -399,10 +411,20 @@ fn handle_search(
             &opts.query,
             opts.limit,
             recency_weight,
-            type_slice,
-            status_slice,
+            search_options,
         )?
     };
+
+    // Update retrieval telemetry unless disabled
+    if !opts.no_touch {
+        let ids: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
+        if !ids.is_empty() {
+            if let Err(e) = store.db.touch_memories(&ids) {
+                eprintln!("warning: failed to update retrieval stats: {}", e);
+            }
+        }
+    }
+
     if json {
         let results: Vec<SearchResultItem> = memories
             .into_iter()
@@ -426,10 +448,23 @@ fn handle_search(
     Ok(ExitCode::SUCCESS)
 }
 
-fn handle_get(store: &mut MemoryStore, id: &str, json: bool) -> Result<ExitCode, Error> {
+fn handle_get(
+    store: &mut MemoryStore,
+    id: &str,
+    no_touch: bool,
+    json: bool,
+) -> Result<ExitCode, Error> {
     let memory = store
         .get(id)?
         .ok_or_else(|| Error::NotFound("memory not found".to_string()))?;
+
+    // Update retrieval telemetry unless disabled
+    if !no_touch {
+        if let Err(e) = store.db.touch_memories(&[id]) {
+            eprintln!("warning: failed to update retrieval stats: {}", e);
+        }
+    }
+
     if json {
         print_json(&GetResponse {
             id: memory.id.clone(),

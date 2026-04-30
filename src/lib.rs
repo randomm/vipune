@@ -28,7 +28,7 @@
 //! }
 //!
 //! // Search memories
-//! let results = store.search(&project_id, "where does alice work", 10, 0.0, None, None);
+//! let results = store.search(&project_id, "where does alice work", 10, 0.0, vipune::memory::SearchOptions::default());
 //! for memory in results.unwrap() {
 //!     println!("{:.2}: {}", memory.similarity.unwrap_or(0.0), memory.content);
 //! }

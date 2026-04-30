@@ -131,6 +131,8 @@ mod tests {
             memory_type: "fact".to_string(),
             status: "active".to_string(),
             superseded_by: None,
+            retrieval_count: 0,
+            last_retrieved_at: None,
         }
     }
 
@@ -262,6 +264,8 @@ mod tests {
             memory_type: "fact".to_string(),
             status: "active".to_string(),
             superseded_by: None,
+            retrieval_count: 0,
+            last_retrieved_at: None,
         };
 
         let fused = rrf_fusion(vec![vec![memory]], None).unwrap();

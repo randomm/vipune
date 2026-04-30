@@ -320,6 +320,14 @@ impl MemoryStore {
         Ok(self.db.delete(id)?)
     }
 
+    /// Increment retrieval_count and set last_retrieved_at for given memory IDs.
+    ///
+    /// Called after retrieving memories to track telemetry.
+    #[allow(dead_code)] // Library API: unused when MCP feature is disabled
+    pub fn touch_memories(&self, ids: &[&str]) -> Result<(), Error> {
+        Ok(self.db.touch_memories(ids)?)
+    }
+
     #[allow(dead_code)] // Public API for library consumers (e.g., kide)
     #[must_use = "handle the error or results may be lost"]
     /// List memories for a project created since a given timestamp.

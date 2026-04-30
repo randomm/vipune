@@ -26,6 +26,7 @@ use uuid::Uuid;
 /// Contains the stored memory content, metadata, embedding, and timestamps. The similarity
 /// field is populated only during search operations.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct Memory {
     /// Unique identifier for this memory.
     pub id: String,
@@ -36,7 +37,6 @@ pub struct Memory {
     /// Optional user-provided metadata (JSON string).
     pub metadata: Option<String>,
     /// The embedding vector (384-dimensional f32 values).
-    #[allow(dead_code)] // Library API: exposed for consumers, unused in CLI
     pub embedding: Vec<f32>,
 
     /// Similarity score (search-dependent):
@@ -48,14 +48,15 @@ pub struct Memory {
     /// Last update timestamp in RFC3339 format.
     pub updated_at: String,
     /// Memory type (fact, preference, procedure, guard, observation).
-    #[allow(dead_code)] // Library API: exposed for consumers
     pub memory_type: String,
     /// Lifecycle status (active, candidate, superseded, deprecated).
-    #[allow(dead_code)] // Library API: exposed for consumers
     pub status: String,
     /// ID of the memory that superseded this one (if any).
-    #[allow(dead_code)] // Library API: exposed for consumers
     pub superseded_by: Option<String>,
+    /// Number of times this memory was retrieved via search or get.
+    pub retrieval_count: i64,
+    /// RFC3339 timestamp of last retrieval (None if never retrieved).
+    pub last_retrieved_at: Option<String>,
 }
 
 /// Error types for SQLite operations.
@@ -257,7 +258,7 @@ impl Database {
     pub fn get(&self, id: &str) -> Result<Option<Memory>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
             FROM memories
             WHERE id = ?1
             "#,
@@ -316,7 +317,7 @@ impl Database {
 
         let where_clause = where_clauses.join(" AND ");
         let query = format!(
-            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
              FROM memories WHERE {} ORDER BY created_at DESC LIMIT ?{}",
             where_clause, param_index
         );
@@ -452,7 +453,6 @@ impl Database {
     /// In a single transaction:
     /// 1. Inserts the new memory
     /// 2. Sets old memory's status to 'superseded' and superseded_by to new ID
-    #[allow(dead_code)] // Public API: used by CLI --supersedes flag and library consumers
     pub fn supersede(
         &self,
         project_id: &str,
@@ -571,7 +571,7 @@ impl Database {
 
         let where_clause = where_clauses.join(" AND ");
         let query = format!(
-            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
              FROM memories WHERE {} ORDER BY created_at DESC LIMIT ?{}",
             where_clause, param_index
         );
@@ -645,7 +645,7 @@ impl Database {
             .join(", ");
         let query = format!(
             r#"
-            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by
+            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
             FROM memories
             WHERE id IN ({})
             "#,
@@ -681,6 +681,8 @@ impl Database {
                         memory_type: row.get(7)?,
                         status: row.get(8)?,
                         superseded_by: row.get(9)?,
+                        retrieval_count: row.get(10)?,
+                        last_retrieved_at: row.get(11)?,
                     },
                 ))
             })?
@@ -701,6 +703,30 @@ impl Database {
     #[cfg(test)]
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Increment retrieval_count and set last_retrieved_at for given memory IDs.
+    ///
+    /// Called by CLI handlers and MCP handlers after retrieving memories via search/get.
+    /// This method is NOT called internally by supersede or other operations that don't
+    /// represent user-initiated retrieval.
+    #[allow(dead_code)] // Library API: unused when MCP feature is disabled
+    pub fn touch_memories(&self, ids: &[&str]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        let placeholders: Vec<String> = (0..ids.len()).map(|i| format!("?{}", i + 2)).collect();
+        let sql = format!(
+            "UPDATE memories SET retrieval_count = retrieval_count + 1, last_retrieved_at = ?1 WHERE id IN ({})",
+            placeholders.join(", ")
+        );
+        let params: Vec<&dyn rusqlite::types::ToSql> =
+            std::iter::once(&now as &dyn rusqlite::types::ToSql)
+                .chain(ids.iter().map(|id| id as &dyn rusqlite::types::ToSql))
+                .collect();
+        self.conn.execute(&sql, params.as_slice())?;
+        Ok(())
     }
 }
 
