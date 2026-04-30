@@ -1872,12 +1872,18 @@ fn test_get_no_touch_preserves_count() {
     let project_id = "test-project";
 
     // Add a memory
-    let memory_id =
-        match store.add_with_conflict(project_id, "test content", None, true, "fact", "active") {
-            Ok(vipune::AddResult::Added { id }) => id,
-            Ok(other) => panic!("Expected Added, got {:?}", other),
-            Err(e) => panic!("Failed to add memory: {}", e),
-        };
+    let memory_id = match store.add_with_conflict(
+        project_id,
+        "test content",
+        None,
+        true,
+        MemoryType::Fact,
+        MemoryStatus::Active,
+    ) {
+        Ok(vipune::AddResult::Added { id }) => id,
+        Ok(other) => panic!("Expected Added, got {:?}", other),
+        Err(e) => panic!("Failed to add memory: {}", e),
+    };
 
     // Manually touch it (simulating user retrieval)
     store.touch_memories(&[&memory_id]).ok();
@@ -1914,8 +1920,8 @@ fn test_touch_memories_increments_retrieval_count() {
         "test retrieval tracking",
         None,
         true,
-        "fact",
-        "active",
+        MemoryType::Fact,
+        MemoryStatus::Active,
     ) {
         Ok(vipune::AddResult::Added { id }) => id,
         other => panic!("Expected Added, got {:?}", other),

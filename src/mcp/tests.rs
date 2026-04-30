@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::mcp::params::*;
+use crate::mcp::store_wrapper::StoreWrapper;
 use crate::mcp::tools::ToolHandler;
 use crate::memory::MemoryStore;
 use std::sync::{Arc, Mutex};
@@ -194,7 +195,7 @@ mod tool_handler_tests {
     async fn test_store_and_search_integration() {
         let (store, _dir) = create_test_store();
         let store = Arc::new(Mutex::new(store));
-        let wrapper = super::super::tools::StoreWrapper::new(store.clone());
+        let wrapper = StoreWrapper::new(store.clone());
         let project_id = "test-project";
 
         // Ingest a memory
@@ -231,7 +232,7 @@ mod tool_handler_tests {
     async fn test_search_results_include_metadata_and_project_id() {
         let (store, _dir) = create_test_store();
         let store = Arc::new(Mutex::new(store));
-        let wrapper = super::super::tools::StoreWrapper::new(store.clone());
+        let wrapper = StoreWrapper::new(store.clone());
         let project_id = "test-project";
 
         // Ingest a memory with metadata
@@ -287,7 +288,7 @@ mod tool_handler_tests {
     async fn test_search_results_with_null_metadata() {
         let (store, _dir) = create_test_store();
         let store = Arc::new(Mutex::new(store));
-        let wrapper = super::super::tools::StoreWrapper::new(store.clone());
+        let wrapper = StoreWrapper::new(store.clone());
         let project_id = "test-project";
 
         // Ingest a memory without metadata (null)
