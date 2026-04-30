@@ -11,23 +11,12 @@ use super::store::{MemoryStore, validate_limit};
 const MAX_CANDIDATE_POOL: usize = 10_000;
 
 /// Options for search operations.
+#[derive(Default)]
 pub struct SearchOptions<'a> {
     /// Filter by memory types (None = no filter)
     pub memory_types: Option<Vec<&'a str>>,
     /// Filter by lifecycle statuses (None = default to active)
     pub statuses: Option<Vec<&'a str>>,
-    /// Whether to update retrieval telemetry for returned memories
-    pub touch: bool,
-}
-
-impl Default for SearchOptions<'_> {
-    fn default() -> Self {
-        Self {
-            memory_types: None,
-            statuses: None,
-            touch: true,
-        }
-    }
 }
 
 impl MemoryStore {
@@ -44,7 +33,7 @@ impl MemoryStore {
     /// * `query` - Search query text (1 to 100,000 characters)
     /// * `limit` - Maximum number of results to return
     /// * `recency_weight` - Weight for temporal decay (0.0 = pure semantic, 1.0 = max recency)
-    /// * `options` - Search options (filters and touch flag)
+    /// * `options` - Search options (filters only)
     ///
     /// # Returns
     ///
@@ -76,17 +65,13 @@ impl MemoryStore {
 
         validate_recency_weight(recency_weight).map_err(Error::Validation)?;
         let embedding = self.embedder()?.embed(query)?;
-        let mut memories = self
-            .db
-            .search(project_id, &embedding, limit, options.memory_types.as_deref(), options.statuses.as_deref())?;
-
-        // Update retrieval telemetry if requested
-        if options.touch {
-            let ids: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
-            if !ids.is_empty() {
-                self.db.touch_memories(&ids)?;
-            }
-        }
+        let mut memories = self.db.search(
+            project_id,
+            &embedding,
+            limit,
+            options.memory_types.as_deref(),
+            options.statuses.as_deref(),
+        )?;
 
         if recency_weight > 0.0 {
             let decay_config = DecayConfig::new()?;
@@ -130,7 +115,7 @@ impl MemoryStore {
     /// * `query` - Search query text (1 to 100,000 characters)
     /// * `limit` - Maximum number of results to return
     /// * `recency_weight` - Weight for temporal decay (0.0 = pure score, 1.0 = max recency)
-    /// * `options` - Search options (filters and touch flag)
+    /// * `options` - Search options (filters only)
     ///
     /// # Returns
     ///
@@ -178,9 +163,13 @@ impl MemoryStore {
         )?;
 
         // 4. Run BM25 search
-        let bm25_results =
-            self.db
-                .search_bm25(query, project_id, candidate_pool, options.memory_types.as_deref(), options.statuses.as_deref())?;
+        let bm25_results = self.db.search_bm25(
+            query,
+            project_id,
+            candidate_pool,
+            options.memory_types.as_deref(),
+            options.statuses.as_deref(),
+        )?;
 
         // 5. Fuse with RRF (use default config)
         let fused = rrf::rrf_fusion(vec![semantic_results, bm25_results], None)?;
@@ -218,15 +207,7 @@ impl MemoryStore {
             fused
         };
 
-        // 7. Update retrieval telemetry if requested
-        if options.touch {
-            let ids: Vec<&str> = final_results.iter().map(|m| m.id.as_str()).collect();
-            if !ids.is_empty() {
-                self.db.touch_memories(&ids)?;
-            }
-        }
-
-        // 8. Return top 'limit' results
+        // Return top 'limit' results
         final_results.truncate(limit);
         Ok(final_results)
     }

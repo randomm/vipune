@@ -1704,77 +1704,6 @@ fn test_supersede_through_public_api() {
     std::fs::remove_file(db_path).ok();
 }
 
-/// Test that search increments retrieval_count for returned memories.
-#[test]
-fn test_search_increments_retrieval_count() {
-    let temp_dir = env::temp_dir();
-    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
-
-    let config = Config::default();
-    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
-        .expect("Failed to create store");
-
-    let project_id = "test-project";
-
-    // Add a memory
-    let memory_id = match store.add_with_conflict(
-        project_id,
-        "rust programming language",
-        None,
-        true,
-        "fact",
-        "active",
-    ) {
-        Ok(vipune::AddResult::Added { id }) => id,
-        Ok(other) => panic!("Expected Added, got {:?}", other),
-        Err(e) => panic!("Failed to add memory: {}", e),
-    };
-
-    // Search for it (twice to verify count increases)
-    store
-        .search(
-            project_id,
-            "rust programming",
-            10,
-            0.0,
-            vipune::memory::SearchOptions { touch: true, ..Default::default() },
-        )
-        .expect("Failed to search");
-
-    // Get the memory to check retrieval_count
-    let memory = store
-        .get(&memory_id)
-        .expect("Failed to get memory")
-        .expect("Memory not found");
-    assert_eq!(
-        memory.retrieval_count, 1,
-        "Expected retrieval_count=1 after search"
-    );
-
-    // Search again
-    store
-        .search(
-            project_id,
-            "rust language",
-            10,
-            0.0,
-            vipune::memory::SearchOptions { touch: true, ..Default::default() },
-        )
-        .expect("Failed to search again");
-
-    // Verify count incremented
-    let memory2 = store
-        .get(&memory_id)
-        .expect("Failed to get memory")
-        .expect("Memory not found");
-    assert!(
-        memory2.retrieval_count >= 2,
-        "Expected retrieval_count>=2 after second search"
-    );
-
-    std::fs::remove_file(db_path).ok();
-}
-
 /// Test that get with no_touch flag preserves retrieval_count.
 #[test]
 fn test_get_no_touch_preserves_count() {
@@ -1810,6 +1739,41 @@ fn test_get_no_touch_preserves_count() {
         memory.last_retrieved_at.is_some(),
         "Expected last_retrieved_at to be set after touch"
     );
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Test that touch_memories increments retrieval_count.
+#[test]
+fn test_touch_memories_increments_retrieval_count() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+    let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
+
+    // Add a memory
+    let id = match store.add_with_conflict(&project_id, "test retrieval tracking", None, true, "fact", "active") {
+        Ok(vipune::AddResult::Added { id }) => id,
+        other => panic!("Expected Added, got {:?}", other),
+    };
+
+    // Verify initial count is 0
+    let mem = store.get(&id).unwrap().unwrap();
+    assert_eq!(mem.retrieval_count, 0);
+    assert!(mem.last_retrieved_at.is_none());
+
+    // Touch once
+    store.touch_memories(&[&id]).unwrap();
+    let mem = store.get(&id).unwrap().unwrap();
+    assert_eq!(mem.retrieval_count, 1);
+    assert!(mem.last_retrieved_at.is_some());
+
+    // Touch again
+    store.touch_memories(&[&id]).unwrap();
+    let mem = store.get(&id).unwrap().unwrap();
+    assert_eq!(mem.retrieval_count, 2);
 
     std::fs::remove_file(db_path).ok();
 }

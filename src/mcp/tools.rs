@@ -190,7 +190,6 @@ impl StoreWrapper {
             crate::memory::SearchOptions {
                 memory_types,
                 statuses,
-                touch: true,
             },
         )?;
 
@@ -236,15 +235,8 @@ impl StoreWrapper {
         let options = crate::memory::SearchOptions {
             memory_types,
             statuses,
-            touch: true,
         };
-        let memories = store.search_hybrid(
-            project_id,
-            query,
-            limit,
-            recency_weight,
-            options,
-        )?;
+        let memories = store.search_hybrid(project_id, query, limit, recency_weight, options)?;
 
         let results: Vec<serde_json::Value> = memories
             .into_iter()
@@ -521,7 +513,6 @@ impl ToolHandler {
         // Convert filter params - move into the block where they're used
         let recency_weight = params.recency_weight.unwrap_or(self.config.recency_weight);
         let use_hybrid = params.hybrid.unwrap_or(self.config.hybrid);
-        let no_touch = params.no_touch.unwrap_or(false);
 
         let memories = {
             let mut store = self.store.0.lock().unwrap();
@@ -536,7 +527,6 @@ impl ToolHandler {
             let search_options = crate::memory::SearchOptions {
                 memory_types: type_strs,
                 statuses: status_strs,
-                touch: !no_touch,
             };
             if use_hybrid {
                 store

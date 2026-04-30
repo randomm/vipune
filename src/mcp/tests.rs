@@ -205,7 +205,14 @@ mod tool_handler_tests {
         assert!(json_str.contains("added"));
 
         // Search for it
-        let search_result = wrapper.search(project_id, "rust programming", 5, 0.0, None::<Vec<&str>>, None);
+        let search_result = wrapper.search(
+            project_id,
+            "rust programming",
+            5,
+            0.0,
+            None::<Vec<&str>>,
+            None,
+        );
         assert!(search_result.is_ok());
         let search_value = search_result.unwrap();
         let search_str = serde_json::to_string(&search_value).unwrap();

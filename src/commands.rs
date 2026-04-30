@@ -396,7 +396,6 @@ fn handle_search(
     let search_options = crate::memory::SearchOptions {
         memory_types: type_strs,
         statuses: status_strs,
-        touch: !opts.no_touch,
     };
     let memories = if use_hybrid {
         store.search_hybrid(
@@ -415,6 +414,16 @@ fn handle_search(
             search_options,
         )?
     };
+
+    // Update retrieval telemetry unless disabled
+    if !opts.no_touch {
+        let ids: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
+        if !ids.is_empty() {
+            if let Err(e) = store.db.touch_memories(&ids) {
+                eprintln!("warning: failed to update retrieval stats: {}", e);
+            }
+        }
+    }
 
     if json {
         let results: Vec<SearchResultItem> = memories
@@ -451,7 +460,9 @@ fn handle_get(
 
     // Update retrieval telemetry unless disabled
     if !no_touch {
-        store.db.touch_memories(&[id]).ok();
+        if let Err(e) = store.db.touch_memories(&[id]) {
+            eprintln!("warning: failed to update retrieval stats: {}", e);
+        }
     }
 
     if json {
