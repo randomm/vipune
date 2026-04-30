@@ -1,6 +1,7 @@
 //! Tests for search operations.
 
 use crate::memory::MemoryStore;
+use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::sqlite::Database;
 
 #[test]
@@ -312,8 +313,8 @@ fn test_integration_add_search_roundtrip() {
             "semantic search is useful",
             None,
             false,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .unwrap()
     {
@@ -355,8 +356,8 @@ fn test_integration_update_changes_embedding() {
             "original content",
             None,
             false,
-            "fact",
-            "active",
+            MemoryType::Fact,
+            MemoryStatus::Active,
         )
         .unwrap()
     {

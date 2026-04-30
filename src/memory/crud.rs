@@ -1,6 +1,7 @@
 //! CRUD operations for the memory store.
 
 use crate::errors::Error;
+use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory_types::{
     AddResult, BatchIngestItemResult, BatchIngestResult, ConflictMemory, IngestPolicy,
 };
@@ -69,12 +70,14 @@ impl MemoryStore {
         content: &str,
         metadata: Option<&str>,
         force: bool,
-        memory_type: &str,
-        status: &str,
+        memory_type: MemoryType,
+        status: MemoryStatus,
     ) -> Result<AddResult, Error> {
         Self::validate_input_length(content)?;
 
         let embedding = self.get_embedding(content)?;
+        let memory_type_str = memory_type.as_str();
+        let status_str = status.as_str();
 
         if force {
             let id = self.db.insert(
@@ -82,8 +85,8 @@ impl MemoryStore {
                 content,
                 &embedding,
                 metadata,
-                memory_type,
-                status,
+                memory_type_str,
+                status_str,
             )?;
             return Ok(AddResult::Added { id });
         }
@@ -106,8 +109,8 @@ impl MemoryStore {
                 content,
                 &embedding,
                 metadata,
-                memory_type,
-                status,
+                memory_type_str,
+                status_str,
             )?;
             Ok(AddResult::Added { id })
         } else {
@@ -167,7 +170,14 @@ impl MemoryStore {
         metadata: Option<&str>,
         policy: IngestPolicy,
     ) -> Result<AddResult, Error> {
-        self.ingest_with_type_status(project_id, content, metadata, policy, "fact", "active")
+        self.ingest_with_type_status(
+            project_id,
+            content,
+            metadata,
+            policy,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
     }
 
     /// Ingest with explicit memory type and status.
@@ -178,8 +188,8 @@ impl MemoryStore {
         content: &str,
         metadata: Option<&str>,
         policy: IngestPolicy,
-        memory_type: &str,
-        status: &str,
+        memory_type: MemoryType,
+        status: MemoryStatus,
     ) -> Result<AddResult, Error> {
         match policy {
             IngestPolicy::ConflictAware => {
@@ -257,8 +267,8 @@ impl MemoryStore {
         id: &str,
         content: Option<&str>,
         metadata: Option<&str>,
-        memory_type: Option<&str>,
-        status: Option<&str>,
+        memory_type: Option<MemoryType>,
+        status: Option<MemoryStatus>,
     ) -> Result<(), Error> {
         if content.is_none() && metadata.is_none() && memory_type.is_none() && status.is_none() {
             return Err(Error::InvalidInput(
@@ -277,19 +287,13 @@ impl MemoryStore {
                 .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
         }
 
-        // Validate memory_type if provided
-        if let Some(t) = memory_type {
-            crate::memory::lifecycle::MemoryType::from_str(t)?;
-        }
-
         // Validate status if provided - reject "superseded"
         if let Some(s) = status {
-            if s.to_lowercase() == "superseded" {
+            if s == MemoryStatus::Superseded {
                 return Err(Error::InvalidInput(
                     "Cannot set status to 'superseded'. Use --supersedes flag instead.".to_string(),
                 ));
             }
-            crate::memory::lifecycle::MemoryStatus::from_str(s)?;
         }
 
         // If content is provided, validate and generate new embedding
@@ -305,8 +309,8 @@ impl MemoryStore {
             content,
             embedding.as_deref(),
             metadata,
-            memory_type,
-            status,
+            memory_type.map(|t| t.as_str()),
+            status.map(|s| s.as_str()),
         )?)
     }
 
@@ -469,9 +473,14 @@ impl MemoryStore {
                 Err(e) => BatchIngestItemResult::Error {
                     message: format!("{}", e),
                 },
-                Ok(()) => match self
-                    .add_with_conflict(project_id, content, metadata, force, "fact", "active")
-                {
+                Ok(()) => match self.add_with_conflict(
+                    project_id,
+                    content,
+                    metadata,
+                    force,
+                    MemoryType::Fact,
+                    MemoryStatus::Active,
+                ) {
                     Ok(AddResult::Added { id }) => BatchIngestItemResult::Added { id },
                     Ok(AddResult::Conflicts {
                         proposed,
@@ -512,7 +521,7 @@ impl MemoryStore {
         project_id: &str,
         content: &str,
         metadata: Option<&str>,
-        memory_type: &str,
+        memory_type: MemoryType,
         old_id: &str,
     ) -> Result<String, Error> {
         Self::validate_input_length(content)?;
@@ -526,9 +535,6 @@ impl MemoryStore {
                 .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
         }
 
-        // Validate memory_type
-        crate::memory::lifecycle::MemoryType::from_str(memory_type)?;
-
         let embedding = self.get_embedding(content)?;
 
         Ok(self.db.supersede(
@@ -536,7 +542,7 @@ impl MemoryStore {
             content,
             &embedding,
             metadata,
-            memory_type,
+            memory_type.as_str(),
             old_id,
         )?)
     }

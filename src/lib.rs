@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use vipune::{Config, MemoryStore, detect_project};
+//! use vipune::{Config, MemoryStore, MemoryType, MemoryStatus, detect_project};
 //!
 //! // Initialize memory store
 //! let config = Config::default();
@@ -20,7 +20,7 @@
 //! let project_id = detect_project(None);
 //!
 //! // Add a memory with conflict detection
-//! let result = store.add_with_conflict(&project_id, "Alice works at Microsoft", None, false, "fact", "active");
+//! let result = store.add_with_conflict(&project_id, "Alice works at Microsoft", None, false, MemoryType::Fact, MemoryStatus::Active);
 //! match result {
 //!     Ok(vipune::AddResult::Added { id }) => println!("Added memory: {}", id),
 //!     Ok(vipune::AddResult::Conflicts { .. }) => println!("Conflict detected"),
