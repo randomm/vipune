@@ -1754,7 +1754,14 @@ fn test_touch_memories_increments_retrieval_count() {
     let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
 
     // Add a memory
-    let id = match store.add_with_conflict(&project_id, "test retrieval tracking", None, true, "fact", "active") {
+    let id = match store.add_with_conflict(
+        &project_id,
+        "test retrieval tracking",
+        None,
+        true,
+        "fact",
+        "active",
+    ) {
         Ok(vipune::AddResult::Added { id }) => id,
         other => panic!("Expected Added, got {:?}", other),
     };
