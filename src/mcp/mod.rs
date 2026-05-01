@@ -23,6 +23,7 @@
 
 mod params;
 pub mod server;
+pub mod store_wrapper;
 pub mod tools;
 
 #[cfg(test)]

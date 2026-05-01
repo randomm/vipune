@@ -8,234 +8,19 @@ use crate::output::*;
 use crate::{config, embedding::EmbeddingEngine, temporal};
 use std::process::ExitCode;
 
-struct SearchContext {
-    query: String,
-    limit: usize,
-    recency: Option<f64>,
-    hybrid: bool,
-    no_hybrid: bool,
-    memory_type: Option<String>,
-    status: Option<String>,
-    include_candidates: bool,
-    no_touch: bool,
+pub(crate) struct SearchContext {
+    pub(crate) query: String,
+    pub(crate) limit: usize,
+    pub(crate) recency: Option<f64>,
+    pub(crate) hybrid: bool,
+    pub(crate) no_hybrid: bool,
+    pub(crate) memory_type: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) include_candidates: bool,
+    pub(crate) no_touch: bool,
 }
 
-/// Commands supported by vipune CLI.
-#[derive(clap::Subcommand)]
-pub enum Commands {
-    Validate {
-        /// Text to validate for embedding
-        text: String,
-    },
-    Add {
-        /// Memory text content
-        text: String,
-
-        /// Optional JSON metadata
-        #[arg(short = 'm', long)]
-        metadata: Option<String>,
-
-        /// Bypass conflict detection and store the memory unconditionally.
-        #[arg(long)]
-        force: bool,
-
-        /// Memory type (fact, preference, procedure, guard, observation)
-        #[arg(long, default_value = "fact")]
-        memory_type: String,
-
-        /// Memory status (active, candidate)
-        #[arg(long, default_value = "active")]
-        status: String,
-
-        /// Supersede an existing memory (atomic replacement)
-        #[arg(long)]
-        supersedes: Option<String>,
-    },
-    Search {
-        /// Search query text
-        query: String,
-
-        /// Maximum number of results (default: 5)
-        #[arg(short = 'l', long, default_value = "5")]
-        limit: usize,
-
-        /// Recency weight for search results (0.0 to 1.0)
-        #[arg(long)]
-        recency: Option<f64>,
-
-        /// Use hybrid search (semantic + BM25 with RRF fusion)
-        #[arg(long)]
-        hybrid: bool,
-
-        /// Disable hybrid search even when enabled in config
-        #[arg(long)]
-        no_hybrid: bool,
-
-        /// Filter by memory type (comma-separated)
-        #[arg(long)]
-        memory_type: Option<String>,
-
-        /// Filter by status (default: active)
-        #[arg(long)]
-        status: Option<String>,
-
-        /// Include candidate memories in results
-        #[arg(long)]
-        include_candidates: bool,
-
-        /// Do not update retrieval telemetry (retrieval_count, last_retrieved_at)
-        #[arg(long)]
-        no_touch: bool,
-    },
-    Get {
-        /// Memory ID
-        id: String,
-
-        /// Do not update retrieval telemetry
-        #[arg(long)]
-        no_touch: bool,
-    },
-    List {
-        /// Maximum number of results (default: 10)
-        #[arg(short = 'l', long, default_value = "10")]
-        limit: usize,
-
-        /// Filter by memory type (comma-separated)
-        #[arg(long)]
-        memory_type: Option<String>,
-
-        /// Filter by status (default: active)
-        #[arg(long)]
-        status: Option<String>,
-
-        /// Include candidate memories in results
-        #[arg(long)]
-        include_candidates: bool,
-    },
-    Delete {
-        /// Memory ID
-        id: String,
-    },
-    Update {
-        /// Memory ID
-        id: String,
-
-        /// New content (optional)
-        #[arg(short = 't', long)]
-        text: Option<String>,
-
-        /// Optional JSON metadata (replaces existing metadata)
-        #[arg(short = 'm', long)]
-        metadata: Option<String>,
-
-        /// Update memory type
-        #[arg(long)]
-        memory_type: Option<String>,
-
-        /// Update memory status
-        #[arg(long)]
-        status: Option<String>,
-    },
-    Version,
-
-    #[cfg(feature = "mcp")]
-    /// Start MCP server over stdio
-    Mcp,
-}
-
-/// Execute a CLI command.
-pub fn execute(
-    command: &Commands,
-    store: &mut MemoryStore,
-    project_id: String,
-    config: &config::Config,
-    json: bool,
-) -> Result<ExitCode, Error> {
-    match command {
-        Commands::Validate { text } => handle_validate(text, &config.embedding_model, json),
-        Commands::Add {
-            text,
-            metadata,
-            force,
-            memory_type,
-            status,
-            supersedes,
-        } => handle_add(
-            store,
-            &project_id,
-            text,
-            metadata.as_deref(),
-            *force,
-            memory_type,
-            status,
-            supersedes.as_deref(),
-            json,
-        ),
-        Commands::Search {
-            query,
-            limit,
-            recency,
-            hybrid,
-            no_hybrid,
-            memory_type,
-            status,
-            include_candidates,
-            no_touch,
-        } => handle_search(
-            store,
-            &project_id,
-            &SearchContext {
-                query: query.clone(),
-                limit: *limit,
-                recency: *recency,
-                hybrid: *hybrid,
-                no_hybrid: *no_hybrid,
-                memory_type: memory_type.clone(),
-                status: status.clone(),
-                include_candidates: *include_candidates,
-                no_touch: *no_touch,
-            },
-            config,
-            json,
-        ),
-        Commands::Get { id, no_touch } => handle_get(store, id, *no_touch, json),
-        Commands::List {
-            limit,
-            memory_type,
-            status,
-            include_candidates,
-        } => handle_list(
-            store,
-            &project_id,
-            *limit,
-            memory_type.as_deref(),
-            status.as_deref(),
-            *include_candidates,
-            json,
-        ),
-        Commands::Delete { id } => handle_delete(store, id, json),
-        Commands::Update {
-            id,
-            text,
-            metadata,
-            memory_type,
-            status,
-        } => handle_update(
-            store,
-            id,
-            text.as_deref(),
-            metadata.as_deref(),
-            memory_type.as_deref(),
-            status.as_deref(),
-            json,
-        ),
-        Commands::Version => handle_version(json),
-        #[cfg(feature = "mcp")]
-        Commands::Mcp => unreachable!("Mcp is handled before execute"),
-    }
-}
-
-fn handle_validate(text: &str, model_id: &str, json: bool) -> Result<ExitCode, Error> {
+pub(crate) fn handle_validate(text: &str, model_id: &str, json: bool) -> Result<ExitCode, Error> {
     let engine = EmbeddingEngine::new(model_id)?;
     let token_count = engine.token_count(text)?;
 
@@ -264,7 +49,7 @@ fn handle_validate(text: &str, model_id: &str, json: bool) -> Result<ExitCode, E
 }
 
 #[allow(clippy::too_many_arguments)]
-fn handle_add(
+pub(crate) fn handle_add(
     store: &mut MemoryStore,
     project_id: &str,
     text: &str,
@@ -275,7 +60,6 @@ fn handle_add(
     supersedes: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    // Parse memory_type and status
     let memory_type_val = MemoryType::from_str(memory_type)?;
     let status_val = MemoryStatus::from_str(status)?;
     if !status_val.is_valid_for_insert() {
@@ -285,14 +69,12 @@ fn handle_add(
         )));
     }
 
-    // Check mutually exclusive flags
     if supersedes.is_some() && force {
         return Err(Error::InvalidInput(
             "Cannot use both --supersedes and --force flags together".to_string(),
         ));
     }
 
-    // If supersedes is provided, use supersede flow
     if let Some(old_id) = supersedes {
         let new_id = store.supersede(project_id, text, metadata, memory_type_val, old_id)?;
 
@@ -367,7 +149,7 @@ fn handle_add(
     }
 }
 
-fn handle_search(
+pub(crate) fn handle_search(
     store: &mut MemoryStore,
     project_id: &str,
     opts: &SearchContext,
@@ -377,7 +159,6 @@ fn handle_search(
     let recency_weight = opts.recency.unwrap_or(config.recency_weight);
     temporal::validate_recency_weight(recency_weight)?;
 
-    // Build filter params from CLI flags
     let type_vec: Option<Vec<String>> = opts
         .memory_type
         .as_ref()
@@ -420,7 +201,6 @@ fn handle_search(
         )?
     };
 
-    // Update retrieval telemetry unless disabled
     if !opts.no_touch {
         let ids: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
         if !ids.is_empty() {
@@ -453,7 +233,7 @@ fn handle_search(
     Ok(ExitCode::SUCCESS)
 }
 
-fn handle_get(
+pub(crate) fn handle_get(
     store: &mut MemoryStore,
     id: &str,
     no_touch: bool,
@@ -463,7 +243,6 @@ fn handle_get(
         .get(id)?
         .ok_or_else(|| Error::NotFound("memory not found".to_string()))?;
 
-    // Update retrieval telemetry unless disabled
     if !no_touch {
         if let Err(e) = store.db.touch_memories(&[id]) {
             eprintln!("warning: failed to update retrieval stats: {}", e);
@@ -492,7 +271,7 @@ fn handle_get(
     Ok(ExitCode::SUCCESS)
 }
 
-fn handle_list(
+pub(crate) fn handle_list(
     store: &mut MemoryStore,
     project_id: &str,
     limit: usize,
@@ -501,7 +280,6 @@ fn handle_list(
     include_candidates: bool,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    // Build filter params from CLI flags
     let type_vec: Option<Vec<String>> =
         memory_type.map(|t| t.split(',').map(|s| s.trim().to_string()).collect());
     let type_strs: Option<Vec<&str>> = type_vec
@@ -538,7 +316,11 @@ fn handle_list(
     Ok(ExitCode::SUCCESS)
 }
 
-fn handle_delete(store: &mut MemoryStore, id: &str, json: bool) -> Result<ExitCode, Error> {
+pub(crate) fn handle_delete(
+    store: &mut MemoryStore,
+    id: &str,
+    json: bool,
+) -> Result<ExitCode, Error> {
     let deleted = store.delete(id)?;
     if deleted {
         if json {
@@ -555,7 +337,7 @@ fn handle_delete(store: &mut MemoryStore, id: &str, json: bool) -> Result<ExitCo
     }
 }
 
-fn handle_update(
+pub(crate) fn handle_update(
     store: &mut MemoryStore,
     id: &str,
     text: Option<&str>,
@@ -570,17 +352,14 @@ fn handle_update(
         ));
     }
 
-    // Validate metadata: reject empty strings and invalid JSON
     if let Some(meta) = metadata {
         if meta.trim().is_empty() {
             return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
         }
-        // Validate that metadata is valid JSON
         serde_json::from_str::<serde_json::Value>(meta)
             .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
     }
 
-    // Parse memory_type and status to enums
     let memory_type_val = memory_type.map(MemoryType::from_str).transpose()?;
     let status_val = status.map(MemoryStatus::from_str).transpose()?;
 
@@ -596,7 +375,7 @@ fn handle_update(
     Ok(ExitCode::SUCCESS)
 }
 
-fn handle_version(json: bool) -> Result<ExitCode, Error> {
+pub(crate) fn handle_version(json: bool) -> Result<ExitCode, Error> {
     if json {
         print_json(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
@@ -606,25 +385,4 @@ fn handle_version(json: bool) -> Result<ExitCode, Error> {
         println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
     }
     Ok(ExitCode::SUCCESS)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_validate_short_text() {
-        let short_text = "hello world";
-        let result = handle_validate(short_text, "not-a-real-model-should-fail", false);
-        // Should fail because model doesn't exist, not because of token count
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_long_text() {
-        let long_text = "a".repeat(1000);
-        let result = handle_validate(&long_text, "not-a-real-model-should-fail", false);
-        // Should fail because model doesn't exist, not because of token count
-        assert!(result.is_err());
-    }
 }

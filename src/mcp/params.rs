@@ -120,6 +120,7 @@ pub struct ListMemoriesParams {
 
 /// Response when a memory is successfully added.
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 pub struct SuccessResponse {
     /// Memory ID
     pub id: String,
@@ -129,6 +130,7 @@ pub struct SuccessResponse {
 
 /// A conflicting memory.
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 pub struct ConflictMemory {
     /// Memory ID
     pub id: String,
