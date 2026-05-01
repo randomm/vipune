@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-01
+
+### Miscellaneous
+
+- *(deps)* Bump actions/upload-artifact from 6 to 7 ([#29](https://github.com/randomm/vipune/pull/29))
+- *(deps)* Bump toml from 0.8.23 to 1.0.6+spec-1.1.0 ([#51](https://github.com/randomm/vipune/pull/51))
+- *(deps)* Bump actions/download-artifact from 7 to 8 ([#28](https://github.com/randomm/vipune/pull/28))
+
+
 ## [0.4.0] - 2026-04-28
 
 
