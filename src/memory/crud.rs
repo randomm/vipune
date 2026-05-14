@@ -200,11 +200,16 @@ impl MemoryStore {
     }
 
     #[must_use = "handle the error or results may be lost"]
-    /// Get a specific memory by ID.
+    /// Get a specific memory by ID scoped to a project.
     ///
-    /// Returns `None` if the memory doesn't exist.
-    pub fn get(&self, id: &str) -> Result<Option<Memory>, Error> {
-        Ok(self.db.get(id)?)
+    /// Returns `None` if the memory doesn't exist or belongs to a different project.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Memory ID to retrieve
+    /// * `project_id` - Project identifier (scope guard)
+    pub fn get(&self, id: &str, project_id: &str) -> Result<Option<Memory>, Error> {
+        Ok(self.db.get(id, project_id)?)
     }
 
     #[must_use = "handle the error or results may be lost"]
@@ -313,13 +318,18 @@ impl MemoryStore {
     }
 
     #[must_use = "handle the error or results may be lost"]
-    /// Delete a memory.
+    /// Delete a memory scoped to a project.
     ///
     /// Returns:
     /// - `Ok(true)` if memory was deleted
-    /// - `Ok(false)` if memory didn't exist
-    pub fn delete(&self, id: &str) -> Result<bool, Error> {
-        Ok(self.db.delete(id)?)
+    /// - `Ok(false)` if memory didn't exist or belongs to a different project
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Memory ID to delete
+    /// * `project_id` - Project identifier (scope guard)
+    pub fn delete(&self, id: &str, project_id: &str) -> Result<bool, Error> {
+        Ok(self.db.delete(id, project_id)?)
     }
 
     /// Increment retrieval_count and set last_retrieved_at for given memory IDs.

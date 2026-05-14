@@ -141,7 +141,7 @@ fn test_ingest_metadata_with_special_json_characters_succeeds() {
 
         // Verify metadata was stored correctly
         if let Ok(crate::memory_types::AddResult::Added { id }) = result {
-            let memory = store.get(&id).unwrap().unwrap();
+            let memory = store.get(&id, "test-project").unwrap().unwrap();
             assert_eq!(memory.metadata, Some(metadata.to_string()));
         }
     }
@@ -181,7 +181,7 @@ fn test_ingest_metadata_with_unicode_succeeds() {
 
         // Verify metadata was stored correctly
         if let Ok(crate::memory_types::AddResult::Added { id }) = result {
-            let memory = store.get(&id).unwrap().unwrap();
+            let memory = store.get(&id, "test-project").unwrap().unwrap();
             assert_eq!(memory.metadata, Some(metadata.to_string()));
         }
     }
@@ -218,7 +218,7 @@ fn test_ingest_content_with_combining_characters_succeeds() {
 
         // Verify content was stored as-input (deterministic behavior)
         if let Ok(crate::memory_types::AddResult::Added { id }) = result {
-            let memory = store.get(&id).unwrap().unwrap();
+            let memory = store.get(&id, "test-project").unwrap().unwrap();
             assert_eq!(
                 memory.content, content,
                 "Content should be stored exactly as provided"
@@ -255,7 +255,7 @@ fn test_ingest_content_with_emoji_succeeds() {
 
         // Verify content was stored correctly
         if let Ok(crate::memory_types::AddResult::Added { id }) = result {
-            let memory = store.get(&id).unwrap().unwrap();
+            let memory = store.get(&id, "test-project").unwrap().unwrap();
             assert_eq!(memory.content, content);
         }
     }
@@ -285,7 +285,7 @@ fn test_ingest_content_with_bom_succeeds() {
 
     // Verify content was stored with BOM intact (deterministic behavior)
     if let Ok(crate::memory_types::AddResult::Added { id }) = result {
-        let memory = store.get(&id).unwrap().unwrap();
+        let memory = store.get(&id, "test-project").unwrap().unwrap();
         assert_eq!(
             memory.content, content_with_bom,
             "BOM should be preserved in storage"
@@ -328,7 +328,7 @@ fn test_ingest_accepts_any_project_id_string() {
 
         // Verify memory is associated with the project_id
         if let Ok(crate::memory_types::AddResult::Added { id }) = result {
-            let memory = store.get(&id).unwrap().unwrap();
+            let memory = store.get(&id, project_id).unwrap().unwrap();
             assert_eq!(memory.project_id, project_id);
         }
     }

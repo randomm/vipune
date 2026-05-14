@@ -32,7 +32,7 @@ fn test_add_and_get() {
         )
         .unwrap();
 
-    let memory = db.get(&id).unwrap().unwrap();
+    let memory = db.get(&id, "test-project").unwrap().unwrap();
     assert_eq!(memory.id, id);
     assert_eq!(memory.content, "test content");
     assert_eq!(memory.project_id, "test-project");
@@ -64,7 +64,7 @@ fn test_update_memory() {
     db.update(&id, Some("updated"), Some(&embedding_new), None, None, None)
         .unwrap();
 
-    let memory = db.get(&id).unwrap().unwrap();
+    let memory = db.get(&id, "test-project").unwrap().unwrap();
     assert_eq!(memory.content, "updated");
     assert_ne!(memory.created_at, memory.updated_at);
 }
@@ -110,9 +110,9 @@ fn test_delete_memory() {
             "active",
         )
         .unwrap();
-    assert!(db.delete(&id).unwrap());
+    assert!(db.delete(&id, "test-project").unwrap());
 
-    let memory = db.get(&id).unwrap();
+    let memory = db.get(&id, "test-project").unwrap();
     assert!(memory.is_none());
 }
 
@@ -124,7 +124,7 @@ fn test_delete_nonexistent() {
     std::mem::forget(dir);
 
     let db = Database::open(&path).unwrap();
-    let deleted = db.delete("does-not-exist").unwrap();
+    let deleted = db.delete("does-not-exist", "test-project").unwrap();
     assert!(!deleted);
 }
 
@@ -136,7 +136,7 @@ fn test_get_nonexistent() {
     std::mem::forget(dir);
 
     let db = Database::open(&path).unwrap();
-    let memory = db.get("does-not-exist").unwrap();
+    let memory = db.get("does-not-exist", "test-project").unwrap();
     assert!(memory.is_none());
 }
 

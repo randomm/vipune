@@ -21,9 +21,9 @@ impl super::Database {
         memory_type: &str,
         old_id: &str,
     ) -> Result<String> {
-        // Verify old memory exists
+        // Verify old memory exists and belongs to this project (scoped get enforces it)
         let old = self
-            .get(old_id)?
+            .get(old_id, project_id)?
             .ok_or_else(|| Error::NotFound(format!("memory to supersede not found: {}", old_id)))?;
         if old.project_id != project_id {
             return Err(Error::InvalidInput(

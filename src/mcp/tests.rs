@@ -339,7 +339,7 @@ mod tool_handler_tests {
         let id = response["id"].as_str().unwrap();
 
         // Get the memory by ID
-        let memory_result = wrapper.get(id);
+        let memory_result = wrapper.get(id, project_id);
         assert!(memory_result.is_ok());
         let memory_opt = memory_result.unwrap();
         assert!(memory_opt.is_some());
@@ -351,7 +351,7 @@ mod tool_handler_tests {
         assert_eq!(memory.project_id, project_id);
 
         // Try to get a non-existent memory, verify it returns None
-        let nonexistent_result = wrapper.get("nonexistent-id");
+        let nonexistent_result = wrapper.get("nonexistent-id", project_id);
         assert!(nonexistent_result.is_ok());
         assert!(nonexistent_result.unwrap().is_none());
     }
@@ -373,12 +373,12 @@ mod tool_handler_tests {
         let id = response["id"].as_str().unwrap();
 
         // Delete the memory
-        let delete_result = wrapper.delete(id);
+        let delete_result = wrapper.delete(id, project_id);
         assert!(delete_result.is_ok());
         assert!(delete_result.unwrap(), "delete should return true");
 
         // Try to get the deleted memory, verify it's not found
-        let get_result = wrapper.get(id);
+        let get_result = wrapper.get(id, project_id);
         assert!(get_result.is_ok());
         assert!(
             get_result.unwrap().is_none(),
@@ -386,7 +386,7 @@ mod tool_handler_tests {
         );
 
         // Try to delete again, verify it returns false
-        let delete_again_result = wrapper.delete(id);
+        let delete_again_result = wrapper.delete(id, project_id);
         assert!(delete_again_result.is_ok());
         assert!(
             !delete_again_result.unwrap(),
@@ -424,7 +424,7 @@ mod tool_handler_tests {
         assert!(update_result.is_ok(), "update should succeed");
 
         // Verify the content changed by getting the memory
-        let get_result = wrapper.get(id);
+        let get_result = wrapper.get(id, project_id);
         assert!(get_result.is_ok());
         let memory_opt = get_result.unwrap();
         assert!(memory_opt.is_some());
@@ -438,7 +438,7 @@ mod tool_handler_tests {
         assert!(update_meta_result.is_ok());
 
         // Verify metadata updated
-        let get_meta_result = wrapper.get(id);
+        let get_meta_result = wrapper.get(id, project_id);
         assert!(get_meta_result.is_ok());
         let memory_meta_opt = get_meta_result.unwrap();
         assert!(memory_meta_opt.is_some());
@@ -466,7 +466,7 @@ mod tool_handler_tests {
         assert!(update_type_status_result.is_ok());
 
         // Verify type and status updated
-        let get_final_result = wrapper.get(id);
+        let get_final_result = wrapper.get(id, project_id);
         assert!(get_final_result.is_ok());
         let memory_final_opt = get_final_result.unwrap();
         assert!(memory_final_opt.is_some());

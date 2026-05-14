@@ -182,9 +182,10 @@ impl ToolHandler {
 
         // Update retrieval telemetry unless no_touch is true
         if !no_touch && !memories.is_empty() {
-            let memory_ids: Vec<String> = memories.iter().map(|m| m.id.clone()).collect();
-            let id_refs: Vec<&str> = memory_ids.iter().map(|s| s.as_str()).collect();
-            let _ = self.store.touch_memories(&id_refs);
+            let id_refs: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
+            if let Err(e) = self.store.touch_memories(&id_refs) {
+                eprintln!("warning: touch_memories failed (telemetry not updated): {e}");
+            }
         }
 
         // Build JSON response using helper
@@ -305,8 +306,8 @@ impl ToolHandler {
             return Err(McpError::invalid_input("ID cannot be empty"));
         }
 
-        // Get the memory
-        let memory_opt = self.store.get(&params.id)?;
+        // Get the memory (scoped to current project)
+        let memory_opt = self.store.get(&params.id, &self.project_id)?;
         let memory = match memory_opt {
             Some(m) => m,
             None => {
@@ -319,7 +320,9 @@ impl ToolHandler {
 
         // Update retrieval telemetry unless no_touch is true
         if !params.no_touch.unwrap_or(false) {
-            let _ = self.store.touch_memories(&[memory.id.as_str()]);
+            if let Err(e) = self.store.touch_memories(&[memory.id.as_str()]) {
+                eprintln!("warning: touch_memories failed (telemetry not updated): {e}");
+            }
         }
 
         // Format memory as JSON using helper
@@ -344,7 +347,7 @@ impl ToolHandler {
             return Err(McpError::invalid_input("ID cannot be empty"));
         }
 
-        let deleted = self.store.delete(&params.id)?;
+        let deleted = self.store.delete(&params.id, &self.project_id)?;
 
         if !deleted {
             return Err(McpError::invalid_input(&format!(

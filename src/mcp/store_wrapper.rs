@@ -316,19 +316,37 @@ impl StoreWrapper {
         &self.0
     }
 
-    /// Get a specific memory by ID.
+    /// Get a specific memory by ID scoped to a project.
     #[allow(dead_code)] // Used by get_memory tool
-    pub(crate) fn get(&self, id: &str) -> Result<Option<crate::Memory>, rmcp::ErrorData> {
-        let store = self.0.lock().unwrap();
-        store.get(id).map_err(|e| -> rmcp::ErrorData { e.into() })
+    pub(crate) fn get(
+        &self,
+        id: &str,
+        project_id: &str,
+    ) -> Result<Option<crate::Memory>, rmcp::ErrorData> {
+        let store = self.0.lock().map_err(|e| {
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                format!("store lock poisoned: {e}"),
+                None,
+            )
+        })?;
+        store
+            .get(id, project_id)
+            .map_err(|e| -> rmcp::ErrorData { e.into() })
     }
 
-    /// Delete a memory by ID.
+    /// Delete a memory by ID scoped to a project.
     #[allow(dead_code)] // Used by delete_memory tool
-    pub(crate) fn delete(&self, id: &str) -> Result<bool, rmcp::ErrorData> {
-        let store = self.0.lock().unwrap();
+    pub(crate) fn delete(&self, id: &str, project_id: &str) -> Result<bool, rmcp::ErrorData> {
+        let store = self.0.lock().map_err(|e| {
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                format!("store lock poisoned: {e}"),
+                None,
+            )
+        })?;
         store
-            .delete(id)
+            .delete(id, project_id)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
     }
 
@@ -342,7 +360,13 @@ impl StoreWrapper {
         memory_type: Option<MemoryType>,
         status: Option<MemoryStatus>,
     ) -> Result<(), rmcp::ErrorData> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = self.0.lock().map_err(|e| {
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                format!("store lock poisoned: {e}"),
+                None,
+            )
+        })?;
         store
             .update(id, text, metadata, memory_type, status)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
@@ -351,7 +375,13 @@ impl StoreWrapper {
     /// Update retrieval telemetry for a list of memory IDs.
     #[allow(dead_code)] // Used by search_memories and get_memory tools
     pub(crate) fn touch_memories(&self, ids: &[&str]) -> Result<(), rmcp::ErrorData> {
-        let store = self.0.lock().unwrap();
+        let store = self.0.lock().map_err(|e| {
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                format!("store lock poisoned: {e}"),
+                None,
+            )
+        })?;
         store
             .touch_memories(ids)
             .map_err(|e| -> rmcp::ErrorData { e.into() })

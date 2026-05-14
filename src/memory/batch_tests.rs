@@ -82,7 +82,7 @@ fn test_batch_ingest_mixed_outcomes() {
         BatchIngestItemResult::Added { id } => {
             assert!(!id.is_empty());
             // Verify it was actually stored
-            let memory = store.get(id).unwrap().unwrap();
+            let memory = store.get(id, "test-project").unwrap().unwrap();
             assert_eq!(memory.content, "Bob works at Google");
         }
         _ => panic!("Expected Added for item 1, got {:?}", result.results[1]),
@@ -106,7 +106,7 @@ fn test_batch_ingest_mixed_outcomes() {
         BatchIngestItemResult::Added { id } => {
             assert!(!id.is_empty());
             // Verify it was actually stored
-            let memory = store.get(id).unwrap().unwrap();
+            let memory = store.get(id, "test-project").unwrap().unwrap();
             assert_eq!(memory.content, "Charlie works at Amazon");
         }
         _ => panic!("Expected Added for item 3, got {:?}", result.results[3]),
@@ -173,7 +173,7 @@ fn test_batch_ingest_deterministic_index_mapping() {
 
     // Verify index 3 is Added (unique with metadata)
     if let BatchIngestItemResult::Added { id } = &result.results[3] {
-        let memory = store.get(id).unwrap().unwrap();
+        let memory = store.get(id, "test-project").unwrap().unwrap();
         assert_eq!(memory.content, "unique item 3");
         assert_eq!(memory.metadata, Some("metadata".to_string()));
     } else {
@@ -224,7 +224,7 @@ fn test_batch_ingest_policy_force() {
         BatchIngestItemResult::Added { id } => {
             assert!(!id.is_empty());
             // Verify it was actually stored despite potential similarity
-            let memory = store.get(id).unwrap().unwrap();
+            let memory = store.get(id, "test-project").unwrap().unwrap();
             assert_eq!(memory.content, "Alice works at Microsoft");
         }
         _ => panic!("Expected Added for item 0 with Force policy"),
@@ -233,7 +233,7 @@ fn test_batch_ingest_policy_force() {
     match &result.results[1] {
         BatchIngestItemResult::Added { id } => {
             assert!(!id.is_empty());
-            let memory = store.get(id).unwrap().unwrap();
+            let memory = store.get(id, "test-project").unwrap().unwrap();
             assert_eq!(memory.content, "Bob works at Google");
         }
         _ => panic!("Expected Added for item 1 with Force policy"),
@@ -289,7 +289,7 @@ fn test_batch_ingest_invalid_inputs() {
     match &result.results[3] {
         BatchIngestItemResult::Added { id } => {
             assert!(!id.is_empty());
-            let memory = store.get(id).unwrap().unwrap();
+            let memory = store.get(id, "test-project").unwrap().unwrap();
             assert_eq!(memory.content, "valid input");
         }
         _ => panic!("Expected Added for valid input at index 3"),
@@ -359,21 +359,21 @@ fn test_batch_ingest_metadata_preservation() {
 
     // Verify metadata is preserved for items 0 and 2
     if let BatchIngestItemResult::Added { id } = &result.results[0] {
-        let memory = store.get(id).unwrap().unwrap();
+        let memory = store.get(id, "test-project").unwrap().unwrap();
         assert_eq!(memory.metadata, Some(r#"{"tag": "important"}"#.to_string()));
     } else {
         panic!("Expected Added for item 0");
     }
 
     if let BatchIngestItemResult::Added { id } = &result.results[1] {
-        let memory = store.get(id).unwrap().unwrap();
+        let memory = store.get(id, "test-project").unwrap().unwrap();
         assert_eq!(memory.metadata, None);
     } else {
         panic!("Expected Added for item 1");
     }
 
     if let BatchIngestItemResult::Added { id } = &result.results[2] {
-        let memory = store.get(id).unwrap().unwrap();
+        let memory = store.get(id, "test-project").unwrap().unwrap();
         assert_eq!(
             memory.metadata,
             Some(r#"{"source": "user", "priority": 1}"#.to_string())

@@ -64,7 +64,7 @@ mod tests {
             1
         );
 
-        db.delete(&id).unwrap();
+        db.delete(&id, "proj1").unwrap();
         assert_eq!(
             db.search_bm25("updated", "proj1", 10, None, None)
                 .unwrap()
