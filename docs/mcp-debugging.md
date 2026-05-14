@@ -2,6 +2,8 @@
 
 This guide helps developers debug the vipune MCP server integration with AI agents like Claude Code and Cursor.
 
+Note: unlike all other vipune commands, `vipune mcp` is long-lived by design — it's the single architectural exception to vipune's no-daemon policy.
+
 ## Running the MCP Server Locally
 
 ### Standalone Mode
@@ -39,14 +41,7 @@ Create a test script (`test-mcp.sh`) to send requests via stdin:
 ```bash
 #!/bin/bash
 # Send a JSON-RPC request to MCP server
-
-PAYLOAD='{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "tools/list"
-}'
-
-echo "$PAYLOAD" | vipune mcp
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | vipune mcp
 ```
 
 ### Example Tool Calls
@@ -65,7 +60,7 @@ Each MCP tool has a specific JSON-RPC format:
     "arguments": {
       "text": "Alice works at Microsoft",
       "memory_type": "fact",
-      "metadata": "{\"topic\": \"people\"}"
+      "metadata": {"topic": "people"}
     }
   }
 }
@@ -129,10 +124,15 @@ Each MCP tool has a specific JSON-RPC format:
 Use `rlwrap` for an interactive stdin session:
 
 ```bash
-pip install rlwrap
+# macOS
+brew install rlwrap
+# Ubuntu/Debian
+sudo apt install rlwrap
+```
 
-# Start server with readline support
-vipune mcp | rlwrap
+```bash
+# Note: responses will interleave with the readline prompt
+rlwrap vipune mcp
 ```
 
 Then paste JSON-RPC payloads directly (press Ctrl+D after each to send).
@@ -147,14 +147,12 @@ Then paste JSON-RPC payloads directly (press Ctrl+D after each to send).
 
 **Solution**: Ensure JSON-RPC messages end with newline (`\n`). The MCP protocol expects line-delimited JSON.
 
-**Bad** (no newline):
-```json
-{"jsonrpc":"2.0","id":1,"method":"tools/list"}
-```
+```bash
+# Bad: no trailing newline (server may not process the request)
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | vipune mcp
 
-**Good** (with newline):
-```json
-{"jsonrpc":"2.0","id":1,"method":"tools/list"}
+# Good: explicit newline using echo (echo always adds \n)
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | vipune mcp
 ```
 
 ### Line Ending Issues
@@ -187,7 +185,7 @@ echo '{"jsonrpc":"2.0","id":1}' | dos2unix | vipune mcp
 
 **Debug with jq**:
 ```bash
-echo 'your-json-here' | jq .  # Validate JSON before sending
+echo 'your-json-here' | jq -c .  # Validate JSON before sending (compact/single-line output)
 ```
 
 ### Tool Registration Issues
@@ -318,7 +316,7 @@ After verifying basic JSON-RPC, test with actual agent:
 If issues persist:
 
 1. Check server logs with `RUST_LOG=debug`
-2. Verify JSON-RPC payloads are valid (`jq .`)
+2. Verify JSON-RPC payloads are valid (`jq -c .`)
 3. Test with minimal examples above
 4. Check project isolation (use `--project` to bypass git detection)
 5. Review agent's MCP client logs

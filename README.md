@@ -202,7 +202,7 @@ vipune = "0.5.0"
 ```
 
 ```rust
-use vipune::{Config, MemoryStore, detect_project};
+use vipune::{Config, MemoryStore, MemoryType, MemoryStatus, detect_project};
 
 // Initialize memory store
 let config = Config::default();
@@ -214,11 +214,11 @@ let mut store = MemoryStore::new(
 
 // Add a memory
 let project_id = "my-project";
-let memory_id = store.add(&project_id, "Alice works at Microsoft", None)
+let result = store.add_with_conflict(&project_id, "Alice works at Microsoft", None, false, vipune::MemoryType::Fact, vipune::MemoryStatus::Active)
     .expect("Failed to add memory");
 
 // Search memories
-let results = store.search(&project_id, "where does alice work", 10, 0.0, None, None)
+let results = store.search(&project_id, "where does alice work", 10, 0.0, vipune::memory::SearchOptions::default())
     .expect("Failed to search");
 
 for memory in results {
