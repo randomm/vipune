@@ -6,7 +6,7 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 
 - **Library core is sync-only**: No async runtime in `src/lib.rs` (no tokio). All operations block until complete. This eliminates complexity and runtime overhead.
 - **MCP server uses tokio**: The MCP server module uses an async runtime (tokio) when enabled (default feature).
-- **No daemon**: CLI tool only — runs, executes, and exits. No long-lived server process.
+- **No daemon** — with one exception: `vipune mcp` runs as a persistent JSON-RPC server until stdin closes. All other commands run, execute, and exit.
 - **No network at runtime**: All dependencies are bundled. HuggingFace Hub model downloads happen once and are cached locally.
 - **SQLite for persistence**: Data stored in `~/.vipune/memories.db` using rusqlite (bundled, no external SQLite installation required).
 - **ONNX for embeddings**: bge-small-en-v1.5 model (384 dimensions) for semantic search, with local inference via ONNX Runtime.
@@ -162,7 +162,7 @@ Configurable parameters include:
 
 **Lib and bin targets**: `src/lib.rs` (public API exports) and `src/main.rs` (CLI entry point). Single release artifact enables both library use and CLI tool.
 
-**No daemon**: Tool exits after operation. State lives only in SQLite; no in-memory caches survive between invocations.
+**No daemon** — with one exception: `vipune mcp` runs as a persistent JSON-RPC server until stdin closes. All other commands exit after operation. State lives only in SQLite; no in-memory caches survive between invocations.
 
 **File size limits**: Source files capped at 500 lines (exceptions justified). Keeps modules focused, testable, and maintainable.
 

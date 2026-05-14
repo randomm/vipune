@@ -14,7 +14,7 @@ Use vipune to create a feedback cycle in your agent workflow:
 2. **Do the work** - Execute your task with the knowledge in mind
 3. **Store learnings** - `vipune add "important discovery"` after completing meaningful work
 
-### v0.3 memory types
+### Memory types
 
 Memories can be categorized by type for routing and filtering:
 
