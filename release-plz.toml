@@ -1,6 +1,10 @@
 [workspace]
 # Generate changelog from conventional commits
 changelog_config = "cliff.toml"
+# Enable changelog updates via release-pr job
+changelog_update = true
+# Path to changelog file
+changelog_path = "./CHANGELOG.md"
 # Publish to crates.io with trusted publishing
 publish = true
 # Create git tags automatically (triggers cargo-dist)
