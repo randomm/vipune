@@ -187,7 +187,9 @@ pub fn execute(
             config,
             json,
         ),
-        Commands::Get { id, no_touch } => handlers::handle_get(store, id, *no_touch, json),
+        Commands::Get { id, no_touch } => {
+            handlers::handle_get(store, id, &project_id, *no_touch, json)
+        }
         Commands::List {
             limit,
             memory_type,
@@ -202,7 +204,7 @@ pub fn execute(
             *include_candidates,
             json,
         ),
-        Commands::Delete { id } => handlers::handle_delete(store, id, json),
+        Commands::Delete { id } => handlers::handle_delete(store, id, &project_id, json),
         Commands::Update {
             id,
             text,

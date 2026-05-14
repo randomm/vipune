@@ -46,7 +46,7 @@ fn test_ingest_happy_path_conflict_aware() {
         AddResult::Added { id } => {
             assert!(!id.is_empty());
             // Verify memory was actually stored
-            let memory = store.get(&id).unwrap().unwrap();
+            let memory = store.get(&id, "test-project").unwrap().unwrap();
             assert_eq!(memory.content, "new memory");
         }
         AddResult::Conflicts { .. } => panic!("Expected AddResult::Added"),
@@ -155,7 +155,7 @@ fn test_ingest_with_metadata() {
 
     match result {
         AddResult::Added { id } => {
-            let memory = store.get(&id).unwrap().unwrap();
+            let memory = store.get(&id, "test-project").unwrap().unwrap();
             assert_eq!(memory.metadata, Some(metadata.to_string()));
         }
         AddResult::Conflicts { .. } => panic!("Expected AddResult::Added"),

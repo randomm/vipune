@@ -409,6 +409,9 @@ vipune mcp
 | `search_memories` | Find memories by meaning, with type/status filters |
 | `list_memories` | List recent memories, with type/status filters |
 | `supersede_memory` | Replace an existing memory with new content |
+| `get_memory` | Retrieve a specific memory by ID |
+| `delete_memory` | Delete a memory permanently by ID |
+| `update_memory` | Update an existing memory's content, metadata, type, or status |
 
 **Exit codes:**
 - `0` - Success
@@ -422,6 +425,7 @@ vipune mcp
 - `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
 - `status` — initial status: `active` (default) or `candidate`
 - `supersedes` — ID of memory to supersede (atomically replaces old memory)
+- `force` — force store even if conflicts detected (default: `false`)
 
 `supersede_memory` accepts:
 - `new_text` — the new content that replaces the old memory (required)
@@ -429,9 +433,25 @@ vipune mcp
 - `memory_type` — optional type for the new memory (default: `fact`)
 - `metadata` — optional structured labels as JSON
 
+`get_memory` accepts:
+- `id` — ID of the memory to retrieve (required)
+- `no_touch` — skip updating retrieval telemetry (default: `false`)
+
+`delete_memory` accepts:
+- `id` — ID of the memory to delete (required)
+
+`update_memory` accepts:
+- `id` — ID of the memory to update (required)
+- `text` — optional new content for the memory
+- `metadata` — optional new metadata as JSON object
+- `memory_type` — optional new memory type
+- `status` — optional new status: `active` or `candidate`
+  (At least one optional field must be provided)
+
 `search_memories` and `list_memories` accept optional:
 - `memory_types` — array of types to filter by (e.g., `["guard", "procedure"]`)
 - `statuses` — array of statuses to filter by (e.g., `["active", "candidate"]`)
+- `no_touch` — skip updating retrieval telemetry (default: `false`)
 
 `search_memories` also accepts:
 - `recency_weight` — recency bias for scoring, 0.0 to 1.0 (default: config value)

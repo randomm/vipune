@@ -251,7 +251,7 @@ fn test_memory_with_stored_content_returns_expected_fields() {
 
     // Get the memory
     let memory = store
-        .get(&memory_id)
+        .get(&memory_id, "test-project")
         .expect("Failed to get memory")
         .expect("Memory not found");
 
@@ -1169,13 +1169,19 @@ fn test_ingest_with_metadata_succeeds() {
     };
 
     // Verify metadata was stored
-    let memory1 = store.get(&id1).expect("Failed to get").expect("Not found");
+    let memory1 = store
+        .get(&id1, "test-project")
+        .expect("Failed to get")
+        .expect("Not found");
     assert_eq!(
         memory1.metadata.as_ref().unwrap(),
         r#"{"source": "manual"}"#
     );
 
-    let memory2 = store.get(&id2).expect("Failed to get").expect("Not found");
+    let memory2 = store
+        .get(&id2, "test-project")
+        .expect("Failed to get")
+        .expect("Not found");
     assert_eq!(
         memory2.metadata.as_ref().unwrap(),
         r#"{"source": "import"}"#
@@ -1218,7 +1224,10 @@ fn test_update_text_only_preserves_metadata() {
         .expect("Failed to update");
 
     // Verify content updated but metadata preserved
-    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    let memory = store
+        .get(&id, project_id)
+        .expect("Failed to get")
+        .expect("Not found");
     assert_eq!(memory.content, "updated content");
     assert_eq!(memory.metadata.as_ref().unwrap(), r#"{"tag": "important"}"#);
 
@@ -1264,7 +1273,10 @@ fn test_update_with_invalid_json_metadata_returns_error() {
     }
 
     // Verify memory was not changed
-    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    let memory = store
+        .get(&id, project_id)
+        .expect("Failed to get")
+        .expect("Not found");
     assert_eq!(memory.content, "original content");
     assert!(memory.metadata.is_none());
 
@@ -1310,7 +1322,10 @@ fn test_update_with_empty_metadata_returns_error() {
     }
 
     // Verify memory was not changed
-    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    let memory = store
+        .get(&id, project_id)
+        .expect("Failed to get")
+        .expect("Not found");
     assert_eq!(memory.content, "original content");
     assert!(memory.metadata.is_none());
 
@@ -1356,7 +1371,10 @@ fn test_update_with_whitespace_only_metadata_returns_error() {
     }
 
     // Verify memory was not changed
-    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    let memory = store
+        .get(&id, project_id)
+        .expect("Failed to get")
+        .expect("Not found");
     assert_eq!(memory.content, "original content");
     assert!(memory.metadata.is_none());
 
@@ -1397,7 +1415,10 @@ fn test_update_metadata_only() {
         .expect("Failed to update");
 
     // Verify metadata added but content unchanged
-    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    let memory = store
+        .get(&id, project_id)
+        .expect("Failed to get")
+        .expect("Not found");
     assert_eq!(memory.content, "original content");
     assert_eq!(memory.metadata.as_ref().unwrap(), r#"{"tag": "new"}"#);
 
@@ -1444,7 +1465,10 @@ fn test_update_both_text_and_metadata() {
         .expect("Failed to update");
 
     // Verify both updated
-    let memory = store.get(&id).expect("Failed to get").expect("Not found");
+    let memory = store
+        .get(&id, project_id)
+        .expect("Failed to get")
+        .expect("Not found");
     assert_eq!(memory.content, "new content");
     assert_eq!(memory.metadata.as_ref().unwrap(), r#"{"new": "value"}"#);
 
@@ -1501,11 +1525,11 @@ fn test_add_with_conflict_creates_multiple_active_memories() {
 
     // Verify both memories exist and are active
     let memory_a = store
-        .get(&memory_a_id)
+        .get(&memory_a_id, &project_id)
         .expect("Failed to get memory A")
         .expect("Memory A not found");
     let memory_b = store
-        .get(&memory_b_id)
+        .get(&memory_b_id, &project_id)
         .expect("Failed to get memory B")
         .expect("Memory B not found");
 
@@ -1809,7 +1833,7 @@ fn test_supersede_through_public_api() {
 
     // Verify original is active
     let original = store
-        .get(&original_id)
+        .get(&original_id, &project_id)
         .expect("Failed to get original")
         .expect("Original memory not found");
     assert_eq!(original.status, "active");
@@ -1831,7 +1855,7 @@ fn test_supersede_through_public_api() {
 
     // Step 3: Verify old memory is now superseded
     let superseded = store
-        .get(&original_id)
+        .get(&original_id, &project_id)
         .expect("Failed to get superseded memory")
         .expect("Superseded memory not found");
     assert_eq!(superseded.status, "superseded");
@@ -1845,7 +1869,7 @@ fn test_supersede_through_public_api() {
 
     // Step 4: Verify new memory exists and is active
     let new_memory = store
-        .get(&new_id)
+        .get(&new_id, &project_id)
         .expect("Failed to get new memory")
         .expect("New memory not found");
     assert_eq!(new_memory.status, "active");
@@ -1890,7 +1914,7 @@ fn test_get_no_touch_preserves_count() {
 
     // Get the memory to see count
     let memory = store
-        .get(&memory_id)
+        .get(&memory_id, project_id)
         .expect("Failed to get memory")
         .expect("Memory not found");
     assert_eq!(memory.retrieval_count, 1);
@@ -1928,19 +1952,19 @@ fn test_touch_memories_increments_retrieval_count() {
     };
 
     // Verify initial count is 0
-    let mem = store.get(&id).unwrap().unwrap();
+    let mem = store.get(&id, &project_id).unwrap().unwrap();
     assert_eq!(mem.retrieval_count, 0);
     assert!(mem.last_retrieved_at.is_none());
 
     // Touch once
     store.touch_memories(&[&id]).unwrap();
-    let mem = store.get(&id).unwrap().unwrap();
+    let mem = store.get(&id, &project_id).unwrap().unwrap();
     assert_eq!(mem.retrieval_count, 1);
     assert!(mem.last_retrieved_at.is_some());
 
     // Touch again
     store.touch_memories(&[&id]).unwrap();
-    let mem = store.get(&id).unwrap().unwrap();
+    let mem = store.get(&id, &project_id).unwrap().unwrap();
     assert_eq!(mem.retrieval_count, 2);
 
     std::fs::remove_file(db_path).ok();

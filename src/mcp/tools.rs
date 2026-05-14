@@ -1,5 +1,6 @@
 //! MCP tool implementations.
 
+use crate::mcp::helpers::format_memory_json;
 use crate::mcp::store_wrapper::{McpError, StoreWrapper};
 
 use crate::errors::Error;
@@ -95,11 +96,12 @@ impl ToolHandler {
         }
 
         // Normal ingest path with type and status
+        let force = params.force.unwrap_or(false);
         let value = self.store.ingest_with_type_status(
             &self.project_id,
             &params.text,
             &metadata_str,
-            false,
+            force,
             memory_type_val,
             status_val,
         )?;
@@ -128,6 +130,7 @@ impl ToolHandler {
         }
 
         let limit = params.limit.unwrap_or(5);
+        let no_touch = params.no_touch.unwrap_or(false);
 
         // Validate limit
         if limit == 0 {
@@ -143,67 +146,50 @@ impl ToolHandler {
         let recency_weight = params.recency_weight.unwrap_or(self.config.recency_weight);
         let use_hybrid = params.hybrid.unwrap_or(self.config.hybrid);
 
-        let memories = {
-            let mut store = self.store.0.lock().unwrap();
-            let type_strs: Option<Vec<&str>> = params
-                .memory_types
-                .as_ref()
-                .map(|v| v.iter().map(|s| s.as_str()).collect());
-            let status_strs: Option<Vec<&str>> = params
-                .statuses
-                .as_ref()
-                .map(|v| v.iter().map(|s| s.as_str()).collect());
-            let search_options = crate::memory::SearchOptions {
-                memory_types: type_strs,
-                statuses: status_strs,
-            };
-            if use_hybrid {
-                store
-                    .search_hybrid(
-                        &self.project_id,
-                        &params.query,
-                        limit,
-                        recency_weight,
-                        search_options,
-                    )
-                    .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
-            } else {
-                store
-                    .search(
-                        &self.project_id,
-                        &params.query,
-                        limit,
-                        recency_weight,
-                        search_options,
-                    )
-                    .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
-            }
+        let type_strs: Option<Vec<&str>> = params
+            .memory_types
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect());
+        let status_strs: Option<Vec<&str>> = params
+            .statuses
+            .as_ref()
+            .map(|v| v.iter().map(|s| s.as_str()).collect());
+        let search_options = crate::memory::SearchOptions {
+            memory_types: type_strs,
+            statuses: status_strs,
+        };
+        let memories = if use_hybrid {
+            self.store
+                .search_hybrid_raw(
+                    &self.project_id,
+                    &params.query,
+                    limit,
+                    recency_weight,
+                    search_options,
+                )
+                .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
+        } else {
+            self.store
+                .search_raw(
+                    &self.project_id,
+                    &params.query,
+                    limit,
+                    recency_weight,
+                    search_options,
+                )
+                .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?
         };
 
-        // Build JSON response manually (Memory doesn't derive Serialize)
-        let results: Vec<serde_json::Value> = memories
-            .into_iter()
-            .map(|m| {
-                let metadata_value = match m.metadata {
-                    Some(ref meta_str) if meta_str.trim() != "null" => {
-                        serde_json::from_str::<serde_json::Value>(meta_str)
-                            .unwrap_or_else(|_| serde_json::Value::String(meta_str.clone()))
-                    }
-                    _ => serde_json::Value::Null,
-                };
-                serde_json::json!({
-                    "id": m.id,
-                    "content": m.content,
-                    "similarity": m.similarity.unwrap_or(0.0),
-                    "created_at": m.created_at,
-                    "updated_at": m.updated_at,
-                    "project_id": m.project_id,
-                    "metadata": metadata_value,
-                    "retrieval_count": m.retrieval_count,
-                    "last_retrieved_at": m.last_retrieved_at
-                })
-            })
-            .collect();
+        // Update retrieval telemetry unless no_touch is true
+        if !no_touch && !memories.is_empty() {
+            let id_refs: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
+            if let Err(e) = self.store.touch_memories(&id_refs) {
+                eprintln!("warning: touch_memories failed (telemetry not updated): {e}");
+            }
+        }
+
+        // Build JSON response using helper
+        let results: Vec<serde_json::Value> = memories.iter().map(format_memory_json).collect();
 
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string(&results).map_err(McpError::from_serde_error)?,
@@ -301,6 +287,163 @@ impl ToolHandler {
 
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
+        )]))
+    }
+
+    /// Retrieve a specific memory by ID.
+    ///
+    /// Use when you know the exact memory ID.
+    #[tool(
+        name = "get_memory",
+        description = "Retrieve a specific memory by ID. Use when you know the exact memory ID."
+    )]
+    async fn get_memory(
+        &self,
+        Parameters(params): Parameters<GetMemoryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        // Validate input
+        if params.id.trim().is_empty() {
+            return Err(McpError::invalid_input("ID cannot be empty"));
+        }
+
+        // Get the memory (scoped to current project)
+        let memory_opt = self.store.get(&params.id, &self.project_id)?;
+        let memory = match memory_opt {
+            Some(m) => m,
+            None => {
+                return Err(McpError::invalid_input(&format!(
+                    "memory not found: {}",
+                    params.id
+                )));
+            }
+        };
+
+        // Update retrieval telemetry unless no_touch is true
+        if !params.no_touch.unwrap_or(false) {
+            if let Err(e) = self.store.touch_memories(&[memory.id.as_str()]) {
+                eprintln!("warning: touch_memories failed (telemetry not updated): {e}");
+            }
+        }
+
+        // Format memory as JSON using helper
+        let result = format_memory_json(&memory);
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).map_err(McpError::from_serde_error)?,
+        )]))
+    }
+
+    /// Delete a memory permanently by ID.
+    #[tool(
+        name = "delete_memory",
+        description = "Delete a memory permanently by ID."
+    )]
+    async fn delete_memory(
+        &self,
+        Parameters(params): Parameters<DeleteMemoryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        // Validate input
+        if params.id.trim().is_empty() {
+            return Err(McpError::invalid_input("ID cannot be empty"));
+        }
+
+        let deleted = self.store.delete(&params.id, &self.project_id)?;
+
+        if !deleted {
+            return Err(McpError::invalid_input(&format!(
+                "memory not found: {}",
+                params.id
+            )));
+        }
+
+        let result = serde_json::json!({
+            "id": params.id,
+            "status": "deleted"
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).map_err(McpError::from_serde_error)?,
+        )]))
+    }
+
+    /// Update an existing memory's content, metadata, type, or status.
+    ///
+    /// At least one field must be provided.
+    #[tool(
+        name = "update_memory",
+        description = "Update an existing memory's content, metadata, type, or status. At least one field must be provided."
+    )]
+    async fn update_memory(
+        &self,
+        Parameters(params): Parameters<UpdateMemoryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        // Validate input
+        if params.id.trim().is_empty() {
+            return Err(McpError::invalid_input("ID cannot be empty"));
+        }
+
+        // Validate at least one optional field is provided
+        if params.text.is_none()
+            && params.metadata.is_none()
+            && params.memory_type.is_none()
+            && params.status.is_none()
+        {
+            return Err(McpError::invalid_input(
+                "At least one of text, metadata, memory_type, or status must be provided",
+            ));
+        }
+
+        // Parse memory_type if provided
+        let memory_type_val = if let Some(ref mt) = params.memory_type {
+            let mt_str = mt.as_str();
+            Some(
+                MemoryType::from_str(mt_str)
+                    .map_err(|e| McpError::invalid_input(&format!("Invalid memory type: {}", e)))?,
+            )
+        } else {
+            None
+        };
+
+        // Parse status if provided
+        let status_val = if let Some(ref s) = params.status {
+            let s_str = s.as_str();
+            Some(
+                MemoryStatus::from_str(s_str)
+                    .map_err(|e| McpError::invalid_input(&format!("Invalid status: {}", e)))?,
+            )
+        } else {
+            None
+        };
+
+        // Serialize metadata if provided
+        let metadata_str = if let Some(ref meta) = params.metadata {
+            Some(
+                serde_json::to_string(meta)
+                    .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?,
+            )
+        } else {
+            None
+        };
+
+        // Convert text to &str if provided
+        let text_str = params.text.as_deref();
+
+        // Perform the update
+        self.store.update(
+            &params.id,
+            text_str,
+            metadata_str.as_deref(),
+            memory_type_val,
+            status_val,
+        )?;
+
+        let result = serde_json::json!({
+            "id": params.id,
+            "status": "updated"
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string(&result).map_err(McpError::from_serde_error)?,
         )]))
     }
 }

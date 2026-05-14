@@ -36,6 +36,11 @@ pub struct StoreMemoryParams {
         description = "ID of memory to supersede (creates new memory, marks old as superseded)."
     )]
     pub supersedes: Option<String>,
+
+    /// Force store even if conflicts detected (default: false).
+    #[serde(default)]
+    #[schemars(description = "Force store even if conflicts detected (default: false).")]
+    pub force: Option<bool>,
 }
 
 /// Parameters for the supersede_memory tool.
@@ -126,6 +131,50 @@ pub struct SuccessResponse {
     pub id: String,
     /// Status
     pub status: String,
+}
+
+/// Parameters for the get_memory tool.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct GetMemoryParams {
+    /// ID of the memory to retrieve.
+    #[schemars(description = "ID of the memory to retrieve.")]
+    pub id: String,
+    /// Skip updating retrieval telemetry (default: false).
+    #[serde(default)]
+    #[schemars(description = "Skip updating retrieval telemetry (default: false).")]
+    pub no_touch: Option<bool>,
+}
+
+/// Parameters for the delete_memory tool.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DeleteMemoryParams {
+    /// ID of the memory to delete.
+    #[schemars(description = "ID of the memory to delete.")]
+    pub id: String,
+}
+
+/// Parameters for the update_memory tool.
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct UpdateMemoryParams {
+    /// ID of the memory to update.
+    #[schemars(description = "ID of the memory to update.")]
+    pub id: String,
+    /// New text content for the memory.
+    #[serde(default)]
+    #[schemars(description = "New text content for the memory.")]
+    pub text: Option<String>,
+    /// New metadata as JSON object.
+    #[serde(default)]
+    #[schemars(description = "New metadata as JSON object.")]
+    pub metadata: Option<serde_json::Value>,
+    /// New memory type: fact, preference, procedure, guard, observation.
+    #[serde(default)]
+    #[schemars(description = "New memory type: fact, preference, procedure, guard, observation.")]
+    pub memory_type: Option<String>,
+    /// New memory status: active, candidate.
+    #[serde(default)]
+    #[schemars(description = "New memory status: active, candidate.")]
+    pub status: Option<String>,
 }
 
 /// A conflicting memory.

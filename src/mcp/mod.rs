@@ -21,6 +21,7 @@
 //! run_mcp(config.embedding_model, "default", config.database_path).expect("Failed to start MCP server");
 //! ```
 
+mod helpers;
 mod params;
 pub mod server;
 pub mod store_wrapper;

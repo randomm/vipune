@@ -155,6 +155,32 @@ impl StoreWrapper {
         .map_err(McpError::from_serde_error)
     }
 
+    /// Search memories by semantic meaning, returning raw Memory structs.
+    pub(crate) fn search_raw(
+        &self,
+        project_id: &str,
+        query: &str,
+        limit: usize,
+        recency_weight: f64,
+        options: crate::memory::SearchOptions,
+    ) -> Result<Vec<crate::Memory>, Error> {
+        let mut store = self.0.lock().unwrap();
+        store.search(project_id, query, limit, recency_weight, options)
+    }
+
+    /// Search memories by hybrid (semantic + BM25), returning raw Memory structs.
+    pub(crate) fn search_hybrid_raw(
+        &self,
+        project_id: &str,
+        query: &str,
+        limit: usize,
+        recency_weight: f64,
+        options: crate::memory::SearchOptions,
+    ) -> Result<Vec<crate::Memory>, Error> {
+        let mut store = self.0.lock().unwrap();
+        store.search_hybrid(project_id, query, limit, recency_weight, options)
+    }
+
     /// Search memories by semantic meaning.
     #[allow(dead_code)] // Used in tests but not in actual MCP flow
     pub(crate) fn search(
@@ -288,6 +314,77 @@ impl StoreWrapper {
     #[allow(dead_code)]
     pub(crate) fn inner(&self) -> &Arc<Mutex<MemoryStore>> {
         &self.0
+    }
+
+    /// Get a specific memory by ID scoped to a project.
+    #[allow(dead_code)] // Used by get_memory tool
+    pub(crate) fn get(
+        &self,
+        id: &str,
+        project_id: &str,
+    ) -> Result<Option<crate::Memory>, rmcp::ErrorData> {
+        let store = self.0.lock().map_err(|e| {
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                format!("store lock poisoned: {e}"),
+                None,
+            )
+        })?;
+        store
+            .get(id, project_id)
+            .map_err(|e| -> rmcp::ErrorData { e.into() })
+    }
+
+    /// Delete a memory by ID scoped to a project.
+    #[allow(dead_code)] // Used by delete_memory tool
+    pub(crate) fn delete(&self, id: &str, project_id: &str) -> Result<bool, rmcp::ErrorData> {
+        let store = self.0.lock().map_err(|e| {
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                format!("store lock poisoned: {e}"),
+                None,
+            )
+        })?;
+        store
+            .delete(id, project_id)
+            .map_err(|e| -> rmcp::ErrorData { e.into() })
+    }
+
+    /// Update a memory's content, metadata, type, or status.
+    #[allow(dead_code)] // Used by update_memory tool
+    pub(crate) fn update(
+        &self,
+        id: &str,
+        text: Option<&str>,
+        metadata: Option<&str>,
+        memory_type: Option<MemoryType>,
+        status: Option<MemoryStatus>,
+    ) -> Result<(), rmcp::ErrorData> {
+        let mut store = self.0.lock().map_err(|e| {
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                format!("store lock poisoned: {e}"),
+                None,
+            )
+        })?;
+        store
+            .update(id, text, metadata, memory_type, status)
+            .map_err(|e| -> rmcp::ErrorData { e.into() })
+    }
+
+    /// Update retrieval telemetry for a list of memory IDs.
+    #[allow(dead_code)] // Used by search_memories and get_memory tools
+    pub(crate) fn touch_memories(&self, ids: &[&str]) -> Result<(), rmcp::ErrorData> {
+        let store = self.0.lock().map_err(|e| {
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                format!("store lock poisoned: {e}"),
+                None,
+            )
+        })?;
+        store
+            .touch_memories(ids)
+            .map_err(|e| -> rmcp::ErrorData { e.into() })
     }
 }
 

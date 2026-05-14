@@ -251,37 +251,40 @@ impl Database {
         Ok(id)
     }
 
-    /// Retrieve a single memory by ID.
+    /// Retrieve a single memory by ID scoped to a project.
     ///
-    /// Returns None if the memory does not exist.
+    /// Returns None if the memory does not exist or belongs to a different project.
     ///
     /// # Errors
     ///
     /// Returns error if the database query fails.
-    pub fn get(&self, id: &str) -> Result<Option<Memory>> {
+    pub fn get(&self, id: &str, project_id: &str) -> Result<Option<Memory>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
             FROM memories
-            WHERE id = ?1
+            WHERE id = ?1 AND project_id = ?2
             "#,
         )?;
 
-        let result = stmt.query_row([id], map_row_to_memory).optional()?;
+        let result = stmt
+            .query_row([id, project_id], map_row_to_memory)
+            .optional()?;
         Ok(result)
     }
 
-    /// Delete a memory by ID.
+    /// Delete a memory by ID scoped to a project.
     ///
-    /// Returns true if a memory was deleted, false if it didn't exist.
+    /// Returns true if a memory was deleted, false if it didn't exist or belongs to a different project.
     ///
     /// # Errors
     ///
     /// Returns error if the database query fails.
-    pub fn delete(&self, id: &str) -> Result<bool> {
-        let rows = self
-            .conn
-            .execute("DELETE FROM memories WHERE id = ?1", [id])?;
+    pub fn delete(&self, id: &str, project_id: &str) -> Result<bool> {
+        let rows = self.conn.execute(
+            "DELETE FROM memories WHERE id = ?1 AND project_id = ?2",
+            [id, project_id],
+        )?;
         Ok(rows > 0)
     }
 

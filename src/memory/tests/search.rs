@@ -333,7 +333,7 @@ fn test_integration_add_search_roundtrip() {
         .unwrap();
     assert!(!results.is_empty());
 
-    let memory = store.get(&id).unwrap().unwrap();
+    let memory = store.get(&id, "test-project").unwrap().unwrap();
     assert_eq!(memory.content, "semantic search is useful");
 }
 
@@ -369,6 +369,6 @@ fn test_integration_update_changes_embedding() {
         .update(&id, Some("completely different content"), None, None, None)
         .unwrap();
 
-    let memory = store.get(&id).unwrap().unwrap();
+    let memory = store.get(&id, "test-project").unwrap().unwrap();
     assert_eq!(memory.content, "completely different content");
 }

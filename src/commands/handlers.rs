@@ -236,11 +236,12 @@ pub(crate) fn handle_search(
 pub(crate) fn handle_get(
     store: &mut MemoryStore,
     id: &str,
+    project_id: &str,
     no_touch: bool,
     json: bool,
 ) -> Result<ExitCode, Error> {
     let memory = store
-        .get(id)?
+        .get(id, project_id)?
         .ok_or_else(|| Error::NotFound("memory not found".to_string()))?;
 
     if !no_touch {
@@ -319,9 +320,10 @@ pub(crate) fn handle_list(
 pub(crate) fn handle_delete(
     store: &mut MemoryStore,
     id: &str,
+    project_id: &str,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    let deleted = store.delete(id)?;
+    let deleted = store.delete(id, project_id)?;
     if deleted {
         if json {
             print_json(&DeleteResponse {
