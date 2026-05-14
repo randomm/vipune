@@ -198,7 +198,7 @@ vipune can also be used as a Rust crate for programmatic integration:
 ```toml
 # Cargo.toml
 [dependencies]
-vipune = "0.3.0"
+vipune = "0.5.0"
 ```
 
 ```rust
@@ -226,7 +226,7 @@ for memory in results {
 }
 ```
 
-**v0.3 features**: `MemoryType`, `MemoryStatus`, `supersedes` flag, and filter parameters are available for type-aware memory management. See the [CLI reference](docs/cli-reference.md) for details.
+**v0.4+ features**: `MemoryType`, `MemoryStatus`, `supersedes` flag, and telemetry (retrieval_count) are available for type-aware memory management. See the [CLI reference](docs/cli-reference.md) for details.
 
 **See the crate documentation at [docs.rs](https://docs.rs/vipune) for complete API reference.**
 
