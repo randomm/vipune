@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+env:
+  HF_CACHE_KEY: hf-hub-bge-small-en-v1.5-5c38ec7
+
 jobs:
   test:
     name: Test
@@ -39,7 +42,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
-          key: ${{ runner.os }}-hf-hub-bge-small-en-v1.5-main
+          key: ${{ runner.os }}-${{ env.HF_CACHE_KEY }}
 
       - name: Format check
         run: cargo fmt --check
@@ -85,7 +88,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
-          key: ${{ runner.os }}-hf-hub-bge-small-en-v1.5-main
+          key: ${{ runner.os }}-${{ env.HF_CACHE_KEY }}
 
       - name: Clippy (no default features)
         run: cargo clippy --no-default-features -- -D warnings
