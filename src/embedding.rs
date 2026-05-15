@@ -26,6 +26,7 @@ pub const MAX_EMBEDDING_TOKENS: usize = 512;
 pub const EMBED_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 
 /// Branch or revision for the embedding model.
+// "main" branch — protected from 404s by CI model cache; update cache key if revision changes
 pub const EMBED_MODEL_REVISION: &str = "main";
 
 /// ONNX embedding engine for synchronous text-to-vector conversion.

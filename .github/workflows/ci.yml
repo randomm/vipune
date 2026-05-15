@@ -39,7 +39,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface/hub
-          key: ${{ runner.os }}-hf-hub-bge-small-en-v1.5
+          key: ${{ runner.os }}-hf-hub-bge-small-en-v1.5-main
 
       - name: Format check
         run: cargo fmt --check
@@ -80,6 +80,12 @@ jobs:
         with:
           path: target
           key: ${{ runner.os }}-cargo-build-target-ndf-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: ${{ runner.os }}-hf-hub-bge-small-en-v1.5-main
 
       - name: Clippy (no default features)
         run: cargo clippy --no-default-features -- -D warnings
