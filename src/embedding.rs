@@ -25,8 +25,10 @@ pub const MAX_EMBEDDING_TOKENS: usize = 512;
 /// HuggingFace model ID for the embedding model.
 pub const EMBED_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 
-/// Branch or revision for the embedding model.
-pub const EMBED_MODEL_REVISION: &str = "main";
+/// Pinned commit SHA for the bge-small-en-v1.5 ONNX model on HuggingFace.
+/// To update: verify new SHA resolves onnx/model.onnx (200 OK), update the
+/// HF_CACHE_KEY env var in .github/workflows/ci.yml, re-embed all stored memories.
+pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
 
 /// ONNX embedding engine for synchronous text-to-vector conversion.
 ///
