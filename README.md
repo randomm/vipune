@@ -119,9 +119,11 @@ For agents with skill auto-discovery (Claude Code, Pi), install the vipune skill
 
 ```bash
 mkdir -p ~/.claude/skills/vipune && \
-  curl -fsSL https://raw.githubusercontent.com/randomm/vipune/main/skills/vipune/SKILL.md \
+  curl -fsSL --connect-timeout 10 --max-time 30 https://raw.githubusercontent.com/randomm/vipune/main/skills/vipune/SKILL.md \
   -o ~/.claude/skills/vipune/SKILL.md
 ```
+
+_The skill becomes available at this URL once this change is merged to `main`._
 
 This adds domain-specific patterns: issue/PR linkage, failed-approach tracking, pre-flight gotcha checks, dev-loop mapping, and ADR-lite decision capture. Use `<project>/.claude/skills/` for project-scoped installation. See [Agent Integration](docs/agent-integration.md#using-skillmd) for details.
 

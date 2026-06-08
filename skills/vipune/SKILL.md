@@ -153,7 +153,7 @@ Note: Search results include ID and content, not metadata. To get issue/PR-linke
 
 ```bash
 # Search for memories mentioning an issue, then fetch details
-vipune search "issue 135" --json | jq -r '.results[].id' | xargs -I {} vipune get {} --json | jq 'select(.metadata.issue == 135)'
+vipune search "issue 135" --json | jq -r '.results[].id' | xargs -I {} vipune get {} --json | jq 'select((.metadata | fromjson? // {} | .issue) == 135)'
 
 # For failed experiments, search for "failed" then inspect individually
 vipune search "failed" --memory-type observation
@@ -280,7 +280,7 @@ For issue/PR context, search by content and inspect metadata per-result:
 
 ```bash
 vipune search "memory" --json | jq -r '.results[] | "\(.id): \(.content)"'
-# Then fetch individual details: vipune get <id> --json | jq '.metadata'
+# Then fetch individual details: vipune get <id> --json | jq '.metadata' (metadata is a JSON string; use | fromjson to parse fields)
 ```
 
 Score thresholds:
@@ -361,7 +361,8 @@ vipune search "<technical term or compound>" --hybrid --recency 0.3 --limit 5
 vipune search "<domain> gotcha" --memory-type guard
 
 # SEARCH BY ISSUE/PR (search by content, then fetch metadata)
-vipune search "issue 135" --json | jq -r '.results[].id' | xargs -I {} sh -c 'vipune get {} --json | jq -r "\(.id): \(.metadata // "(no metadata)")"'
+vipune search "issue 135" --json | jq -r '.results[].id' | xargs -I {} vipune get {} --json | jq -r '"\(.id): \(.metadata // "(no metadata)")"'
+# Note: Best for small result sets (<50 results; for larger sets, narrow the search first)
 
 # SAVE (at task boundaries only)
 vipune add "<distilled fact/preference/procedure/guard/observation>" \

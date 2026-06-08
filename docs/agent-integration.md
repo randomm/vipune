@@ -472,9 +472,11 @@ This SKILL.md is designed for **Claude and Pi agent systems** that support the s
 
 ```bash
 mkdir -p ~/.claude/skills/vipune && \
-  curl -fsSL https://raw.githubusercontent.com/randomm/vipune/main/skills/vipune/SKILL.md \
+  curl -fsSL --connect-timeout 10 --max-time 30 https://raw.githubusercontent.com/randomm/vipune/main/skills/vipune/SKILL.md \
   -o ~/.claude/skills/vipune/SKILL.md
 ```
+
+_The skill becomes available at this URL once this change is merged to `main`._
 
 This places the skill in the global skills directory where Claude/Pi agents will auto-discover it. Use `<project>/.claude/skills/` instead of `~/.claude/skills/` for project-scoped installation.
 
