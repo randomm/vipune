@@ -451,3 +451,44 @@ Keep memories atomic.
 This approach is useful if you're using multiple agents in the same project — a single `AGENTS.md` file becomes the source of truth for tool integration without duplicating instructions across tool-specific config files.
 
 **Important:** If you use `AGENTS.md`, avoid also creating tool-specific config files like `.cursor/rules/vipune.mdc` or `.roo/rules/vipune.md` in the same project — this can lead to duplicate or conflicting instructions being applied. Use one approach per project.
+
+## Using SKILL.md
+
+Some Claude-compatible agent systems (including Claude Code and Pi) support **auto-discoverable skill files** in standardized locations. A SKILL.md file at `~/.claude/skills/<skill-name>/SKILL.md` (global) or `<project>/.claude/skills/<skill-name>/SKILL.md` (project-scoped) is automatically loaded when the agent detects the specified skill name in its configuration or prompt.
+
+**vipune provides a software-development-tuned skill artifact** at `skills/vipune/SKILL.md` in this repository. This skill extends the generic vipune instructions with domain-specific patterns for software development:
+
+- Issue/PR linkage via `--metadata` flag for traceability
+- Failed-approach tracking (observation type with experiment metadata)
+- Pre-flight quality-gate gotcha checks before running tests/linting
+- Dev-loop phase→action mapping (read-issue → implement → test → commit)
+- Lightweight ADR capture (storing decision rationale, not just what)
+
+This SKILL.md is designed for **Claude and Pi agent systems** that support the skill auto-discovery convention. It includes YAML frontmatter with the skill name and description for automatic recognition.
+
+### Installing the vipune skill
+
+**Tier-1: Manual copy (current, works across all Claude-compatible agents)**
+
+```bash
+mkdir -p ~/.claude/skills/vipune && \
+  curl -fsSL --connect-timeout 10 --max-time 30 https://raw.githubusercontent.com/randomm/vipune/main/skills/vipune/SKILL.md \
+  -o ~/.claude/skills/vipune/SKILL.md
+```
+
+_The skill becomes available at this URL once this change is merged to `main`._
+
+This places the skill in the global skills directory where Claude/Pi agents will auto-discover it. Use `<project>/.claude/skills/` instead of `~/.claude/skills/` for project-scoped installation.
+
+**Tier-2 and Tier-3 are out of scope** (future follow-ups):
+- Tier-2: Automated install via `vipune skill install` subcommand
+- Tier-3: Cross-agent reach via AGENTS.md snippets compatible with non-Claude agents
+- These require additional CLI infrastructure and cross-tool standardization work
+
+**Skill directory convention** (for Claude/Pi agents):
+- Global: `~/.claude/skills/<skill-name>/SKILL.md`
+- Project-scoped: `<project>/.claude/skills/<skill-name>/SKILL.md`
+- Each skill lives in its own directory with the descriptive name
+- The skill's frontmatter (`name: vipune`) enables agent auto-discovery
+
+The `skills/vipune/SKILL.md` artifact in this repository is the canonical source — install from there to get the latest enhancements.
