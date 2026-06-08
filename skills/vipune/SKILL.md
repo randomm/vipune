@@ -154,6 +154,7 @@ Note: Search results include ID and content, not metadata. To get issue/PR-linke
 ```bash
 # Search for memories mentioning an issue, then fetch details
 vipune search "issue 135" --json | jq -r '.results[].id' | xargs -I {} vipune get {} --json | jq 'select((.metadata | fromjson? // {} | .issue) == 135)'
+# Note: Best for small result sets (<50 results; for larger sets, narrow the search first)
 
 # For failed experiments, search for "failed" then inspect individually
 vipune search "failed" --memory-type observation
