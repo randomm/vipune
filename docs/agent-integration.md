@@ -70,10 +70,13 @@ After completing work, store important findings:
 - `vipune --help` displays all available commands
 
 **MCP tools** are also available (via `vipune mcp`):
-- `store_memory(text, metadata?, memory_type?, status?, supersedes?)` — store with optional type/status/supersede
-- `search_memories(query, limit?, memory_types?, statuses?, recency_weight?, hybrid?)` — find by meaning
+- `store_memory(text, metadata?, memory_type?, status?, supersedes?, force?)` — store with optional type/status/supersede
+- `search_memories(query, limit?, memory_types?, statuses?, recency_weight?, hybrid?, no_touch?)` — find by meaning
 - `list_memories(limit?, memory_types?, statuses?)` — list recent
 - `supersede_memory(new_text, old_memory_id, memory_type?, metadata?)` — replace existing memory
+- `get_memory(id, no_touch?)` — retrieve a memory by ID
+- `delete_memory(id)` — permanently delete a memory
+- `update_memory(id, text?, metadata?, memory_type?, status?)` — update content, metadata, type, or status
 
 Keep entries focused: one atomic fact per memory for better retrieval.
 
@@ -87,6 +90,83 @@ claude --allowedTools "Bash(vipune search *)" "Bash(vipune add *)"
 Or allow user approval on first use (Claude will prompt before running vipune commands).
 
 Use `CLAUDE.local.md` for personal configuration (automatically gitignored). Remember: never store API keys, credentials, or secrets in vipune memories.
+
+### Claude Desktop on macOS (MCP)
+
+Claude Desktop is the native macOS application for Claude. It integrates with local vipune via the MCP server (`vipune mcp`) — this is the only viable Desktop integration path since ZIP-uploaded skills run in a hosted sandbox without access to the local vipune binary or `~/.vipune/` directory.
+
+**Config file:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+Add this configuration block to enable the vipune MCP server:
+
+```json
+{
+  "mcpServers": {
+    "vipune": {
+      "command": "/Users/<you>/.cargo/bin/vipune",
+      "args": ["mcp"],
+      "env": {
+        "VIPUNE_DATABASE_PATH": "/Users/<you>/.vipune/memories.db"
+      }
+    }
+  }
+}
+```
+
+If you installed the prebuilt binary to `/usr/local/bin/`, use this path instead:
+```json
+{ "command": "/usr/local/bin/vipune", "args": ["mcp"] }
+```
+
+Replace `<you>` with your actual username. Do NOT use `~` in absolute paths — Desktop expands from launch directory, not your home.
+
+**Available MCP tools:**
+- `store_memory` — store information for later recall
+- `search_memories` — find memories by meaning (supports `hybrid` param for semantic + BM25)
+- `list_memories` — list recent memories
+- `supersede_memory` — replace an existing memory with new content
+- `get_memory` — retrieve a memory by ID
+- `delete_memory` — permanently delete a memory
+- `update_memory` — update a memory's content, metadata, type, or status
+
+**Environment variables** (set in the `env` block):
+- `VIPUNE_DATABASE_PATH` — SQLite database location (default: `~/.vipune/memories.db`)
+- `VIPUNE_MODEL_CACHE` — Model download cache directory (default: `~/.vipune/models`)
+- `VIPUNE_PROJECT` — Project identifier override (auto-detected from git by default)
+- `VIPUNE_EMBEDDING_MODEL` — HuggingFace model ID (default: `BAAI/bge-small-en-v1.5`)
+- `VIPUNE_SIMILARITY_THRESHOLD` — Conflict detection threshold, 0.0-1.0 (default: `0.85`)
+- `VIPUNE_RECENCY_WEIGHT` — Recency bias in search results, 0.0-1.0 (default: `0.3`)
+- `VIPUNE_HYBRID` — Enable hybrid search (semantic + BM25), true/false or 1/0
+
+**macOS gotchas:**
+
+- **Absolute paths required** — Claude Desktop launches from the Dock and does NOT inherit your shell PATH. Use the full binary path (e.g., `/Users/<you>/.cargo/bin/vipune`, not just `vipune`).
+
+- **Env vars not inherited** — Desktop does not load `.zshrc`, `.bashrc`, or shell environment. Put all `VIPUNE_*` variables you need in the `env` block of the config.
+
+- **Gatekeeper quarantine** — Downloaded binaries may be quarantined by macOS. If Desktop fails to launch vipune, run:
+  ```bash
+  xattr -d com.apple.quarantine /Users/<you>/.cargo/bin/vipune
+  ```
+
+- **Executable bit** — Ensure the binary is executable:
+  ```bash
+  chmod +x /Users/<you>/.cargo/bin/vipune
+  ```
+
+**Verification:**
+
+1. Fully quit Claude Desktop (⌘Q, not just close window)
+2. Restart Claude Desktop
+3. Confirm the tools/hammer icon appears in the UI (MCP indicator)
+4. Check logs for MCP server issues: `~/Library/Logs/Claude/mcp*.log`
+
+**Surface split:**
+
+- **Claude Desktop on macOS** → Use MCP (this guide). The Desktop app's MCP integration gives direct access to your local vipune binary and `~/.vipune/` directory.
+- **Claude Code (CLI)** → Use the skill at `~/.claude/skills/vipune/SKILL.md` (see [Using SKILL.md](#using-skillmd) below). Desktop ZIP skills are not applicable to vipune — they run in a hosted sandbox without filesystem access.
+
+Remember: never store API keys, credentials, or secrets in vipune memories.
 
 ### Cursor
 
