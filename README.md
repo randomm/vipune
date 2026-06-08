@@ -301,9 +301,14 @@ Add to your Cursor MCP configuration with the same JSON structure.
 ### Available Tools
 
 - **store_memory**: Store information for later recall
-- **search_memories**: Find memories by meaning (supports `hybrid` param)
+- **search_memories**: Find memories by meaning (supports `hybrid` param for semantic + BM25)
 - **list_memories**: List recent memories
 - **supersede_memory**: Replace an existing memory with new content
+- **get_memory**: Retrieve a memory by ID
+- **delete_memory**: Permanently delete a memory
+- **update_memory**: Update a memory's content, metadata, type, or status
+
+**See the [Claude Desktop on macOS guide](docs/agent-integration.md#claude-desktop-on-macos-mcp) for a complete Desktop setup with configuration examples and macOS-specific gotchas.**
 
 ## Agent Integration
 
