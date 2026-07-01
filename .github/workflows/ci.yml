@@ -15,7 +15,7 @@ jobs:
     runs-on: ubicloud-standard-4
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -61,7 +61,7 @@ jobs:
     runs-on: ubicloud-standard-4
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
