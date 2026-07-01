@@ -27,7 +27,7 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 # Using RC 9 for compatibility with gline-rs (see issue #53).
 # Stable 2.0.0 not released (latest stable: 1.18.0 with API incompatibilities).
 ort = { version = "=2.0.0-rc.9", features = ["ndarray", "download-binaries"] }
-ort-sys = "=2.0.0-rc.9"
+ort-sys = "=2.0.0-rc.10"
 
 # HuggingFace tokenizers and model download
 tokenizers = "0.22.0"
