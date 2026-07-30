@@ -1,4 +1,4 @@
-//! Embedding BLOB conversion and cosine similarity computation.
+//! Embedding BLOB conversion, cosine similarity computation, and embedding classification.
 
 use super::Error;
 
@@ -6,6 +6,42 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 const EMBEDDING_DIMS: usize = 384;
 const EMBEDDING_BLOB_SIZE: usize = EMBEDDING_DIMS * 4; // 384 f32 values × 4 bytes each
+
+/// Classification of an embedding vector based on its L2 norm.
+///
+/// `EmbeddingEngine::embed` applies `l2_normalize` unconditionally to all model
+/// output, so any real embedding has norm ≈ 1. Mock vectors (uniform [-1,1] over
+/// 384 dims) have norm ≈ 11.3. Anything else is unknown/corrupted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingClass {
+    /// L2-normalised vector from the real model (norm ∈ [0.99, 1.01]).
+    Real,
+    /// Non-normalised mock or hand-crafted vector (norm > 2.0).
+    Mock,
+    /// Zero vector or other unexpected norm — skipped by reindex.
+    Unknown,
+}
+
+/// Classify an embedding vector by computing its L2 norm.
+///
+/// Thresholds:
+/// - `norm ∈ [0.99, 1.01]` → `Real` (L2-normalised by `EmbeddingEngine::embed`)
+/// - `norm > 2.0` → `Mock` (e.g., uniform [-1,1] over 384 dims ≈ 11.3)
+/// - anything else (including `norm == 0`) → `Unknown`/corrupted
+pub fn classify_embedding(embedding: &[f32]) -> EmbeddingClass {
+    let norm: f64 = embedding
+        .iter()
+        .map(|x| (*x as f64).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    if (0.99..=1.01).contains(&norm) {
+        EmbeddingClass::Real
+    } else if norm > 2.0 {
+        EmbeddingClass::Mock
+    } else {
+        EmbeddingClass::Unknown
+    }
+}
 
 /// Convert a vector of f32 embedding values to a BLOB (little-endian bytes).
 ///
@@ -177,5 +213,94 @@ mod tests {
         let vec = vec![1.0f32; 384];
         let sim = cosine_similarity(&zero, &vec).unwrap();
         assert_eq!(sim, 0.0);
+    }
+
+    // ---- Embedding classification tests ----
+
+    #[test]
+    fn test_classify_embedding_l2_normalised_is_real() {
+        // A unit vector (norm = 1.0) — like output from EmbeddingEngine::embed
+        let mut vec = vec![0.0f32; 384];
+        vec[0] = 1.0;
+        assert_eq!(classify_embedding(&vec), EmbeddingClass::Real);
+    }
+
+    #[test]
+    fn test_classify_embedding_mock_vector_is_mock() {
+        // Mock vectors are uniform [-1,1] over 384 dims, norm ≈ 11.3
+        let mut vec = Vec::with_capacity(384);
+        let mut hash: u64 = 0x123456789abcdef;
+        for i in 0..384 {
+            let mut dim_hash = hash.wrapping_add(i as u64);
+            dim_hash ^= dim_hash >> 33;
+            dim_hash = dim_hash.wrapping_mul(0xff51afd7ed558ccd);
+            dim_hash ^= dim_hash >> 33;
+            dim_hash = dim_hash.wrapping_mul(0xc4ceb9fe1a85ec53);
+            let value = ((dim_hash % 2000) as f32 - 1000.0) / 1000.0;
+            vec.push(value);
+        }
+        assert_eq!(classify_embedding(&vec), EmbeddingClass::Mock);
+    }
+
+    #[test]
+    fn test_classify_embedding_uniform_ones_is_mock() {
+        // vec![1.0f32; 384] has norm ≈ sqrt(384) ≈ 19.6 — mock
+        let vec = vec![1.0f32; 384];
+        assert_eq!(classify_embedding(&vec), EmbeddingClass::Mock);
+    }
+
+    #[test]
+    fn test_classify_embedding_zero_vector_is_unknown() {
+        // norm == 0 — unknown/corrupted
+        let vec = vec![0.0f32; 384];
+        assert_eq!(classify_embedding(&vec), EmbeddingClass::Unknown);
+    }
+
+    #[test]
+    fn test_classify_embedding_near_boundary_real_lower() {
+        // norm = 1.0 (safe within [0.99, 1.01])
+        let mut vec = vec![0.0f32; 384];
+        vec[0] = 1.0;
+        assert_eq!(classify_embedding(&vec), EmbeddingClass::Real);
+    }
+
+    #[test]
+    fn test_classify_embedding_near_boundary_real_upper() {
+        // norm ≈ 0.995 (safely within [0.99, 1.01])
+        let mut vec = vec![0.0f32; 384];
+        vec[0] = 0.995f32;
+        assert_eq!(classify_embedding(&vec), EmbeddingClass::Real);
+    }
+
+    #[test]
+    fn test_classify_embedding_just_below_real_range() {
+        // norm = 0.98 — unknown (below real range)
+        let mut vec = vec![0.0f32; 384];
+        vec[0] = 0.98f32;
+        assert_eq!(classify_embedding(&vec), EmbeddingClass::Unknown);
+    }
+
+    #[test]
+    fn test_classify_embedding_just_above_real_range_below_mock() {
+        // norm = 1.5 — unknown (between real and mock thresholds)
+        let mut vec = vec![0.0f32; 384];
+        vec[0] = 1.5f32;
+        assert_eq!(classify_embedding(&vec), EmbeddingClass::Unknown);
+    }
+
+    #[test]
+    fn test_classify_embedding_at_mock_threshold() {
+        // norm = 2.01 — mock (just above threshold)
+        let mut vec = vec![0.0f32; 384];
+        vec[0] = 2.01f32;
+        assert_eq!(classify_embedding(&vec), EmbeddingClass::Mock);
+    }
+
+    #[test]
+    fn test_classify_embedding_at_mock_boundary_exclusive() {
+        // norm = 2.0 — unknown (not strictly greater than 2.0)
+        let mut vec = vec![0.0f32; 384];
+        vec[0] = 2.0f32;
+        assert_eq!(classify_embedding(&vec), EmbeddingClass::Unknown);
     }
 }

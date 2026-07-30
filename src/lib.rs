@@ -63,4 +63,7 @@ pub use memory_types::{
     AddResult, BatchIngestItemResult, BatchIngestResult, ConflictMemory, IngestPolicy,
 }; // Library-only: conflict detection and batch ingest types
 pub use project::detect_project;
+pub use sqlite::Database;
 pub use sqlite::Memory;
+pub use sqlite::embedding::EmbeddingClass;
+pub use sqlite::embedding::classify_embedding;

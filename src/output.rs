@@ -124,6 +124,43 @@ pub struct ValidateResponse {
     pub within_limit: bool,
 }
 
+/// Response for `doctor --embeddings` per-project report.
+#[derive(Serialize)]
+pub struct DoctorResponse {
+    /// Project identifier.
+    pub project_id: String,
+    /// Total number of rows in the project.
+    pub total_rows: usize,
+    /// Number of rows with real (L2-normalised) embeddings.
+    pub real_rows: usize,
+    /// Number of rows with mock embeddings.
+    pub mock_rows: usize,
+    /// Number of rows with unknown/corrupted embeddings.
+    pub unknown_rows: usize,
+}
+
+/// Response for `reindex` per-project report.
+#[derive(Serialize)]
+pub struct ReindexResponse {
+    /// Project identifier.
+    pub project_id: String,
+    /// Number of rows successfully re-embedded.
+    pub reindexed: usize,
+    /// Number of rows skipped (unknown/corrupted embeddings).
+    pub skipped: usize,
+    /// Rows that failed during re-embedding.
+    pub failed: Vec<ReindexFailure>,
+}
+
+/// A single failed row during reindex.
+#[derive(Serialize)]
+pub struct ReindexFailure {
+    /// Memory ID that failed.
+    pub id: String,
+    /// Error message describing the failure.
+    pub error: String,
+}
+
 /// Serialize a value as formatted JSON and print to stdout.
 ///
 /// Exits with status 1 if serialization fails.

@@ -1,6 +1,11 @@
 //! Command handlers for vipune CLI.
 
+mod doctor;
 mod handlers;
+mod reindex;
+
+#[cfg(test)]
+mod reindex_tests;
 
 use crate::config;
 use crate::errors::Error;
@@ -123,6 +128,24 @@ pub enum Commands {
         #[arg(long)]
         status: Option<String>,
     },
+    /// Diagnose database embedding health.
+    Doctor {
+        /// Check embedding quality (classifies real/mock/unknown)
+        #[arg(long)]
+        embeddings: bool,
+
+        /// Scan all projects in the database instead of only the current one
+        #[arg(long)]
+        all_projects: bool,
+    },
+
+    /// Re-embed rows with mock embeddings using the real model.
+    Reindex {
+        /// Reindex all projects in the database instead of only the current one
+        #[arg(long)]
+        all_projects: bool,
+    },
+
     Version,
 
     #[cfg(feature = "mcp")]
@@ -220,6 +243,35 @@ pub fn execute(
             status.as_deref(),
             json,
         ),
+        Commands::Doctor {
+            embeddings,
+            all_projects,
+        } => {
+            if !*embeddings {
+                return Err(Error::Validation(
+                    "doctor only supports --embeddings flag".to_string(),
+                ));
+            }
+            let project_filter = if !*all_projects {
+                Some(project_id.as_str())
+            } else {
+                None
+            };
+            doctor::handle_doctor(&config.database_path, project_filter, json)
+        }
+        Commands::Reindex { all_projects } => {
+            let project_filter = if !*all_projects {
+                Some(project_id.as_str())
+            } else {
+                None
+            };
+            reindex::handle_reindex(
+                &config.database_path,
+                &config.embedding_model,
+                project_filter,
+                json,
+            )
+        }
         Commands::Version => handlers::handle_version(json),
         #[cfg(feature = "mcp")]
         Commands::Mcp => unreachable!("Mcp is handled before execute"),
