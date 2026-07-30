@@ -1,7 +1,7 @@
 //! CRUD operations for the memory store.
 
 #[cfg(test)]
-use crate::embedding::l2_normalize;
+use crate::embedding::l2_normalize; // test-only; pure function, pragmatic coupling
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, ConflictMemory, IngestPolicy};

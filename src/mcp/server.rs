@@ -1,11 +1,14 @@
 //! MCP server entry point.
 
 use crate::Config;
+use crate::embedding::EmbeddingEngine;
 use crate::errors::Error;
 use crate::mcp::tools::ToolHandler;
 use crate::memory::MemoryStore;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Run the MCP server over stdio.
 ///
@@ -36,7 +39,52 @@ pub fn run_mcp(embedding_model: String, project_id: &str, db_path: PathBuf) -> R
     // If this fails, the server exits before accepting any MCP client,
     // avoiding a first `store_memory` that holds the mutex through a
     // 66MB download and trips the client protocol timeout.
-    store.embedder()?;
+    //
+    // Wrapped in a timeout: the model download (~66MB) runs in a spawned
+    // thread so we can detect slow networks or unresponsive HuggingFace Hub
+    // rather than hanging indefinitely.
+    let model_id = config.embedding_model.clone();
+    let model_id_for_thread = model_id.clone();
+    let (tx, rx) = mpsc::channel();
+    let init_thread =
+        std::thread::spawn(move || tx.send(EmbeddingEngine::new(&model_id_for_thread)));
+
+    let engine = match rx.recv_timeout(Duration::from_secs(120)) {
+        Ok(Ok(engine)) => engine,
+        Ok(Err(e)) => {
+            let _ = init_thread.join();
+            return Err(Error::EmbedderUnavailable {
+                reason: format!("Failed to load embedding model '{}': {}", model_id, e),
+            });
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // Drop the receiver so the thread's tx.send() fails, then
+            // join the thread to avoid orphaning a ~66MB download.
+            drop(rx);
+            let _ = init_thread.join();
+            return Err(Error::EmbedderUnavailable {
+                reason: format!(
+                    "Embedding model '{}' download timed out after 120s. Check network connectivity to HuggingFace Hub.",
+                    model_id
+                ),
+            });
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            // Thread panicked — join to clean up before returning.
+            let _ = init_thread.join();
+            return Err(Error::EmbedderUnavailable {
+                reason: format!(
+                    "Embedding model '{}' initialization thread panicked. Check disk space and permissions for model cache.",
+                    model_id
+                ),
+            });
+        }
+    };
+
+    // SAFETY: `engine` is created from `config.embedding_model` which is validated
+    // during Config construction. The thread that created it has been joined or
+    // is no longer needed (timeout case returns early above).
+    store.set_preinitialized_embedder(engine);
 
     let store = Arc::new(Mutex::new(store));
 

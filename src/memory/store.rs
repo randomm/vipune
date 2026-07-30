@@ -124,20 +124,25 @@ impl MemoryStore {
     /// Lazily initialize and return a mutable reference to the embedding engine.
     ///
     /// Downloads the model on first call; subsequent calls return the cached engine.
-    /// Returns `Error::EmbedderUnavailable` if the model cannot be loaded.
+    /// Returns errors from `EmbeddingEngine::new` directly — for download failures
+    /// these already include the offline hint (see `wrap_download_err`).
+    ///
+    /// Note: the underlying error from `EmbeddingEngine::new` may contain local
+    /// filesystem paths (e.g., model cache directories). This is acceptable for
+    /// a local CLI tool — no sanitization is applied.
     pub(crate) fn embedder(&mut self) -> Result<&mut EmbeddingEngine, Error> {
         if self.embedder.is_none() {
-            self.embedder = Some(EmbeddingEngine::new(&self.model_id).map_err(|e| {
-                Error::EmbedderUnavailable {
-                    reason: format!(
-                        "Failed to load embedding model '{}': {}. \
-                         Pre-fetch before going offline: huggingface-cli download {} --cache-dir ~/.cache/huggingface/hub",
-                        self.model_id, e, self.model_id
-                    ),
-                }
-            })?);
+            self.embedder = Some(EmbeddingEngine::new(&self.model_id)?);
         }
         Ok(self.embedder.as_mut().unwrap())
+    }
+
+    // Set an embedder that was pre-initialized externally (e.g., with a timeout).
+    // Used by the MCP server which spawns the model download in a separate thread
+    // and applies a timeout to prevent indefinite hangs.
+    #[allow(dead_code)]
+    pub(crate) fn set_preinitialized_embedder(&mut self, engine: EmbeddingEngine) {
+        self.embedder = Some(engine);
     }
 
     /// Validate input length (rejects empty and whitespace-only inputs).
@@ -164,5 +169,55 @@ impl MemoryStore {
             config,
             test_embedder: None,
         }
+    }
+
+    #[cfg(test)]
+    /// Create a MemoryStore from a pre-populated Database with the test embedder wired in.
+    ///
+    /// For tests that need to insert data before creating the store:
+    /// 1. Call [`test_db_path`] to get a temp database path
+    /// 2. Open a `Database`, insert data
+    /// 3. Call this method to get a ready-to-use store
+    pub(crate) fn from_db_with_test_embedder(db: Database) -> Self {
+        let mut store = Self::from_db(db, Config::default());
+        store.test_embedder = Some(Box::new(crate::memory::crud::test_fake_embedder));
+        store
+    }
+
+    #[cfg(test)]
+    /// Create a fully-configured MemoryStore for tests with TempDir, Database, and fake embedder.
+    ///
+    /// Replaces the 3-line boilerplate (TempDir + Database::open + from_db + test_embedder)
+    /// that was duplicated across 12+ test functions.
+    ///
+    /// ⚠️ The returned TempDir is forgotten (not cleaned up on drop) to keep the database
+    /// file alive for the duration of the test. Temp files are cleaned up by the OS.
+    pub(crate) fn test_store() -> Self {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("create temp dir");
+        let path = dir.path().join("test.db");
+        std::mem::forget(dir);
+
+        let db = Database::open(&path).expect("open test database");
+        let mut store = Self::from_db(db, Config::default());
+        store.test_embedder = Some(Box::new(crate::memory::crud::test_fake_embedder));
+        store
+    }
+
+    #[cfg(test)]
+    /// Return a temp database path for tests that need to pre-populate data.
+    ///
+    /// Callers open a `Database` on the returned path, insert data, then
+    /// create a `MemoryStore` via `from_db` + `test_embedder`.
+    ///
+    /// ⚠️ The TempDir is forgotten, same as [`test_store`].
+    pub(crate) fn test_db_path() -> std::path::PathBuf {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("create temp dir");
+        let path = dir.path().join("test.db");
+        std::mem::forget(dir);
+        path
     }
 }

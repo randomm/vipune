@@ -5,7 +5,6 @@
 
 use crate::config::Config;
 use crate::memory::MemoryStore;
-use crate::memory::crud::test_fake_embedder;
 use crate::memory::store::MAX_INPUT_LENGTH;
 use crate::memory_types::IngestPolicy;
 use tempfile::TempDir;
@@ -53,14 +52,8 @@ fn test_ingest_at_max_input_length_succeeds() {
 /// Test that ingest rejects input at MAX_INPUT_LENGTH + 1.
 #[test]
 fn test_ingest_at_max_input_length_plus_one_fails() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    // This test doesn't require embedding - validation happens before embed
-    let db = crate::sqlite::Database::open(&path).unwrap();
-    let mut store = MemoryStore::from_db(db, Config::default());
-    store.test_embedder = Some(Box::new(test_fake_embedder));
+    // Validation happens before embedding, so no model needed
+    let mut store = MemoryStore::test_store();
 
     // Create input one character over MAX_INPUT_LENGTH
     let text = "x".repeat(MAX_INPUT_LENGTH + 1);
@@ -79,14 +72,8 @@ fn test_ingest_at_max_input_length_plus_one_fails() {
 /// to maintain data quality and avoid storing meaningless memories.
 #[test]
 fn test_ingest_whitespace_only_rejected_with_explicit_error() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
     // Validation happens before embedding, so no model needed
-    let db = crate::sqlite::Database::open(&path).unwrap();
-    let mut store = MemoryStore::from_db(db, Config::default());
-    store.test_embedder = Some(Box::new(test_fake_embedder));
+    let mut store = MemoryStore::test_store();
 
     let whitespace_inputs = vec!["   ", "\t\n", " \t \n "];
 
