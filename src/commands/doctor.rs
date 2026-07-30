@@ -26,7 +26,15 @@ pub fn handle_doctor(
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Open database
-    let db = Database::open(db_path).map_err(|e| Error::Config(e.to_string()))?;
+    let db = Database::open(db_path).map_err(|e| {
+        let err_msg = e.to_string();
+        if err_msg.contains("database is locked") {
+            return Error::Config(
+                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
+            );
+        }
+        Error::Config(err_msg)
+    })?;
 
     // Determine which projects to audit
     let projects: Vec<String> = if let Some(filter) = project_filter {
@@ -37,30 +45,32 @@ pub fn handle_doctor(
 
     if projects.is_empty() {
         if json {
-            print_json(&DoctorResponse {
+            print_json(&[DoctorResponse {
                 project_id: "(none)".to_string(),
                 total_rows: 0,
                 real_rows: 0,
                 mock_rows: 0,
                 unknown_rows: 0,
-            });
+            }]);
         } else {
             println!("No projects found in database.");
         }
         return Ok(ExitCode::SUCCESS);
     }
 
+    let mut responses: Vec<DoctorResponse> = vec![];
+
     for project_id in &projects {
         let result = audit_project(&db, project_id)?;
-        if json {
-            print_json(&DoctorResponse {
-                project_id: project_id.clone(),
-                total_rows: result.total,
-                real_rows: result.real_count,
-                mock_rows: result.mock_count,
-                unknown_rows: result.unknown_count,
-            });
-        } else {
+        responses.push(DoctorResponse {
+            project_id: project_id.clone(),
+            total_rows: result.total,
+            real_rows: result.real_count,
+            mock_rows: result.mock_count,
+            unknown_rows: result.unknown_count,
+        });
+
+        if !json {
             println!("Project: {}", project_id);
             println!("  Total rows: {}", result.total);
             println!("  Real:     {}", result.real_count);
@@ -73,6 +83,11 @@ pub fn handle_doctor(
                 );
             }
         }
+    }
+
+    // Print JSON: single array of all project responses
+    if json {
+        print_json(&responses);
     }
 
     Ok(ExitCode::SUCCESS)

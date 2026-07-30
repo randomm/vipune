@@ -9,6 +9,7 @@ use crate::sqlite::Database;
 use crate::sqlite::embedding::classify_embedding;
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
 
 /// Progress interval: print progress every N rows in human mode.
 const PROGRESS_INTERVAL: usize = 50;
@@ -24,7 +25,7 @@ const PROGRESS_INTERVAL: usize = 50;
 ///
 /// # Errors
 ///
-/// Returns error if the database is locked (busy_timeout=0 ensures fast-fail),
+/// Returns error if the database is locked (we set busy_timeout=0 for fast-fail),
 /// the embedder cannot be initialised, or all rows fail.
 pub fn handle_reindex(
     db_path: &Path,
@@ -32,13 +33,9 @@ pub fn handle_reindex(
     project_filter: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    // Open database (busy_timeout=0 is set inside Database::open for fast-fail)
+    // Open database
     let db = Database::open(db_path).map_err(|e| {
-        // Match on rusqlite errors for structured detection of database busy state
-        // Database::open returns sqlite::Error which already contains rusqlite::Error
         let err_msg = e.to_string();
-        // SQLite busy errors contain "database is locked" or "database is locked (5)"
-        // With busy_timeout=0, we get a fast fail instead of hanging
         if err_msg.contains("database is locked") {
             return Error::Config(
                 "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
@@ -46,6 +43,11 @@ pub fn handle_reindex(
         }
         Error::Config(err_msg)
     })?;
+
+    // Set busy timeout to 0ms for fast-fail behavior on database locks (reindex-specific)
+    db.conn()
+        .busy_timeout(Duration::ZERO)
+        .map_err(Error::SQLite)?;
 
     // Determine which projects to process
     let projects: Vec<String> = if let Some(filter) = project_filter {
@@ -56,12 +58,12 @@ pub fn handle_reindex(
 
     if projects.is_empty() {
         if json {
-            print_json(&ReindexResponse {
+            print_json(&[ReindexResponse {
                 project_id: "(none)".to_string(),
                 reindexed: 0,
                 skipped: 0,
                 failed: vec![],
-            });
+            }]);
         } else {
             println!("No projects found in database. Nothing to reindex.");
         }
@@ -75,6 +77,7 @@ pub fn handle_reindex(
     let mut total_skipped: usize = 0;
     let mut total_failed: usize = 0;
     let mut all_failed: Vec<ReindexFailure> = vec![];
+    let mut responses: Vec<ReindexResponse> = vec![];
 
     for project_id in &projects {
         let mut embed_callback = |content: &str| {
@@ -88,16 +91,16 @@ pub fn handle_reindex(
         total_reindexed += reindexed;
         total_skipped += skipped;
         total_failed += failed_count;
-        all_failed.extend(failed);
+        all_failed.extend(failed.clone());
 
-        if json {
-            print_json(&ReindexResponse {
-                project_id: project_id.clone(),
-                reindexed,
-                skipped,
-                failed: Vec::new(), // Print per-project, failures collected separately
-            });
-        } else {
+        responses.push(ReindexResponse {
+            project_id: project_id.clone(),
+            reindexed,
+            skipped,
+            failed,
+        });
+
+        if !json {
             println!(
                 "Project {}: {} reindexed, {} skipped, {} failed",
                 project_id, reindexed, skipped, failed_count
@@ -105,17 +108,22 @@ pub fn handle_reindex(
         }
     }
 
-    // Print failures summary
+    // Print JSON: single array of all project responses
+    if json {
+        print_json(&responses);
+    }
+
+    // Print failures summary to stderr
     if !all_failed.is_empty() && !json {
         eprintln!("Warning: {} row(s) failed during reindex", all_failed.len());
         for failure in &all_failed {
             eprintln!("  {} — {}", failure.id, failure.error);
         }
+        println!();
     }
 
-    // Print total summary for all projects
+    // Print total summary for all projects (always shown in human mode)
     if !json {
-        println!();
         println!("Total across all projects:");
         println!("  Reindexed: {}", total_reindexed);
         println!("  Skipped:   {}", total_skipped);
@@ -145,7 +153,7 @@ where
         // Classify
         match classify_embedding(&embedding) {
             crate::sqlite::embedding::EmbeddingClass::Real => {
-                // Real row — leave byte-identical
+                // Real row — leave byte-identical, already counted in processed
             }
             crate::sqlite::embedding::EmbeddingClass::Unknown => {
                 // Corrupted/unknown — skip
@@ -198,7 +206,6 @@ where
     F: FnMut(&str) -> Result<Vec<f32>, Error>,
 {
     let new_embedding = embed(content)?;
-    db.update_embedding(id, &new_embedding)
-        .map_err(|e| Error::NotFound(e.to_string()))?;
+    db.update_embedding(id, &new_embedding)?;
     Ok(())
 }

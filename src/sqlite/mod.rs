@@ -19,7 +19,6 @@ pub mod update;
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
-use std::time::Duration;
 use uuid::Uuid;
 
 pub use self::embedding::{blob_to_vec, vec_to_blob};
@@ -189,9 +188,6 @@ impl Database {
     /// or migration fails.
     pub fn open(path: &Path) -> Result<Self> {
         let mut conn = Connection::open(path)?;
-        // Set busy timeout to 0ms for fast-fail behavior on database locks
-        conn.busy_timeout(Duration::ZERO)
-            .map_err(|e| Error::Sqlite(e.to_string()))?;
         create_schema(&mut conn)?;
         migrations::run_migrations(&conn)?;
         Ok(Self { conn })
@@ -292,9 +288,8 @@ impl Database {
         Ok(rows > 0)
     }
 
-    /// Get internal connection (for test use).
-    #[cfg(test)]
-    pub(crate) fn conn(&self) -> &Connection {
+    /// Get internal connection (for reindex and test use).
+    pub fn conn(&self) -> &Connection {
         &self.conn
     }
 
