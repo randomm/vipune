@@ -78,6 +78,10 @@ pub enum Error {
     /// Validation error (for parameter validation).
     #[error("Validation error: {0}")]
     Validation(String),
+
+    /// Embedder unavailable — model download failed, cache corrupt, or offline.
+    #[error("Embedder unavailable: {reason}")]
+    EmbedderUnavailable { reason: String },
 }
 
 impl From<crate::sqlite::Error> for Error {

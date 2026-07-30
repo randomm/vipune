@@ -1,5 +1,7 @@
 //! CRUD operations for the memory store.
 
+#[cfg(test)]
+use crate::embedding::l2_normalize;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, ConflictMemory, IngestPolicy};
@@ -10,6 +12,9 @@ use super::store::MemoryStore;
 /// Generate a deterministic mock embedding for specific content.
 /// Uses the content's bytes to create a unique but consistent embedding.
 /// This ensures that the same content always gets the same embedding.
+///
+/// Only available in test builds — never ships in release binaries.
+#[cfg(test)]
 pub(crate) fn mock_embedding_for_content(content: &str) -> Vec<f32> {
     let mut hash: u64 = 0x123456789abcdef; // Starting seed
     for byte in content.bytes() {
@@ -32,6 +37,16 @@ pub(crate) fn mock_embedding_for_content(content: &str) -> Vec<f32> {
         embedding.push(value);
     }
     embedding
+}
+
+/// THE designated fake embedder for tests — L2-normalised mock vectors.
+///
+/// Returns L2-normalised vectors so the Phase 2 norm detector classifies them
+/// as real rather than mock. Normalisation does not change conflict-detection
+/// behaviour because `cosine_similarity` is scale-invariant.
+#[cfg(test)]
+pub(crate) fn test_fake_embedder(content: &str) -> Result<Vec<f32>, Error> {
+    Ok(l2_normalize(&mock_embedding_for_content(content)))
 }
 
 impl MemoryStore {
@@ -302,7 +317,7 @@ impl MemoryStore {
         // If content is provided, validate and generate new embedding
         let embedding = if let Some(text) = content {
             Self::validate_input_length(text)?;
-            Some(self.embedder()?.embed(text)?)
+            Some(self.get_embedding(text)?)
         } else {
             None
         };
@@ -412,12 +427,18 @@ impl MemoryStore {
         Ok(self.db.get_many(ids)?)
     }
 
-    /// Get the embedding for content, using mock if embedder unavailable.
+    /// Get the embedding for content.
+    ///
+    /// In test builds, uses the injected `test_embedder` if present.
+    /// Otherwise, delegates to the real embedding engine.
+    /// If the embedder is unavailable, returns `Error::EmbedderUnavailable`.
     pub(crate) fn get_embedding(&mut self, content: &str) -> Result<Vec<f32>, Error> {
-        if self.embedder.is_none() {
-            Ok(mock_embedding_for_content(content))
-        } else {
-            Ok(self.embedder()?.embed(content)?)
+        #[cfg(test)]
+        {
+            if let Some(f) = &self.test_embedder {
+                return f(content);
+            }
         }
+        self.embedder()?.embed(content)
     }
 }

@@ -45,7 +45,15 @@ pub struct MemoryStore {
     pub(crate) embedder: Option<EmbeddingEngine>,
     pub(crate) model_id: String,
     pub(crate) config: Config,
+    #[cfg(test)]
+    pub(crate) test_embedder: Option<TestEmbedder>,
 }
+
+/// Test-only embedder function type.
+/// Available in all builds so the `MemoryStore` struct can reference it,
+/// but the field using this type is `#[cfg(test)]`-gated.
+#[allow(dead_code)]
+pub(crate) type TestEmbedder = Box<dyn Fn(&str) -> Result<Vec<f32>, Error> + Send + Sync>;
 
 impl MemoryStore {
     /// Initialize a new memory store with database path, model ID, and config.
@@ -108,15 +116,26 @@ impl MemoryStore {
             embedder: None,
             model_id: model_id.to_string(),
             config,
+            #[cfg(test)]
+            test_embedder: None,
         })
     }
 
     /// Lazily initialize and return a mutable reference to the embedding engine.
     ///
     /// Downloads the model on first call; subsequent calls return the cached engine.
+    /// Returns `Error::EmbedderUnavailable` if the model cannot be loaded.
     pub(crate) fn embedder(&mut self) -> Result<&mut EmbeddingEngine, Error> {
         if self.embedder.is_none() {
-            self.embedder = Some(EmbeddingEngine::new(&self.model_id)?);
+            self.embedder = Some(EmbeddingEngine::new(&self.model_id).map_err(|e| {
+                Error::EmbedderUnavailable {
+                    reason: format!(
+                        "Failed to load embedding model '{}': {}. \
+                         Pre-fetch before going offline: huggingface-cli download {} --cache-dir ~/.cache/huggingface/hub",
+                        self.model_id, e, self.model_id
+                    ),
+                }
+            })?);
         }
         Ok(self.embedder.as_mut().unwrap())
     }
@@ -143,6 +162,7 @@ impl MemoryStore {
             embedder: None,
             model_id: String::new(),
             config,
+            test_embedder: None,
         }
     }
 }

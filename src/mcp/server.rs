@@ -26,11 +26,18 @@ pub fn run_mcp(embedding_model: String, project_id: &str, db_path: PathBuf) -> R
         database_path: db_path.clone(),
         ..Config::default()
     };
-    let store = MemoryStore::new(
+    let mut store = MemoryStore::new(
         &config.database_path,
         &config.embedding_model,
         config.clone(),
     )?;
+
+    // Pre-initialise the embedder before accepting connections.
+    // If this fails, the server exits before accepting any MCP client,
+    // avoiding a first `store_memory` that holds the mutex through a
+    // 66MB download and trips the client protocol timeout.
+    store.embedder()?;
+
     let store = Arc::new(Mutex::new(store));
 
     // Create tool handler

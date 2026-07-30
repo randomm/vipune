@@ -305,6 +305,7 @@ mod tests {
     // Exercise MemoryStore::batch_ingest to eliminate dead_code warnings
     #[test]
     fn test_batch_ingest_integration_compiles() {
+        use memory::crud::test_fake_embedder;
         use tempfile::TempDir;
 
         // Create a temporary database
@@ -315,6 +316,7 @@ mod tests {
         let db = Database::open(&path).unwrap();
         let config = config::Config::default();
         let mut store = MemoryStore::from_db(db, config);
+        store.test_embedder = Some(Box::new(test_fake_embedder));
 
         // Test with empty batch
         let result = store.batch_ingest("test-project", vec![], IngestPolicy::Force);

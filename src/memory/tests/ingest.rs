@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use crate::memory::MemoryStore;
+use crate::memory::crud::test_fake_embedder;
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::sqlite::Database;
 
@@ -14,6 +15,7 @@ fn test_ingest_invalid_input_empty() {
 
     let db = Database::open(&path).unwrap();
     let mut store = MemoryStore::from_db(db, Config::default());
+    store.test_embedder = Some(Box::new(test_fake_embedder));
 
     // Empty content should error
     let result = store.ingest("test-project", "", None, IngestPolicy::Force);

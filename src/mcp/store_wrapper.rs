@@ -477,6 +477,11 @@ impl From<Error> for rmcp::ErrorData {
                 msg,
                 Some(serde_json::json!({"type": "not_found"})),
             ),
+            Error::EmbedderUnavailable { reason } => rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                reason,
+                Some(serde_json::json!({"type": "embedder_unavailable"})),
+            ),
             _ => McpError::internal_error(&e.to_string()),
         }
     }
