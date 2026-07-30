@@ -46,8 +46,12 @@ pub fn run_mcp(embedding_model: String, project_id: &str, db_path: PathBuf) -> R
     let model_id = config.embedding_model.clone();
     let model_id_for_thread = model_id.clone();
     let (tx, rx) = mpsc::channel();
-    let init_thread =
-        std::thread::spawn(move || tx.send(EmbeddingEngine::new(&model_id_for_thread)));
+    let init_thread = std::thread::spawn(move || {
+        // Discarding send error is correct: a failed send means the receiver
+        // already hit the 120s timeout and went away, so there is no one left
+        // to report to and nothing actionable to do.
+        let _ = tx.send(EmbeddingEngine::new(&model_id_for_thread));
+    });
 
     let engine = match rx.recv_timeout(Duration::from_secs(120)) {
         Ok(Ok(engine)) => engine,
