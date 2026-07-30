@@ -200,9 +200,7 @@ impl MemoryStore {
         std::mem::forget(dir);
 
         let db = Database::open(&path).expect("open test database");
-        let mut store = Self::from_db(db, Config::default());
-        store.test_embedder = Some(Box::new(crate::memory::crud::test_fake_embedder));
-        store
+        Self::from_db_with_test_embedder(db)
     }
 
     #[cfg(test)]

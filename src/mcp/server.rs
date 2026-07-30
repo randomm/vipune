@@ -58,10 +58,13 @@ pub fn run_mcp(embedding_model: String, project_id: &str, db_path: PathBuf) -> R
             });
         }
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            // Drop the receiver so the thread's tx.send() fails, then
-            // join the thread to avoid orphaning a ~66MB download.
-            drop(rx);
-            let _ = init_thread.join();
+            // On timeout we deliberately orphan the download thread rather than block
+            // on it. There is no cancellation point in the hf-hub sync API, and
+            // `join()` would wait for the full remaining download (~66MB) after we've
+            // already waited 120 s — re-introducing the unbounded hang the timeout
+            // exists to prevent. A bounded startup failure is worth more than a
+            // reclaimed thread at process exit.
+            drop(init_thread); // drop the JoinHandle so the thread runs unobserved
             return Err(Error::EmbedderUnavailable {
                 reason: format!(
                     "Embedding model '{}' download timed out after 120s. Check network connectivity to HuggingFace Hub.",
@@ -81,9 +84,10 @@ pub fn run_mcp(embedding_model: String, project_id: &str, db_path: PathBuf) -> R
         }
     };
 
-    // SAFETY: `engine` is created from `config.embedding_model` which is validated
-    // during Config construction. The thread that created it has been joined or
-    // is no longer needed (timeout case returns early above).
+    // NOTE: `engine` is created from `config.embedding_model` which is validated
+    // during Config construction. The thread that created it has been joined (Ok
+    // and Disconnected branches) or is orphaned and running unobserved (Timeout
+    // branch returns early above).
     store.set_preinitialized_embedder(engine);
 
     let store = Arc::new(Mutex::new(store));
