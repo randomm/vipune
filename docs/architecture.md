@@ -52,7 +52,7 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 4. Raw f32 array is converted to little-endian bytes for storage
 5. Cosine similarity computed in Rust during search (not via SQL extension)
 
-**Caching**: Model files downloaded on first use via `hf_hub`, cached in `~/.vipune/models/`, reused for all subsequent operations.
+**Caching**: Model files downloaded on first use via `hf_hub`, cached in `~/.cache/huggingface/hub/`, reused for all subsequent operations.
 
 **See also**: [Embedding Pipeline Details](embedding-pipeline.md) for contributor-level documentation on ONNX integration, model versioning, and BLOB format.
 

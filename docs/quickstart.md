@@ -14,7 +14,7 @@ cargo install vipune
 
 > For checksum verification before installing, see the [README](../README.md#installation).
 
-**First run:** vipune will automatically download the ONNX model (~400MB) to `~/.vipune/models/`. This happens once and takes 30-60 seconds depending on your connection.
+**First run:** vipune will automatically download the ONNX model (~66MB) to `~/.cache/huggingface/hub/`. This happens once and takes 30-60 seconds depending on your connection.
 
 ## Step 2: Add Your First Memory
 
