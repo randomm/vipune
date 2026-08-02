@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-02
+
+### Bug Fixes
+
+- Stop MCP tests loading a real ONNX model ([#154](https://github.com/randomm/vipune/pull/154))
+
+
 ## [0.6.0] - 2026-05-15
 
 
