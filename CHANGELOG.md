@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-02
+
+### Features
+
+- *(#147)* Remove mock-embedding fallback and add doctor/reindex repair ([#151](https://github.com/randomm/vipune/pull/151))
+- *(#139)* Bundle software-dev-tuned vipune skill artifact ([#140](https://github.com/randomm/vipune/pull/140))
+
+### Bug Fixes
+
+- Stop MCP tests loading a real ONNX model ([#154](https://github.com/randomm/vipune/pull/154))
+- *(#148)* Correct air-gapped model revision and cache path in docs ([#151](https://github.com/randomm/vipune/pull/151))
+
+### Documentation
+
+- *(#142)* Add Claude Desktop (macOS) MCP setup guide ([#143](https://github.com/randomm/vipune/pull/143))
+
+### Upgrade notes
+
+**Run `vipune reindex` after upgrading.**
+
+Before this release, `vipune add` stored a hash-derived placeholder vector whenever the embedding model was not loaded, while `vipune search` queried with a real one. Cosine similarity between those two spaces is noise, so semantic search returned effectively random results for CLI users. This has been the case since v0.2.1.
+
+This release stops new writes being corrupted, but rows already in your database keep their placeholder vectors. To check and repair:
+
+```bash
+vipune doctor --embeddings   # report real / mock / unknown rows per project
+vipune reindex               # re-embed the mock rows
+```
+
+`reindex` is idempotent and leaves already-correct rows byte-identical. Rows it cannot classify are reported and skipped rather than overwritten.
+
+**Expect more conflict detections.** With real vectors, paraphrases can exceed the default `similarity_threshold` of 0.85, whereas placeholder vectors only ever matched exact duplicates. Seeing more conflicts on ingest is expected behaviour, not a regression. Lower `similarity_threshold` if it is too aggressive for your corpus.
+
+**Air-gapped installs**: the documented pre-download procedure named the wrong model revision, so vipune missed the cache and attempted a network download. That is corrected in this release — re-run the `huggingface-cli download` command from the README, which now specifies the pinned revision.
+
 ## [0.6.0] - 2026-05-15
 
 
