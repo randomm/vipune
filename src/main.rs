@@ -101,7 +101,6 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
 mod tests {
     use super::*;
     use memory_types::{BatchIngestItemResult, IngestPolicy};
-    use sqlite::Database;
 
     #[test]
     fn test_cli_parse_add() {
@@ -305,23 +304,11 @@ mod tests {
     // Exercise MemoryStore::batch_ingest to eliminate dead_code warnings
     #[test]
     fn test_batch_ingest_integration_compiles() {
-        use tempfile::TempDir;
-
-        // Create a temporary database
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        std::mem::forget(dir);
-
-        let db = Database::open(&path).unwrap();
-        let config = config::Config::default();
-        let mut store = MemoryStore::from_db(db, config);
+        let mut store = MemoryStore::test_store();
 
         // Test with empty batch
         let result = store.batch_ingest("test-project", vec![], IngestPolicy::Force);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().results.len(), 0);
-
-        // Clean up
-        std::fs::remove_file(path).ok();
     }
 }

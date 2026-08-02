@@ -1,21 +1,13 @@
 //! Batch ingest tests for the memory store.
 
 use super::*;
-use crate::config::Config;
 use crate::memory_types::{BatchIngestItemResult, IngestPolicy};
-use crate::sqlite::Database;
+
+use super::crud::test_fake_embedder;
 
 #[test]
 fn test_batch_ingest_empty_batch() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let config = Config::default();
-
-    let mut store = MemoryStore::from_db(db, config);
+    let mut store = MemoryStore::test_store();
 
     let result = store
         .batch_ingest("test-project", vec![], IngestPolicy::ConflictAware)
@@ -26,18 +18,11 @@ fn test_batch_ingest_empty_batch() {
 
 #[test]
 fn test_batch_ingest_mixed_outcomes() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let path = MemoryStore::test_db_path();
+    let db = crate::sqlite::Database::open(&path).unwrap();
 
-    let db = Database::open(&path).unwrap();
-    let config = Config::default();
-
-    // First, add a memory that will cause conflicts
-    // Use the same mock embedding function that add_with_conflict uses
-    // so exact duplicates produce identical embeddings (deterministic)
-    let embedding = super::crud::mock_embedding_for_content("Alice works at Microsoft");
+    // Pre-populate with a memory that will cause conflicts
+    let embedding = test_fake_embedder("Alice works at Microsoft").unwrap();
     db.insert(
         "test-project",
         "Alice works at Microsoft",
@@ -48,7 +33,7 @@ fn test_batch_ingest_mixed_outcomes() {
     )
     .unwrap();
 
-    let mut store = MemoryStore::from_db(db, config);
+    let mut store = MemoryStore::from_db_with_test_embedder(db);
 
     // Create a batch with mixed outcomes:
     // 0: empty -> Error
@@ -115,18 +100,11 @@ fn test_batch_ingest_mixed_outcomes() {
 
 #[test]
 fn test_batch_ingest_deterministic_index_mapping() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let config = Config::default();
+    let path = MemoryStore::test_db_path();
+    let db = crate::sqlite::Database::open(&path).unwrap();
 
     // Pre-populate with conflicting content
-    // Use the same mock embedding function that add_with_conflict uses
-    // so exact duplicates produce identical embeddings (deterministic)
-    let embedding = super::crud::mock_embedding_for_content("conflict with item 1");
+    let embedding = test_fake_embedder("conflict with item 1").unwrap();
     db.insert(
         "test-project",
         "conflict with item 1",
@@ -137,7 +115,7 @@ fn test_batch_ingest_deterministic_index_mapping() {
     )
     .unwrap();
 
-    let mut store = MemoryStore::from_db(db, config);
+    let mut store = MemoryStore::from_db_with_test_embedder(db);
 
     // Create batch with specific ordering
     let items = vec![
@@ -183,17 +161,11 @@ fn test_batch_ingest_deterministic_index_mapping() {
 
 #[test]
 fn test_batch_ingest_policy_force() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let config = Config::default();
+    let path = MemoryStore::test_db_path();
+    let db = crate::sqlite::Database::open(&path).unwrap();
 
     // Pre-populate with conflicting content
-    // Use the same mock embedding function for consistency
-    let embedding = super::crud::mock_embedding_for_content("Alice works at Microsoft");
+    let embedding = test_fake_embedder("Alice works at Microsoft").unwrap();
     db.insert(
         "test-project",
         "Alice works at Microsoft",
@@ -204,7 +176,7 @@ fn test_batch_ingest_policy_force() {
     )
     .unwrap();
 
-    let mut store = MemoryStore::from_db(db, config);
+    let mut store = MemoryStore::from_db_with_test_embedder(db);
 
     // Create batch with conflicts
     let items = vec![
@@ -242,15 +214,7 @@ fn test_batch_ingest_policy_force() {
 
 #[test]
 fn test_batch_ingest_invalid_inputs() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let config = Config::default();
-
-    let mut store = MemoryStore::from_db(db, config);
+    let mut store = MemoryStore::test_store();
 
     // Create oversized input (100,001 characters)
     let too_long = "a".repeat(100_001);
@@ -298,15 +262,7 @@ fn test_batch_ingest_invalid_inputs() {
 
 #[test]
 fn test_batch_ingest_all_errors() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let config = Config::default();
-
-    let mut store = MemoryStore::from_db(db, config);
+    let mut store = MemoryStore::test_store();
 
     // Create a batch where every item fails validation
     let items = vec![
@@ -332,15 +288,7 @@ fn test_batch_ingest_all_errors() {
 
 #[test]
 fn test_batch_ingest_metadata_preservation() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let config = Config::default();
-
-    let mut store = MemoryStore::from_db(db, config);
+    let mut store = MemoryStore::test_store();
 
     let items = vec![
         ("content with metadata", Some(r#"{"tag": "important"}"#)),

@@ -19,6 +19,7 @@ pub mod update;
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
+use std::time::Duration;
 use uuid::Uuid;
 
 pub use self::embedding::{blob_to_vec, vec_to_blob};
@@ -288,9 +289,91 @@ impl Database {
         Ok(rows > 0)
     }
 
-    /// Get internal connection (for test use).
+    /// Get internal connection (for test use only).
     #[cfg(test)]
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Set the SQLite busy timeout.
+    ///
+    /// Used by the reindex command to enforce fast-fail behavior on database locks.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the busy timeout cannot be set.
+    pub fn set_busy_timeout(&self, timeout: Duration) -> Result<()> {
+        self.conn.busy_timeout(timeout)?;
+        Ok(())
+    }
+
+    /// List ALL rows for a project, including superseded and deprecated.
+    ///
+    /// Unlike `list()`, this does not filter by status and has no limit.
+    /// Returns id, content, and embedding for each row.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the database query fails.
+    pub fn list_all_rows_for_project(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<(String, String, Vec<f32>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, content, embedding FROM memories WHERE project_id = ?1")?;
+
+        let rows = stmt.query_map([project_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })?;
+
+        let mut results = Vec::new();
+        for row_result in rows {
+            let (id, content, blob) = row_result?;
+            let embedding = blob_to_vec(&blob)?;
+            results.push((id, content, embedding));
+        }
+        Ok(results)
+    }
+
+    /// Update only the embedding BLOB for a memory, leaving all other fields intact.
+    ///
+    /// This does NOT touch `updated_at`, `retrieval_count`, or `last_retrieved_at`.
+    /// Required for reindex operations where only the vector changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the embedding has invalid dimensions or the database write fails.
+    pub fn update_embedding(&self, id: &str, embedding: &[f32]) -> Result<()> {
+        let blob = vec_to_blob(embedding)?;
+        let rows = self.conn.execute(
+            "UPDATE memories SET embedding = ?1 WHERE id = ?2",
+            rusqlite::params![&blob, id],
+        )?;
+        if rows == 0 {
+            return Err(Error::NotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// List all distinct project_ids in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the database query fails.
+    pub fn list_all_project_ids(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT project_id FROM memories ORDER BY project_id")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut results = Vec::new();
+        for row_result in rows {
+            results.push(row_result?);
+        }
+        Ok(results)
     }
 }

@@ -244,7 +244,7 @@ impl EmbeddingEngine {
     }
 }
 
-fn l2_normalize(vec: &[f32]) -> Vec<f32> {
+pub(crate) fn l2_normalize(vec: &[f32]) -> Vec<f32> {
     let norm: f32 = vec.iter().map(|&x| x * x).sum::<f32>().sqrt();
     let norm = norm.max(1e-9);
 

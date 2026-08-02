@@ -52,9 +52,17 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 4. Raw f32 array is converted to little-endian bytes for storage
 5. Cosine similarity computed in Rust during search (not via SQL extension)
 
-**Caching**: Model files downloaded on first use via `hf_hub`, cached in `~/.vipune/models/`, reused for all subsequent operations.
+**Caching**: Model files downloaded on first use via `hf_hub`, cached in `~/.cache/huggingface/hub/`, reused for all subsequent operations.
 
 **See also**: [Embedding Pipeline Details](embedding-pipeline.md) for contributor-level documentation on ONNX integration, model versioning, and BLOB format.
+
+## Embedding Invariant
+
+A `MemoryStore` never persists an embedding vector it did not compute using the configured `EmbeddingEngine`. If the model is unavailable the write returns an error rather than substituting a synthetic vector.
+
+This invariant is enforced at `get_embedding` (`src/memory/crud.rs`): in release builds the function delegates to `self.embedder()?.embed(content)` and propagates any error. There is no fallback to mock vectors. In test builds a deterministic `test_embedder` can be injected via the `test_embedder` field, but this is `#[cfg(test)]`-gated and never ships in release binaries.
+
+The MCP server pre-initialises the embedder in `run_mcp()` before accepting connections, so the first `store_memory` request does not block on a model download.
 
 ## Hybrid Search
 

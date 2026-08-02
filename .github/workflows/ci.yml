@@ -5,6 +5,8 @@ on:
     branches:
       - main
   pull_request:
+  schedule:
+    - cron: "0 6 * * *" # Nightly at 06:00 UTC
 
 env:
   HF_CACHE_KEY: hf-hub-bge-small-en-v1.5-5c38ec7
@@ -52,6 +54,10 @@ jobs:
 
       - name: Test
         run: cargo test
+
+      - name: Test (ignored — requires model)
+        if: github.event_name == 'schedule'
+        run: cargo test -- --ignored
 
       # Note: ONNX Runtime shared library is auto-downloaded during build
       # CI may need extra time on first run due to download

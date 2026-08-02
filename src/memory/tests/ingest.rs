@@ -3,17 +3,10 @@
 use crate::config::Config;
 use crate::memory::MemoryStore;
 use crate::memory_types::{AddResult, IngestPolicy};
-use crate::sqlite::Database;
 
 #[test]
 fn test_ingest_invalid_input_empty() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).unwrap();
-    let mut store = MemoryStore::from_db(db, Config::default());
+    let mut store = MemoryStore::test_store();
 
     // Empty content should error
     let result = store.ingest("test-project", "", None, IngestPolicy::Force);

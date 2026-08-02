@@ -39,7 +39,7 @@ Text input → Tokenizer → ONNX session → Mean pooling → L2 normalization 
 
 ### Model Cache
 
-- **Location**: `~/.vipune/models/`
+- **Location**: `~/.cache/huggingface/hub/`
 - **Download**: First use only via `hf_hub` crate
 - **Reuse**: All subsequent operations use cached model
 - **Size**: ~400MB (model weights + tokenizer)

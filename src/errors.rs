@@ -78,6 +78,14 @@ pub enum Error {
     /// Validation error (for parameter validation).
     #[error("Validation error: {0}")]
     Validation(String),
+
+    /// Embedder unavailable — model download failed, cache corrupt, or offline.
+    /// Used by the MCP server which wraps errors with context before returning.
+    /// Not constructed directly by the CLI path (which returns the inner Error::Config
+    /// with its offline hint intact), hence the allow.
+    #[allow(dead_code)]
+    #[error("Embedder unavailable: {reason}")]
+    EmbedderUnavailable { reason: String },
 }
 
 impl From<crate::sqlite::Error> for Error {
