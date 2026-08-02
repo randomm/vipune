@@ -9,6 +9,19 @@ use crate::sqlite::embedding::classify_embedding;
 use std::path::Path;
 use std::process::ExitCode;
 
+/// Wrap a database error, converting SQLITE_BUSY into the actionable MCP-server message.
+fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
+    match result {
+        Ok(v) => Ok(v),
+        Err(Error::SqliteModule(msg)) if msg.contains("database is locked") => {
+            Err(Error::Config(
+                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
+            ))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Run the embedding doctor check on the database.
 ///
 /// # Arguments
@@ -40,7 +53,7 @@ pub fn handle_doctor(
     let projects: Vec<String> = if let Some(filter) = project_filter {
         vec![filter.to_string()]
     } else {
-        db.list_all_project_ids()?
+        wrap_busy(db.list_all_project_ids().map_err(Error::from))?
     };
 
     if projects.is_empty() {
@@ -61,7 +74,7 @@ pub fn handle_doctor(
     let mut responses: Vec<DoctorResponse> = vec![];
 
     for project_id in &projects {
-        let result = audit_project(&db, project_id)?;
+        let result = wrap_busy(audit_project(&db, project_id))?;
         responses.push(DoctorResponse {
             project_id: project_id.clone(),
             total_rows: result.total,

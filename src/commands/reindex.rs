@@ -14,6 +14,19 @@ use std::time::Duration;
 /// Progress interval: print progress every N rows in human mode.
 const PROGRESS_INTERVAL: usize = 50;
 
+/// Wrap a database error, converting SQLITE_BUSY into the actionable MCP-server message.
+fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
+    match result {
+        Ok(v) => Ok(v),
+        Err(Error::SqliteModule(msg)) if msg.contains("database is locked") => {
+            Err(Error::Config(
+                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
+            ))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Run the reindex operation on the database.
 ///
 /// # Arguments
@@ -45,15 +58,13 @@ pub fn handle_reindex(
     })?;
 
     // Set busy timeout to 0ms for fast-fail behavior on database locks (reindex-specific)
-    db.conn()
-        .busy_timeout(Duration::ZERO)
-        .map_err(Error::SQLite)?;
+    db.set_busy_timeout(Duration::ZERO)?;
 
     // Determine which projects to process
     let projects: Vec<String> = if let Some(filter) = project_filter {
         vec![filter.to_string()]
     } else {
-        db.list_all_project_ids()?
+        wrap_busy(db.list_all_project_ids().map_err(Error::from))?
     };
 
     if projects.is_empty() {
@@ -76,7 +87,6 @@ pub fn handle_reindex(
     let mut total_reindexed: usize = 0;
     let mut total_skipped: usize = 0;
     let mut total_failed: usize = 0;
-    let mut all_failed: Vec<ReindexFailure> = vec![];
     let mut responses: Vec<ReindexResponse> = vec![];
 
     for project_id in &projects {
@@ -86,13 +96,11 @@ pub fn handle_reindex(
                 .map_err(|e| Error::Inference(e.to_string()))
         };
         let (reindexed, skipped, failed) =
-            reindex_project(&db, &mut embed_callback, project_id, json)?;
+            wrap_busy(reindex_project(&db, &mut embed_callback, project_id, json))?;
         let failed_count = failed.len();
         total_reindexed += reindexed;
         total_skipped += skipped;
         total_failed += failed_count;
-        all_failed.extend(failed.clone());
-
         responses.push(ReindexResponse {
             project_id: project_id.clone(),
             reindexed,
@@ -114,12 +122,17 @@ pub fn handle_reindex(
     }
 
     // Print failures summary to stderr
-    if !all_failed.is_empty() && !json {
-        eprintln!("Warning: {} row(s) failed during reindex", all_failed.len());
-        for failure in &all_failed {
-            eprintln!("  {} — {}", failure.id, failure.error);
+    if !json {
+        let any_failures = responses.iter().any(|r| !r.failed.is_empty());
+        if any_failures {
+            eprintln!("Warning: {} row(s) failed during reindex", total_failed);
+            for response in &responses {
+                for failure in &response.failed {
+                    eprintln!("  {} — {}", failure.id, failure.error);
+                }
+            }
+            println!();
         }
-        println!();
     }
 
     // Print total summary for all projects (always shown in human mode)
@@ -150,10 +163,12 @@ where
     let mut processed: usize = 0;
 
     for (id, content, embedding) in rows {
+        processed += 1;
+
         // Classify
         match classify_embedding(&embedding) {
             crate::sqlite::embedding::EmbeddingClass::Real => {
-                // Real row — leave byte-identical, already counted in processed
+                // Real row — leave byte-identical
             }
             crate::sqlite::embedding::EmbeddingClass::Unknown => {
                 // Corrupted/unknown — skip
@@ -186,7 +201,6 @@ where
             }
         }
 
-        processed += 1;
         if !json && processed % PROGRESS_INTERVAL == 0 {
             println!(
                 "  Progress: {} processed ({} reindexed, {} skipped, {} failed)",

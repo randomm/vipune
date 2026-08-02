@@ -229,7 +229,7 @@ mod tests {
     fn test_classify_embedding_mock_vector_is_mock() {
         // Mock vectors are uniform [-1,1] over 384 dims, norm ≈ 11.3
         let mut vec = Vec::with_capacity(384);
-        let mut hash: u64 = 0x123456789abcdef;
+        let hash: u64 = 0x123456789abcdef;
         for i in 0..384 {
             let mut dim_hash = hash.wrapping_add(i as u64);
             dim_hash ^= dim_hash >> 33;

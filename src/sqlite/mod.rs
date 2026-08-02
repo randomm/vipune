@@ -19,6 +19,7 @@ pub mod update;
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
+use std::time::Duration;
 use uuid::Uuid;
 
 pub use self::embedding::{blob_to_vec, vec_to_blob};
@@ -288,9 +289,22 @@ impl Database {
         Ok(rows > 0)
     }
 
-    /// Get internal connection (for reindex and test use).
-    pub fn conn(&self) -> &Connection {
+    /// Get internal connection (for test use only).
+    #[cfg(test)]
+    pub(crate) fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Set the SQLite busy timeout.
+    ///
+    /// Used by the reindex command to enforce fast-fail behavior on database locks.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the busy timeout cannot be set.
+    pub fn set_busy_timeout(&self, timeout: Duration) -> Result<()> {
+        self.conn.busy_timeout(timeout)?;
+        Ok(())
     }
 
     /// List ALL rows for a project, including superseded and deprecated.
