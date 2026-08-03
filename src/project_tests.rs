@@ -349,12 +349,20 @@ fn test_remote_derived_ids_unchanged() {
         ("git@github.com:randomm/vipune.git", "randomm/vipune"),
         ("git@github.com:randomm/vipune", "randomm/vipune"),
         ("ssh://git@github.com/randomm/vipune.git", "randomm/vipune"),
+        // BUG (#164): these two entries are the SAME repo but produce
+        // DIFFERENT project_ids depending on whether the remote is HTTPS
+        // or SSH. This divergence is a known defect in `parse_git_remote`,
+        // NOT intended behaviour. The rows are pinned here to lock in
+        // current output so #158 Phase 1 provably does not change any
+        // existing project_id. Fixing the rule requires #158 Phase 2
+        // merge tooling first — correcting it rewrites project_ids for
+        // users on nested-namespace hosts (GitLab subgroups, Gitea orgs,
+        // Forgejo, Azure DevOps).
         (
             "https://gitlab.example.com/group/subgroup/project.git",
             "subgroup/project",
         ),
         (
-            // SSH shorthand returns full path after colon (existing behavior).
             "git@gitlab.example.com:group/subgroup/project.git",
             "group/subgroup/project",
         ),
