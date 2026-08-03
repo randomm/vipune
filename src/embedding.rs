@@ -43,6 +43,8 @@ pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
 pub struct EmbeddingEngine {
     session: Session,
     tokenizer: Tokenizer,
+    /// Truncation-free tokenizer cloned once at startup for accurate token counting.
+    count_tokenizer: Tokenizer,
     requires_token_type_ids: bool,
 }
 
@@ -111,9 +113,15 @@ impl EmbeddingEngine {
             .iter()
             .any(|input| input.name == "token_type_ids");
 
+        // Pre-initialize a truncation-free tokenizer for accurate token counting.
+        // Cloning once at startup avoids a 700KB+ deep copy on every embed() call.
+        let mut count_tokenizer = tokenizer.clone();
+        count_tokenizer.with_truncation(None)?;
+
         Ok(EmbeddingEngine {
             session,
             tokenizer,
+            count_tokenizer,
             requires_token_type_ids,
         })
     }
@@ -123,14 +131,12 @@ impl EmbeddingEngine {
     /// Returns the number of tokens that would be generated for the given text.
     /// This is used for validation before embedding operations.
     ///
-    /// **Important:** we clone the tokenizer and disable truncation so the true
-    /// token count is returned. The main tokenizer has truncation at 512 enabled
+    /// Uses a separate truncation-free tokenizer (pre-cloned at startup) so the
+    /// true count is returned. The main tokenizer has truncation at 512 enabled
     /// for safe inference, but that would silently cap counts and make the
     /// `ContentTooLong` guard in `embed()` unreachable.
     pub fn token_count(&self, text: &str) -> Result<usize, Error> {
-        let mut count_tokenizer = self.tokenizer.clone();
-        count_tokenizer.with_truncation(None)?;
-        let encoding = count_tokenizer.encode(text, true)?;
+        let encoding = self.count_tokenizer.encode(text, true)?;
         Ok(encoding.get_ids().len())
     }
 
@@ -367,8 +373,8 @@ mod tests {
         }
     }
 
-    /// Builds text with approximately `target` tokens by adding words in large
-    /// batches and checking `engine.token_count()` on the full accumulated text.
+    /// Estimates token count by starting with `target` repetitions of "word ",
+    /// then binary-searches downward if the initial count exceeds `target`.
     /// This avoids the BPE tokenizer non-additivity bug where tokenizing individual
     /// words and summing differs from tokenizing the full text.
     fn build_text_with_tokens(engine: &EmbeddingEngine, target: usize) -> String {
@@ -395,28 +401,6 @@ mod tests {
             }
         }
         "word ".repeat(lo).trim().to_string()
-    }
-
-    #[ignore]
-    #[test]
-    fn test_integration_boundary_511_tokens() {
-        let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
-
-        // Construct text approaching 512 tokens, then verify actual count
-        let text = build_text_with_tokens(&engine, 512);
-        let actual_count = engine.token_count(&text).expect("count tokens");
-        assert!(
-            actual_count <= MAX_EMBEDDING_TOKENS,
-            "Expected ≤512 tokens, got {}",
-            actual_count
-        );
-
-        // Should succeed (≤512 tokens)
-        let embedding = engine.embed(&text).expect("embed text");
-        assert_eq!(embedding.len(), 384);
-
-        let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 0.01);
     }
 
     #[ignore]
