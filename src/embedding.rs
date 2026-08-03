@@ -393,7 +393,7 @@ mod tests {
         // Binary search to find the right number of "word " repetitions
         let (mut lo, mut hi) = (0usize, words);
         while lo < hi {
-            let mid = lo + (hi - lo + 1) / 2;
+            let mid = lo + (hi - lo).div_ceil(2);
             let candidate = "word ".repeat(mid);
             let c = engine.token_count(&candidate).expect("count tokens");
             if c <= target {
