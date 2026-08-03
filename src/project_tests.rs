@@ -1,13 +1,28 @@
 //! Tests for project detection.
 //!
-//! All tests use explicit paths via [`detect_project_at`](super::detect_project_at)
-//! and never mutate process-global state (`set_current_dir`, `set_var`).
+//! All tests use [`detect_project_at_test`] — a hermetic wrapper that injects
+//! an empty `env_project` sentinel into [`detect_project_at_internal`] — so the
+//! real `VIPUNE_PROJECT` env var is never consulted. This prevents test failures
+//! when developers run the suite with that variable set in their shell.
+//! No process-global state is mutated (`set_current_dir`, `set_var`).
 
 use std::path::PathBuf;
 use std::process::Command;
 
 use super::*;
 use tempfile::TempDir;
+
+/// Hermetic test wrapper that never reads the real VIPUNE_PROJECT env var.
+///
+/// Passes an empty string as `env_project` so the control flow enters the
+/// `if let Some(project) = env_project` branch in `detect_project_at_internal`,
+/// finds the value empty after trimming, and falls through to git detection.
+///
+/// This is the canonical way to call project detection from tests — production
+/// behaviour of `detect_project()` and `detect_project_at()` is unchanged.
+fn detect_project_at_test(root: &Path, explicit: Option<&str>) -> String {
+    detect_project_at_internal(root, explicit, Some(String::new()))
+}
 
 // ── Git fixture harness ──────────────────────────────────────────────────────
 
@@ -137,7 +152,7 @@ fn test_explicit_override_empty() {
     // Empty explicit string should fall through to automatic detection.
     // Using a temp dir with no git repo, the fallback is the dir name.
     let dir = create_git_repo();
-    let result = detect_project_at(dir.path(), Some(""));
+    let result = detect_project_at_test(dir.path(), Some(""));
     // Falls through to git root dir name since there's no origin.
     assert_eq!(result, dir.path().file_name().unwrap().to_str().unwrap());
 }
@@ -146,7 +161,7 @@ fn test_explicit_override_empty() {
 fn test_explicit_override_whitespace() {
     // Whitespace-only explicit string should fall through to automatic detection.
     let dir = create_git_repo();
-    let result = detect_project_at(dir.path(), Some("   \t  "));
+    let result = detect_project_at_test(dir.path(), Some("   \t  "));
     // Falls through to git root dir name since there's no origin.
     assert_eq!(result, dir.path().file_name().unwrap().to_str().unwrap());
 }
@@ -189,14 +204,14 @@ fn test_detect_https_remote() {
         "origin",
         "https://github.com/randomm/vipune.git",
     );
-    assert_eq!(detect_project_at(dir.path(), None), "randomm/vipune");
+    assert_eq!(detect_project_at_test(dir.path(), None), "randomm/vipune");
 }
 
 #[test]
 fn test_detect_ssh_remote() {
     let dir = create_git_repo();
     add_remote(dir.path(), "origin", "git@github.com:randomm/vipune.git");
-    assert_eq!(detect_project_at(dir.path(), None), "randomm/vipune");
+    assert_eq!(detect_project_at_test(dir.path(), None), "randomm/vipune");
 }
 
 #[test]
@@ -207,14 +222,14 @@ fn test_detect_ssh_url_with_protocol() {
         "origin",
         "ssh://git@github.com/randomm/vipune.git",
     );
-    assert_eq!(detect_project_at(dir.path(), None), "randomm/vipune");
+    assert_eq!(detect_project_at_test(dir.path(), None), "randomm/vipune");
 }
 
 #[test]
 fn test_detect_remote_without_git_suffix() {
     let dir = create_git_repo();
     add_remote(dir.path(), "origin", "https://github.com/randomm/vipune");
-    assert_eq!(detect_project_at(dir.path(), None), "randomm/vipune");
+    assert_eq!(detect_project_at_test(dir.path(), None), "randomm/vipune");
 }
 
 #[test]
@@ -227,7 +242,7 @@ fn test_detect_only_upstream_remote_uses_dir_name() {
         "upstream",
         "https://github.com/canonical/project.git",
     );
-    let result = detect_project_at(dir.path(), None);
+    let result = detect_project_at_test(dir.path(), None);
     assert_eq!(result, dir.path().file_name().unwrap().to_str().unwrap());
     // Ensure we did NOT pick up the upstream remote.
     assert_ne!(result, "canonical/project");
@@ -237,7 +252,7 @@ fn test_detect_only_upstream_remote_uses_dir_name() {
 fn test_detect_no_git_repo() {
     // No git repo at all — fallback to directory name.
     let dir = TempDir::new().expect("temp dir");
-    let result = detect_project_at(dir.path(), None);
+    let result = detect_project_at_test(dir.path(), None);
     // Falls back to dir name (or "unknown" if dir has no file_name).
     assert!(!result.is_empty());
 }
@@ -252,8 +267,8 @@ fn test_detect_same_id_from_root_and_subdirectory() {
     let sub = create_subdirectory(dir.path());
 
     // Both root and subdirectory must yield the same project_id.
-    let from_root = detect_project_at(dir.path(), None);
-    let from_sub = detect_project_at(&sub, None);
+    let from_root = detect_project_at_test(dir.path(), None);
+    let from_sub = detect_project_at_test(&sub, None);
 
     assert_eq!(from_root, "owner/repo");
     assert_eq!(from_sub, "owner/repo");
@@ -266,8 +281,8 @@ fn test_detect_fallback_same_from_root_and_subdirectory() {
     let dir = create_git_repo();
     let sub = create_subdirectory(dir.path());
 
-    let from_root = detect_project_at(dir.path(), None);
-    let from_sub = detect_project_at(&sub, None);
+    let from_root = detect_project_at_test(dir.path(), None);
+    let from_sub = detect_project_at_test(&sub, None);
 
     let expected = dir.path().file_name().unwrap().to_str().unwrap();
     assert_eq!(from_root, expected);
@@ -279,7 +294,7 @@ fn test_detect_fallback_same_from_root_and_subdirectory() {
 #[test]
 fn test_fallback_no_remotes_yields_dir_name() {
     let dir = create_git_repo();
-    let result = detect_project_at(dir.path(), None);
+    let result = detect_project_at_test(dir.path(), None);
     assert_eq!(result, dir.path().file_name().unwrap().to_str().unwrap());
 }
 
@@ -348,7 +363,7 @@ fn test_remote_derived_ids_unchanged() {
     for (remote_url, expected_id) in cases {
         let dir = create_git_repo();
         add_remote(dir.path(), "origin", remote_url);
-        let result = detect_project_at(dir.path(), None);
+        let result = detect_project_at_test(dir.path(), None);
         assert_eq!(
             result, expected_id,
             "remote '{}' should produce project_id '{}'",
