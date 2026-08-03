@@ -349,7 +349,7 @@ mod tests {
         let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
 
         // Build text that reliably exceeds 512 tokens by counting on the full text
-        let long_text = build_text_with_tokens(&engine, 600);
+        let long_text = build_text_up_to_tokens(&engine, 600);
         let actual_count = engine.token_count(&long_text).expect("count tokens");
         assert!(
             actual_count > MAX_EMBEDDING_TOKENS,
@@ -373,11 +373,13 @@ mod tests {
         }
     }
 
-    /// Estimates token count by starting with `target` repetitions of "word ",
-    /// then binary-searches downward if the initial count exceeds `target`.
-    /// This avoids the BPE tokenizer non-additivity bug where tokenizing individual
-    /// words and summing differs from tokenizing the full text.
-    fn build_text_with_tokens(engine: &EmbeddingEngine, target: usize) -> String {
+    /// Returns text with at most `target` tokens.
+    ///
+    /// Starts with `target` repetitions of "word ", then binary-searches downward
+    /// if the initial count exceeds `target`. If the initial text already has fewer
+    /// tokens than `target`, returns it as-is (result may have fewer tokens than
+    /// `target` due to BPE tokenizer non-additivity).
+    fn build_text_up_to_tokens(engine: &EmbeddingEngine, target: usize) -> String {
         // "word " tokenizes as a single token for BGE-small, so we can estimate
         // and then fine-tune. Start with a generous estimate.
         let words = target;
@@ -403,57 +405,67 @@ mod tests {
         "word ".repeat(lo).trim().to_string()
     }
 
+    /// Shared flow for boundary tests: build text, count tokens, assert range,
+    /// then either embed successfully or expect ContentTooLong.
+    fn run_boundary_test(
+        engine: &mut EmbeddingEngine,
+        target: usize,
+        expect_success: bool,
+        min_tokens: usize,
+        max_tokens: Option<usize>,
+    ) {
+        let text = build_text_up_to_tokens(engine, target);
+        let actual_count = engine.token_count(&text).expect("count tokens");
+        assert!(
+            actual_count >= min_tokens,
+            "Expected >= {} tokens, got {}",
+            min_tokens,
+            actual_count
+        );
+        if let Some(max) = max_tokens {
+            assert!(
+                actual_count <= max,
+                "Expected <= {} tokens, got {}",
+                max,
+                actual_count
+            );
+        }
+
+        if expect_success {
+            let embedding = engine.embed(&text).expect("embed text");
+            assert_eq!(embedding.len(), 384);
+            let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
+            assert!((norm - 1.0).abs() < 0.01);
+        } else {
+            let result = engine.embed(&text);
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                Error::ContentTooLong {
+                    token_count: tc,
+                    max_tokens,
+                } => {
+                    assert_eq!(tc, actual_count);
+                    assert_eq!(max_tokens, MAX_EMBEDDING_TOKENS);
+                }
+                _ => panic!("Expected ContentTooLong error"),
+            }
+        }
+    }
+
     #[ignore]
     #[test]
     fn test_integration_boundary_512_tokens() {
         let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
-
-        // Construct text with exactly 512 tokens (or the maximum achievable ≤512)
-        let text = build_text_with_tokens(&engine, 512);
-        let actual_count = engine.token_count(&text).expect("count tokens");
-        assert!(
-            actual_count > 0 && actual_count <= MAX_EMBEDDING_TOKENS,
-            "Expected 1..=512 tokens, got {}",
-            actual_count
-        );
-
-        // Should succeed (≤512 tokens)
-        let embedding = engine.embed(&text).expect("embed 512-token text");
-        assert_eq!(embedding.len(), 384);
-
-        let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 0.01);
+        // Build text targeting ≤512 tokens; should succeed
+        run_boundary_test(&mut engine, 512, true, 1, Some(MAX_EMBEDDING_TOKENS));
     }
 
     #[ignore]
     #[test]
     fn test_integration_boundary_513_tokens() {
         let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
-
-        // Construct text that exceeds 512 tokens
-        // Use a higher target to guarantee we exceed MAX_EMBEDDING_TOKENS
-        let text = build_text_with_tokens(&engine, 520);
-        let actual_count = engine.token_count(&text).expect("count tokens");
-        assert!(
-            actual_count > MAX_EMBEDDING_TOKENS,
-            "Expected >512 tokens, got {}",
-            actual_count
-        );
-
-        // Should fail with ContentTooLong
-        let result = engine.embed(&text);
-        assert!(result.is_err());
-
-        match result.unwrap_err() {
-            Error::ContentTooLong {
-                token_count: tc,
-                max_tokens,
-            } => {
-                assert_eq!(tc, actual_count);
-                assert_eq!(max_tokens, MAX_EMBEDDING_TOKENS);
-            }
-            _ => panic!("Expected ContentTooLong error"),
-        }
+        // Build text targeting 520 tokens; should exceed 512 and fail
+        run_boundary_test(&mut engine, 520, false, MAX_EMBEDDING_TOKENS + 1, None);
     }
 
     #[ignore]
