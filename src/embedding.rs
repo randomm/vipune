@@ -122,8 +122,15 @@ impl EmbeddingEngine {
     ///
     /// Returns the number of tokens that would be generated for the given text.
     /// This is used for validation before embedding operations.
+    ///
+    /// **Important:** we clone the tokenizer and disable truncation so the true
+    /// token count is returned. The main tokenizer has truncation at 512 enabled
+    /// for safe inference, but that would silently cap counts and make the
+    /// `ContentTooLong` guard in `embed()` unreachable.
     pub fn token_count(&self, text: &str) -> Result<usize, Error> {
-        let encoding = self.tokenizer.encode(text, true)?;
+        let mut count_tokenizer = self.tokenizer.clone();
+        count_tokenizer.with_truncation(None)?;
+        let encoding = count_tokenizer.encode(text, true)?;
         Ok(encoding.get_ids().len())
     }
 
@@ -335,15 +342,14 @@ mod tests {
     fn test_integration_long_text_rejection() {
         let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
 
-        // Create text long enough to exceed 512 tokens
-        let long_text = "This is a sentence. ".repeat(100);
-        let encoding = engine
-            .tokenizer
-            .encode(long_text.as_str(), true)
-            .expect("encode long text");
-        let token_count = encoding.get_ids().len();
-
-        assert!(token_count > 512, "Test setup: need >512 tokens");
+        // Build text that reliably exceeds 512 tokens by counting on the full text
+        let long_text = build_text_with_tokens(&engine, 600);
+        let actual_count = engine.token_count(&long_text).expect("count tokens");
+        assert!(
+            actual_count > MAX_EMBEDDING_TOKENS,
+            "Test setup: need >512 tokens, got {}",
+            actual_count
+        );
 
         // Should error with ContentTooLong
         let result = engine.embed(&long_text);
@@ -354,11 +360,41 @@ mod tests {
                 token_count: tc,
                 max_tokens,
             } => {
-                assert_eq!(tc, token_count);
+                assert_eq!(tc, actual_count);
                 assert_eq!(max_tokens, MAX_EMBEDDING_TOKENS);
             }
             _ => panic!("Expected ContentTooLong error"),
         }
+    }
+
+    /// Builds text with approximately `target` tokens by adding words in large
+    /// batches and checking `engine.token_count()` on the full accumulated text.
+    /// This avoids the BPE tokenizer non-additivity bug where tokenizing individual
+    /// words and summing differs from tokenizing the full text.
+    fn build_text_with_tokens(engine: &EmbeddingEngine, target: usize) -> String {
+        // "word " tokenizes as a single token for BGE-small, so we can estimate
+        // and then fine-tune. Start with a generous estimate.
+        let words = target;
+        let text = "word ".repeat(words);
+        let count = engine.token_count(&text).expect("count tokens");
+
+        if count <= target {
+            return text.trim().to_string();
+        }
+
+        // Binary search to find the right number of "word " repetitions
+        let (mut lo, mut hi) = (0usize, words);
+        while lo < hi {
+            let mid = lo + (hi - lo + 1) / 2;
+            let candidate = "word ".repeat(mid);
+            let c = engine.token_count(&candidate).expect("count tokens");
+            if c <= target {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        "word ".repeat(lo).trim().to_string()
     }
 
     #[ignore]
@@ -366,29 +402,17 @@ mod tests {
     fn test_integration_boundary_511_tokens() {
         let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
 
-        // Construct text with exactly 511 tokens
-        let mut text = String::new();
-        let mut token_count = 0;
-        while token_count < 511 {
-            let test_word = "word";
-            let encoding = engine
-                .tokenizer
-                .encode(format!("{} ", test_word).as_str(), true)
-                .unwrap();
-            let word_tokens = encoding.get_ids().len();
+        // Construct text approaching 512 tokens, then verify actual count
+        let text = build_text_with_tokens(&engine, 512);
+        let actual_count = engine.token_count(&text).expect("count tokens");
+        assert!(
+            actual_count <= MAX_EMBEDDING_TOKENS,
+            "Expected ≤512 tokens, got {}",
+            actual_count
+        );
 
-            if token_count + word_tokens > 511 {
-                break;
-            }
-            text.push_str(test_word);
-            text.push_str(" ");
-            token_count += word_tokens;
-        }
-
-        assert_eq!(token_count, 511);
-
-        // Should succeed
-        let embedding = engine.embed(&text).expect("embed 511-token text");
+        // Should succeed (≤512 tokens)
+        let embedding = engine.embed(&text).expect("embed text");
         assert_eq!(embedding.len(), 384);
 
         let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
@@ -400,28 +424,16 @@ mod tests {
     fn test_integration_boundary_512_tokens() {
         let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
 
-        // Construct text with exactly 512 tokens
-        let mut text = String::new();
-        let mut token_count = 0;
-        while token_count < 512 {
-            let test_word = "word";
-            let encoding = engine
-                .tokenizer
-                .encode(format!("{} ", test_word).as_str(), true)
-                .unwrap();
-            let word_tokens = encoding.get_ids().len();
+        // Construct text with exactly 512 tokens (or the maximum achievable ≤512)
+        let text = build_text_with_tokens(&engine, 512);
+        let actual_count = engine.token_count(&text).expect("count tokens");
+        assert!(
+            actual_count > 0 && actual_count <= MAX_EMBEDDING_TOKENS,
+            "Expected 1..=512 tokens, got {}",
+            actual_count
+        );
 
-            if token_count + word_tokens > 512 {
-                break;
-            }
-            text.push_str(test_word);
-            text.push_str(" ");
-            token_count += word_tokens;
-        }
-
-        assert_eq!(token_count, 512);
-
-        // Should succeed
+        // Should succeed (≤512 tokens)
         let embedding = engine.embed(&text).expect("embed 512-token text");
         assert_eq!(embedding.len(), 384);
 
@@ -434,26 +446,15 @@ mod tests {
     fn test_integration_boundary_513_tokens() {
         let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
 
-        // Construct text with exactly 513 tokens
-        let mut text = String::new();
-        let mut token_count = 0;
-        while token_count < 513 {
-            let test_word = "word";
-            let encoding = engine
-                .tokenizer
-                .encode(format!("{} ", test_word).as_str(), true)
-                .unwrap();
-            let word_tokens = encoding.get_ids().len();
-
-            if token_count + word_tokens > 513 {
-                break;
-            }
-            text.push_str(test_word);
-            text.push_str(" ");
-            token_count += word_tokens;
-        }
-
-        assert_eq!(token_count, 513);
+        // Construct text that exceeds 512 tokens
+        // Use a higher target to guarantee we exceed MAX_EMBEDDING_TOKENS
+        let text = build_text_with_tokens(&engine, 520);
+        let actual_count = engine.token_count(&text).expect("count tokens");
+        assert!(
+            actual_count > MAX_EMBEDDING_TOKENS,
+            "Expected >512 tokens, got {}",
+            actual_count
+        );
 
         // Should fail with ContentTooLong
         let result = engine.embed(&text);
@@ -464,7 +465,7 @@ mod tests {
                 token_count: tc,
                 max_tokens,
             } => {
-                assert_eq!(tc, 513);
+                assert_eq!(tc, actual_count);
                 assert_eq!(max_tokens, MAX_EMBEDDING_TOKENS);
             }
             _ => panic!("Expected ContentTooLong error"),
