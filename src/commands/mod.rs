@@ -2,7 +2,11 @@
 
 mod doctor;
 mod handlers;
+mod merge;
 mod reindex;
+
+#[cfg(test)]
+mod merge_tests;
 
 #[cfg(test)]
 mod reindex_tests;
@@ -146,11 +150,34 @@ pub enum Commands {
         all_projects: bool,
     },
 
+    /// Project management operations.
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommands,
+    },
+
     Version,
 
     #[cfg(feature = "mcp")]
     /// Start MCP server over stdio
     Mcp,
+}
+
+/// Subcommands under `vipune project`.
+#[derive(clap::Subcommand)]
+pub enum ProjectCommands {
+    /// Merge all rows from one project into another.
+    ///
+    /// Moves every row whose project_id matches `from` to `to`.
+    /// The operation is atomic — either all rows move or none do.
+    /// Only the project_id column changes; all other data is preserved byte-identically.
+    /// Merging from a project into itself is a no-op.
+    Merge {
+        /// Source project id (rows moved from this)
+        from: String,
+        /// Target project id (rows moved to this)
+        to: String,
+    },
 }
 
 /// Execute a CLI command.
@@ -272,6 +299,11 @@ pub fn execute(
                 json,
             )
         }
+        Commands::Project { command } => match command {
+            ProjectCommands::Merge { from, to } => {
+                merge::handle_merge(&config.database_path, from, to, json)
+            }
+        },
         Commands::Version => handlers::handle_version(json),
         #[cfg(feature = "mcp")]
         Commands::Mcp => unreachable!("Mcp is handled before execute"),

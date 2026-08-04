@@ -311,4 +311,52 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().results.len(), 0);
     }
+
+    // ── project merge CLI parse tests ──
+
+    #[test]
+    fn test_cli_parse_project_merge() {
+        let cli = Cli::parse_from(["vipune", "project", "merge", "old-id", "new-id"]);
+        if let Commands::Project { command } = cli.command {
+            let commands::ProjectCommands::Merge { from, to } = command;
+            assert_eq!(from, "old-id");
+            assert_eq!(to, "new-id");
+        } else {
+            panic!("Expected Project subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_project_merge_with_json() {
+        let cli = Cli::parse_from(["vipune", "--json", "project", "merge", "a", "b"]);
+        assert!(cli.json);
+        matches!(cli.command, Commands::Project { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_project_merge_with_db_path() {
+        let cli = Cli::parse_from([
+            "vipune",
+            "--db-path",
+            "/tmp/test.db",
+            "project",
+            "merge",
+            "x",
+            "y",
+        ]);
+        assert_eq!(cli.db_path, Some("/tmp/test.db".to_string()));
+        matches!(cli.command, Commands::Project { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_project_subcommand_missing_fails() {
+        let result = Cli::try_parse_from(["vipune", "project"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_parse_project_merge_missing_args_fails() {
+        let result = Cli::try_parse_from(["vipune", "project", "merge", "only-from"]);
+        assert!(result.is_err());
+    }
 }

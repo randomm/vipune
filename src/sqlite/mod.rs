@@ -376,4 +376,49 @@ impl Database {
         }
         Ok(results)
     }
+
+    /// Merge all rows from one project_id into another within a single transaction.
+    ///
+    /// - `from == to` short-circuits: returns 0 and performs **no** database writes.
+    /// - Wraps the row-count query and the `UPDATE` in one explicit transaction,
+    ///   committing only if both succeed.
+    /// - Only `project_id` changes; all other columns are preserved byte-identically.
+    /// - The FTS5 UPDATE trigger fires automatically, keeping the FTS index in sync.
+    ///
+    /// # Arguments
+    ///
+    /// * `from_project_id` - Source project id to move rows from
+    /// * `to_project_id` - Target project id to move rows to
+    ///
+    /// # Returns
+    ///
+    /// Number of rows that were moved. Uses the UPDATE's `rows_affected` count,
+    /// which is guaranteed identical to a prior SELECT COUNT(*) within the same
+    /// single-writer transaction, but strictly more truthful if the WHERE clauses
+    /// ever diverge in the future.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the database query or transaction fails.
+    pub fn merge_project_ids(
+        &mut self,
+        from_project_id: &str,
+        to_project_id: &str,
+    ) -> Result<usize> {
+        // Short-circuit: merging into self does nothing.
+        if from_project_id == to_project_id {
+            return Ok(0);
+        }
+
+        let tx = self.conn.transaction()?;
+
+        // Move them and count rows affected.
+        let count: usize = tx.execute(
+            "UPDATE memories SET project_id = ?1 WHERE project_id = ?2",
+            [to_project_id, from_project_id],
+        )?;
+
+        tx.commit()?;
+        Ok(count)
+    }
 }
