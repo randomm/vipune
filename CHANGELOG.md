@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-08-04
+
+### Miscellaneous
+
+- Realign version to 0.7.1 after accidental revert ([#155](https://github.com/randomm/vipune/pull/155)) ([#170](https://github.com/randomm/vipune/pull/170))
+
+
 ## [0.7.1] - 2026-08-04
 
 ### Features
