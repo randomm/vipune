@@ -1,4 +1,13 @@
 [workspace]
+# features_always_increment_minor: vipune is a 0.x crate. release-plz's default for
+# 0.x follows Cargo SemVer, where a minor bump signals a BREAKING change and new
+# compatible API belongs in patch, so `feat` commits would otherwise produce patch
+# bumps. This project has chosen the Conventional Commits reading instead, where
+# `feat` bumps minor, because it communicates feature releases more clearly for a CLI.
+# Tradeoff: downstream consumers depending on `^0.7` will NOT automatically receive
+# 0.8, since Cargo treats a 0.x minor bump as breaking. Remove this setting when the
+# crate graduates to 1.0, where feat -> minor is the default anyway.
+features_always_increment_minor = true
 # Generate changelog from conventional commits
 changelog_config = "cliff.toml"
 # Enable changelog updates via release-pr job
