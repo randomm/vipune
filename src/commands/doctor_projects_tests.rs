@@ -1,6 +1,8 @@
 //! Tests for `vipune doctor --projects` handler and split-detection heuristic.
 
-use crate::commands::doctor::{detect_split_pairs, handle_doctor_projects};
+use crate::commands::doctor::{
+    collect_doctor_projects_response, detect_split_pairs, handle_doctor_projects,
+};
 use crate::memory::crud::test_fake_embedder;
 use crate::output::{DoctorProjectsResponse, DoctorProjectsSuspectedSplit};
 use crate::sqlite::Database;
@@ -89,18 +91,15 @@ fn test_ids_without_slash_are_not_paired_with_each_other() {
 }
 
 #[test]
-fn test_scan_spans_projects_regardless_of_project_filter() {
-    // This verifies the handler ignores -p; the heuristic sees all projects.
-    // Tested by verifying detect_split_pairs sees all ids.
+fn test_detect_split_pairs_finds_pair_across_two_project_ids() {
+    // Verifies the pure heuristic pairs a bare id with its owned counterpart
+    // when both appear in the project id list. Does NOT exercise handler-level -p
+    // filtering (detect_split_pairs has no concept of project_filter).
     let project_ids = vec!["split-repo".to_string(), "other/split-repo".to_string()];
     let counts = make_counts(&[("split-repo", 1), ("other/split-repo", 1)]);
 
     let pairs = detect_split_pairs(&project_ids, &counts);
-    assert_eq!(
-        pairs.len(),
-        1,
-        "split must be detected regardless of project filter"
-    );
+    assert_eq!(pairs.len(), 1, "split pair must be detected");
     assert_eq!(
         pairs[0],
         ("split-repo".to_string(), "other/split-repo".to_string())
@@ -333,4 +332,139 @@ fn test_detect_split_pairs_no_duplicate_pairs() {
     let pairs = detect_split_pairs(&project_ids, &counts);
     // Exactly one pair, not two.
     assert_eq!(pairs.len(), 1);
+}
+
+// ── End-to-end handler test ──
+
+#[test]
+fn test_handler_reports_split_pair_with_correct_row_counts() {
+    // End-to-end: seeds a real DB, invokes the handler's response collector,
+    // and asserts suspected_splits contains the expected pair with correct counts.
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
+
+    // Seed: "pi-an" (bare) with 8 rows
+    for i in 0..8 {
+        let emb = test_fake_embedder(&format!("pi-an row {}", i)).unwrap();
+        db.insert(
+            "pi-an",
+            &format!("memory {}", i),
+            &emb,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+    }
+    // Seed: "randomm/pi-an" (owned) with 2 rows
+    for i in 0..2 {
+        let emb = test_fake_embedder(&format!("randomm/pi-an row {}", i)).unwrap();
+        db.insert(
+            "randomm/pi-an",
+            &format!("owned memory {}", i),
+            &emb,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+    }
+
+    // Invoke the handler's response collector
+    let response = collect_doctor_projects_response(&db_path).unwrap();
+
+    // Assert exactly one suspected split pair
+    assert_eq!(
+        response.suspected_splits.len(),
+        1,
+        "handler must report exactly one split pair"
+    );
+
+    let split = &response.suspected_splits[0];
+    assert_eq!(
+        split.pair[0], "pi-an",
+        "pair[0] must be the bare id (segment)"
+    );
+    assert_eq!(
+        split.pair[1], "randomm/pi-an",
+        "pair[1] must be the owned id"
+    );
+    assert_eq!(split.row_counts[0], 8, "row count for bare id must be 8");
+    assert_eq!(split.row_counts[1], 2, "row count for owned id must be 2");
+}
+
+#[test]
+fn test_handler_reports_no_splits_when_none_exist() {
+    // End-to-end: DB has unrelated projects, handler must report empty.
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
+
+    let emb1 = test_fake_embedder("proj-a").unwrap();
+    db.insert("proj-a", "memory", &emb1, None, "fact", "active")
+        .unwrap();
+    let emb2 = test_fake_embedder("proj-b").unwrap();
+    db.insert("proj-b", "memory", &emb2, None, "fact", "active")
+        .unwrap();
+
+    let response = collect_doctor_projects_response(&db_path).unwrap();
+    assert!(
+        response.suspected_splits.is_empty(),
+        "no splits expected for unrelated projects"
+    );
+}
+
+#[test]
+fn test_handler_reports_multiple_split_pairs() {
+    // End-to-end: multiple split pairs, all reported with correct ordering.
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
+
+    // "alpha" (bare, 3 rows) + "team/alpha" (owned, 1 row)
+    for i in 0..3 {
+        let emb = test_fake_embedder(&format!("alpha {}", i)).unwrap();
+        db.insert("alpha", &format!("a {}", i), &emb, None, "fact", "active")
+            .unwrap();
+    }
+    let emb = test_fake_embedder("team/alpha").unwrap();
+    db.insert("team/alpha", "owned alpha", &emb, None, "fact", "active")
+        .unwrap();
+
+    // "beta" (bare, 2 rows) + "org/beta" (owned, 4 rows)
+    for i in 0..2 {
+        let emb = test_fake_embedder(&format!("beta {}", i)).unwrap();
+        db.insert("beta", &format!("b {}", i), &emb, None, "fact", "active")
+            .unwrap();
+    }
+    for i in 0..4 {
+        let emb = test_fake_embedder(&format!("org/beta {}", i)).unwrap();
+        db.insert(
+            "org/beta",
+            &format!("owned b {}", i),
+            &emb,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+    }
+
+    let response = collect_doctor_projects_response(&db_path).unwrap();
+
+    assert_eq!(
+        response.suspected_splits.len(),
+        2,
+        "must report both split pairs"
+    );
+
+    // alpha pair comes first (sorted by segment)
+    assert_eq!(response.suspected_splits[0].pair[0], "alpha");
+    assert_eq!(response.suspected_splits[0].pair[1], "team/alpha");
+    assert_eq!(response.suspected_splits[0].row_counts[0], 3);
+    assert_eq!(response.suspected_splits[0].row_counts[1], 1);
+
+    // beta pair comes second
+    assert_eq!(response.suspected_splits[1].pair[0], "beta");
+    assert_eq!(response.suspected_splits[1].pair[1], "org/beta");
+    assert_eq!(response.suspected_splits[1].row_counts[0], 2);
+    assert_eq!(response.suspected_splits[1].row_counts[1], 4);
 }

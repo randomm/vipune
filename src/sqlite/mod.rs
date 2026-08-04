@@ -299,7 +299,7 @@ impl Database {
     /// This bypasses schema creation and migration. The connection must already
     /// point to a fully initialised database, otherwise queries will fail with
     /// raw SQLite errors (e.g. "no such table: memories").
-    #[allow(dead_code)] // pub(crate): used from binary target, not lib target
+    #[allow(dead_code)] // lib target compiles src/sqlite/ but not src/commands/; only caller is in binary target
     pub(crate) fn from_conn(conn: Connection) -> Self {
         Self { conn }
     }

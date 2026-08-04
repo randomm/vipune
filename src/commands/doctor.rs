@@ -152,6 +152,28 @@ pub fn handle_doctor_projects(
         );
     }
 
+    let response = collect_doctor_projects_response(db_path)?;
+
+    if json {
+        print_json(&response);
+    } else {
+        print_human_projects(&response);
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Collect suspected split pairs from the database, returning the response struct.
+///
+/// Opens the database in read-only mode and runs the split-detection heuristic.
+/// Does not print anything — caller decides how to render the output.
+///
+/// # Errors
+///
+/// Returns error if the database cannot be opened or queried.
+pub(crate) fn collect_doctor_projects_response(
+    db_path: &Path,
+) -> Result<DoctorProjectsResponse, Error> {
     // Open database in READ-ONLY mode — this is a diagnostic that must not modify the DB.
     // Any accidental write will fail with SQLITE_READONLY instead of silently corrupting data.
     let db = Database::from_conn(
@@ -181,7 +203,7 @@ pub fn handle_doctor_projects(
     let suspected_splits = detect_split_pairs(&project_ids, &counts);
 
     // Build response.
-    let response = DoctorProjectsResponse {
+    Ok(DoctorProjectsResponse {
         suspected_splits: suspected_splits
             .iter()
             .map(
@@ -194,15 +216,7 @@ pub fn handle_doctor_projects(
                 },
             )
             .collect(),
-    };
-
-    if json {
-        print_json(&response);
-    } else {
-        print_human_projects(&response);
-    }
-
-    Ok(ExitCode::SUCCESS)
+    })
 }
 
 /// Print human-readable output for the projects doctor check.
