@@ -1,50 +1,72 @@
-//! Project auto-detection from git repository
+//! Project auto-detection from git repository.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Detect project identifier from environment.
+/// Detect project identifier from the current working directory.
 ///
-/// Detection priority (checked in order):
-/// 1. Explicit override parameter (if provided and non-whitespace)
-/// 2. `VIPUNE_PROJECT` environment variable (if set and non-whitespace)
-/// 3. Git remote origin URL (parsed to owner/repo format)
-/// 4. Git repository root directory name
-/// 5. Current working directory name
-///
-/// Always returns a non-empty string. Falls back to "unknown" if all detection methods fail.
-///
-/// # Arguments
-/// * `explicit` - Optional explicit project identifier that overrides all other detection methods.
-///   If provided but empty/whitespace, falls back to automatic detection.
-///
-/// # Returns
-/// A project identifier string (never empty)
+/// Delegates to [`detect_project_at`] using `std::env::current_dir()`.
 ///
 /// # Example
 /// ```no_run
 /// use vipune::project::detect_project;
 ///
-/// // Use explicit override
-/// let project = detect_project(Some("my-project"));
-/// assert_eq!(project, "my-project");
-///
-/// // Auto-detect from git
 /// let project = detect_project(None);
 /// println!("Detected project: {}", project);
 /// ```
 pub fn detect_project(explicit: Option<&str>) -> String {
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    detect_project_at(&cwd, explicit)
+}
+
+/// Detect project identifier from a specific directory path.
+///
+/// Detection priority (checked in order):
+/// 1. Explicit override parameter (if provided and non-whitespace)
+/// 2. `VIPUNE_PROJECT` environment variable (if set and non-whitespace)
+/// 3. Git remote origin URL (parsed to owner/repo format)
+/// 4. Git repository root directory name (emits stderr warning)
+/// 5. Given root directory name
+///
+/// Always returns a non-empty string. Falls back to "unknown" if all detection
+/// methods fail.
+///
+/// # Arguments
+/// * `root` - The directory path to detect the project from.
+/// * `explicit` - Optional explicit project identifier that overrides all other
+///   detection methods. If provided but empty/whitespace, falls back to automatic
+///   detection.
+///
+/// # Returns
+/// A project identifier string (never empty).
+pub fn detect_project_at(root: &Path, explicit: Option<&str>) -> String {
+    detect_project_at_internal(root, explicit, None)
+}
+
+/// Internal: detection chain with optional env var injection for testing.
+///
+/// The `env_project` parameter simulates the value of `VIPUNE_PROJECT` without
+/// mutating process-global state. Pass `None` to read the real environment.
+pub(crate) fn detect_project_at_internal(
+    root: &Path,
+    explicit: Option<&str>,
+    env_project: Option<String>,
+) -> String {
     // 1. Explicit override takes priority (must be non-empty)
     if let Some(project) = explicit {
         if !project.trim().is_empty() {
             return project.trim().to_string();
         }
-        // If explicit is empty/whitespace, proceed to fallback methods
     }
 
-    // 2. Check environment variable
-    if let Ok(project) = env::var("VIPUNE_PROJECT") {
+    // 2. Check environment variable (or test override)
+    if let Some(project) = env_project {
+        let trimmed = project.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    } else if let Ok(project) = env::var("VIPUNE_PROJECT") {
         let trimmed = project.trim();
         if !trimmed.is_empty() {
             return trimmed.to_string();
@@ -52,7 +74,7 @@ pub fn detect_project(explicit: Option<&str>) -> String {
     }
 
     // 3. Try git remote origin
-    if let Some(remote) = get_git_remote_origin() {
+    if let Some(remote) = get_git_remote_url_at(root) {
         let project = parse_git_remote(&remote);
         if !project.is_empty() {
             return project;
@@ -60,25 +82,29 @@ pub fn detect_project(explicit: Option<&str>) -> String {
     }
 
     // 4. Try git root directory name
-    if let Some(root) = find_git_root() {
-        if let Some(name) = root.file_name() {
+    if let Some(git_root) = find_git_root_at(root) {
+        if let Some(name) = git_root.file_name() {
             if let Some(s) = name.to_str() {
+                emit_fallback_warning(s, &git_root);
                 return s.to_string();
             }
         }
     }
 
-    // 5. Fallback to current directory name
-    env::current_dir()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+    // 5. Fallback to given root directory name
+    root.file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Get git remote origin URL
-fn get_git_remote_origin() -> Option<String> {
+/// Get git remote URL for the 'origin' remote at the given path.
+///
+/// Only queries the `origin` remote. If `origin` does not exist or the command
+/// fails, returns `None`.
+fn get_git_remote_url_at(root: &Path) -> Option<String> {
     let output = Command::new("git")
-        .args(["remote", "get-url", "origin"])
+        .args(["-C", root.to_str()?, "remote", "get-url", "origin"])
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .ok()?;
@@ -92,10 +118,10 @@ fn get_git_remote_origin() -> Option<String> {
     None
 }
 
-/// Find git repository root
-fn find_git_root() -> Option<PathBuf> {
+/// Find git repository root from the given path.
+fn find_git_root_at(root: &Path) -> Option<PathBuf> {
     let output = Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
+        .args(["-C", root.to_str()?, "rev-parse", "--show-toplevel"])
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .ok()?;
@@ -110,7 +136,64 @@ fn find_git_root() -> Option<PathBuf> {
     None
 }
 
-/// Parse git remote URL to owner/repo format
+/// Get list of git remotes at the given path.
+fn get_other_remotes_at(root: &Path) -> Vec<String> {
+    let root_str = match root.to_str() {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    let output = match Command::new("git")
+        .args(["-C", root_str, "remote"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+    {
+        Ok(out) => out,
+        Err(_) => return Vec::new(),
+    };
+
+    if output.status.success() {
+        return String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+    }
+    Vec::new()
+}
+
+/// Build the warning message emitted when falling back to directory name.
+///
+/// This is a pure function so tests can verify the message content without
+/// capturing stderr.
+pub(crate) fn build_fallback_warning_message(project_id: &str, git_root: &Path) -> String {
+    let remotes = get_other_remotes_at(git_root);
+    let mut msg = format!(
+        "Warning: no git remote 'origin' found, using directory name as project_id: '{}'",
+        project_id
+    );
+    if !remotes.is_empty() {
+        msg.push_str(&format!(" (other remotes: {})", remotes.join(", ")));
+    }
+    msg.push_str(". This project_id may differ from the remote-derived one.");
+    msg
+}
+
+/// Emit a stderr warning when falling back to directory name for project_id.
+fn emit_fallback_warning(project_id: &str, git_root: &Path) {
+    eprintln!("{}", build_fallback_warning_message(project_id, git_root));
+}
+
+/// Parse git remote URL to owner/repo format.
+///
+/// Supported formats:
+/// - SSH shorthand: `git@host:owner/repo.git` → `owner/repo`
+/// - HTTPS: `https://host/owner/repo.git` → `owner/repo`
+/// - SSH URL: `ssh://git@host/owner/repo.git` → `owner/repo`
+/// - Generic `://` URLs are handled by splitting on `://` and taking the last
+///   two path segments.
+///
+/// Only normalization is `trim()` and stripping trailing `.git`. Case is
+/// preserved.
 fn parse_git_remote(url: &str) -> String {
     let url = url.trim().trim_end_matches(".git");
 
@@ -121,7 +204,7 @@ fn parse_git_remote(url: &str) -> String {
         }
     }
 
-    // HTTPS format: https://github.com/owner/repo
+    // HTTPS / SSH URL / generic :// format
     if let Some(rest) = url.split("://").nth(1) {
         let parts: Vec<&str> = rest.split('/').collect();
         if parts.len() >= 3 {
@@ -129,88 +212,10 @@ fn parse_git_remote(url: &str) -> String {
         }
     }
 
-    // Fallback: return original URL
+    // Fallback: return URL as-is
     url.to_string()
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_ssh_remote() {
-        assert_eq!(
-            parse_git_remote("git@github.com:owner/repo.git"),
-            "owner/repo"
-        );
-        assert_eq!(parse_git_remote("git@github.com:owner/repo"), "owner/repo");
-    }
-
-    #[test]
-    fn test_parse_https_remote() {
-        assert_eq!(
-            parse_git_remote("https://github.com/owner/repo.git"),
-            "owner/repo"
-        );
-        assert_eq!(
-            parse_git_remote("https://github.com/owner/repo"),
-            "owner/repo"
-        );
-    }
-
-    #[test]
-    fn test_parse_ssh_url_with_protocol() {
-        assert_eq!(
-            parse_git_remote("ssh://git@github.com/owner/repo.git"),
-            "owner/repo"
-        );
-    }
-
-    #[test]
-    fn test_git_suffix_stripping() {
-        assert_eq!(parse_git_remote("owner/repo.git"), "owner/repo");
-    }
-
-    #[test]
-    fn test_fallback_when_no_domain() {
-        assert_eq!(parse_git_remote("just-name"), "just-name");
-    }
-
-    #[test]
-    fn test_explicit_override() {
-        assert_eq!(detect_project(Some("my-project")), "my-project");
-    }
-
-    #[test]
-    fn test_explicit_override_empty() {
-        // Empty explicit string should fallback to other detection methods
-        let project = detect_project(Some(""));
-        assert!(!project.is_empty());
-    }
-
-    #[test]
-    fn test_explicit_override_whitespace() {
-        // Whitespace-only explicit string should fallback to other detection methods
-        let project = detect_project(Some("   \t  "));
-        assert!(!project.is_empty());
-    }
-
-    #[test]
-    fn test_detect_fallback_to_current_dir() {
-        let project = detect_project(None);
-        assert!(!project.is_empty());
-    }
-
-    #[test]
-    fn test_env_var_whitespace() {
-        // This test runs in isolation, safe to set env var
-        unsafe {
-            std::env::set_var("VIPUNE_PROJECT", "   ");
-        }
-        let project = detect_project(None);
-        assert!(!project.is_empty()); // Should ignore whitespace and use fallback
-        unsafe {
-            std::env::remove_var("VIPUNE_PROJECT");
-        }
-    }
-}
+#[path = "project_tests.rs"]
+mod project_tests;

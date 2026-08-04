@@ -62,7 +62,7 @@ pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
 pub use memory_types::{
     AddResult, BatchIngestItemResult, BatchIngestResult, ConflictMemory, IngestPolicy,
 }; // Library-only: conflict detection and batch ingest types
-pub use project::detect_project;
+pub use project::{detect_project, detect_project_at};
 pub use sqlite::Database;
 pub use sqlite::Memory;
 pub use sqlite::embedding::EmbeddingClass;
