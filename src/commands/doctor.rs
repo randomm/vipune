@@ -1,11 +1,14 @@
-//! `vipune doctor --embeddings` handler.
+//! `vipune doctor --embeddings` and `vipune doctor --projects` handlers.
 //!
-//! Reports per-project: total / real / mock / unknown rows using the L2-norm classifier.
+//! `--embeddings`: reports per-project total / real / mock / unknown rows.
+//! `--projects`: scans all projects for suspected split pairs (bare id vs owner/repo).
 
 use crate::errors::Error;
-use crate::output::{DoctorResponse, print_json};
+use crate::output::{DoctorProjectsResponse, DoctorResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::embedding::classify_embedding;
+use rusqlite::{Connection, OpenFlags};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -133,6 +136,148 @@ fn audit_project(db: &Database, project_id: &str) -> Result<AuditResult, Error> 
     }
 
     Ok(result)
+}
+
+/// Run the project split detection scan.
+///
+/// Scans ALL projects in the database regardless of `-p/--project`. A split spans
+/// two project_ids by definition, so a scoped scan structurally cannot see one.
+/// Performs no database writes.
+///
+/// Heuristic: id `A` is a suspected split of id `B` when `A` equals the segment
+/// after `/` in `B`. Example: `pi-an` pairs with `randomm/pi-an`.
+///
+/// # Arguments
+///
+/// * `db_path` - Path to the SQLite database
+/// * `project_filter` - Intended project filter (always ignored; warn if Some)
+/// * `json` - If true, output JSON; otherwise human-readable
+///
+/// # Errors
+///
+/// Returns error if the database cannot be opened or queried.
+pub fn handle_doctor_projects(
+    db_path: &Path,
+    project_filter: Option<&str>,
+    json: bool,
+) -> Result<ExitCode, Error> {
+    // Warn if -p was passed alongside --projects (silently ignored but user likely expects it to apply)
+    if let Some(filter) = project_filter {
+        eprintln!(
+            "Warning: -p/--project is ignored for doctor --projects (scan must cover all projects to detect splits). Filter '{}' was not applied.",
+            filter
+        );
+    }
+
+    // Open database in READ-ONLY mode — this is a diagnostic that must not modify the DB.
+    // Any accidental write will fail with SQLITE_READONLY instead of silently corrupting data.
+    let db = Database::from_conn(
+        Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
+            let err_msg = e.to_string();
+            if err_msg.contains("database is locked") {
+                return Error::Config(
+                    "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
+                );
+            }
+            Error::Config(err_msg)
+        })?,
+    );
+
+    // Gather all project ids with row counts
+    let project_ids = db.list_all_project_ids().map_err(Error::from)?;
+
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for pid in &project_ids {
+        counts.insert(
+            pid.clone(),
+            db.count_rows_for_project(pid).map_err(Error::from)?,
+        );
+    }
+
+    // Detect suspected split pairs.
+    // Heuristic: bare_id == repo segment after "/" in "owner/repo".
+    // pair[0] = bare_id (no "/"), pair[1] = owner/repo_id.
+    let mut suspected_splits: Vec<(&str, &str)> = Vec::new();
+    let mut reported: HashSet<&str> = HashSet::new();
+
+    // Collect owner/repo ids (those containing "/").
+    let owned_ids: Vec<&str> = project_ids
+        .iter()
+        .filter(|s| s.contains('/'))
+        .map(|s| s.as_str())
+        .collect();
+
+    for owned in &owned_ids {
+        // Extract the repo segment (after the first "/")
+        let repo_segment = match owned.split_once('/') {
+            Some((_, repo)) => repo,
+            None => continue,
+        };
+        // Check if the bare id exists AND hasn't already been reported
+        if counts.contains_key(repo_segment) && !reported.contains(repo_segment) {
+            reported.insert(repo_segment);
+            // Avoid self-pair: bare id must not equal the full owned id
+            // (can't happen since bare has no "/", but be explicit)
+            if repo_segment != *owned {
+                suspected_splits.push((repo_segment, owned));
+            }
+        }
+    }
+
+    // Sort by bare_id for deterministic output.
+    suspected_splits.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.cmp(b.1)));
+
+    // Build response.
+    let response = DoctorProjectsResponse {
+        suspected_splits: suspected_splits
+            .into_iter()
+            .map(
+                |(bare, owned)| crate::output::DoctorProjectsSuspectedSplit {
+                    pair: [bare.to_string(), owned.to_string()],
+                    row_counts: [
+                        *counts.get(bare).unwrap_or(&0),
+                        *counts.get(owned).unwrap_or(&0),
+                    ],
+                },
+            )
+            .collect(),
+    };
+
+    if json {
+        print_json(&response);
+    } else {
+        print_human_projects(&response);
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Print human-readable output for the projects doctor check.
+fn print_human_projects(response: &DoctorProjectsResponse) {
+    if response.suspected_splits.is_empty() {
+        println!("No suspected project splits found.");
+        return;
+    }
+
+    println!("Suspected project splits:");
+    println!();
+
+    for split in &response.suspected_splits {
+        println!(
+            "  '{}' ({} rows)  +  '{}' ({} rows)",
+            split.pair[0], split.row_counts[0], split.pair[1], split.row_counts[1]
+        );
+    }
+
+    println!();
+    println!(
+        "These are suspected pairs — confirm they represent the same repository before merging."
+    );
+    println!("Known false positive: a genuinely separate project whose directory name matches");
+    println!("another project's repo name (e.g. 'ci-runner' vs 'team/ci-runner').");
+    println!();
+    println!("To merge confirmed pairs, run:");
+    println!("  vipune project merge <from> <to>");
 }
 
 #[cfg(test)]
