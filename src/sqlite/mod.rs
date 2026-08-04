@@ -392,7 +392,10 @@ impl Database {
     ///
     /// # Returns
     ///
-    /// Number of rows that were moved.
+    /// Number of rows that were moved. Uses the UPDATE's `rows_affected` count,
+    /// which is guaranteed identical to a prior SELECT COUNT(*) within the same
+    /// single-writer transaction, but strictly more truthful if the WHERE clauses
+    /// ever diverge in the future.
     ///
     /// # Errors
     ///
@@ -409,20 +412,13 @@ impl Database {
 
         let tx = self.conn.transaction()?;
 
-        // Count rows that will be moved.
-        let count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM memories WHERE project_id = ?1",
-            [from_project_id],
-            |row| row.get(0),
-        )?;
-
-        // Move them.
-        tx.execute(
+        // Move them and count rows affected.
+        let count: usize = tx.execute(
             "UPDATE memories SET project_id = ?1 WHERE project_id = ?2",
             [to_project_id, from_project_id],
         )?;
 
         tx.commit()?;
-        Ok(count as usize)
+        Ok(count)
     }
 }

@@ -145,27 +145,23 @@ fn test_embeddings_byte_identical() {
 }
 
 #[test]
-fn test_from_equals_to_short_circuit() {
+fn test_from_equals_to_returns_zero_rows() {
     let (_dir, db_path) = create_test_db();
     let mut db = Database::open(&db_path).unwrap();
     let emb = test_fake_embedder("self").unwrap();
-    let id = db
-        .insert("same", "self", &emb, None, "fact", "active")
+    db.insert("same", "self", &emb, None, "fact", "active")
         .unwrap();
-
-    let emb_blob_before = get_embedding(&db, "same", &id);
 
     let rows = db.merge_project_ids("same", "same").unwrap();
     assert_eq!(rows, 0);
-
-    // Verify no writes: embedding blob unchanged (FTS trigger would have fired otherwise)
-    let emb_blob_after = get_embedding(&db, "same", &id);
-    assert_eq!(emb_blob_before, emb_blob_after);
 }
 
 #[test]
 fn test_from_equals_to_performs_no_db_writes() {
-    // Assert the no-write property: after a self-merge, updated_at must be identical.
+    // Snapshot total_changes() before and after self-merge to prove zero writes.
+    // rusqlite::Connection::total_changes() counts all rows modified, inserted, or
+    // deleted since the connection was opened. If merge_project_ids short-circuits
+    // correctly, this counter must not advance.
     let (_dir, db_path) = create_test_db();
     let mut db = Database::open(&db_path).unwrap();
 
@@ -175,28 +171,15 @@ fn test_from_equals_to_performs_no_db_writes() {
             .unwrap();
     }
 
-    // Capture updated_at for all rows
-    let updated_befores: Vec<String> = db
-        .conn()
-        .prepare("SELECT updated_at FROM memories WHERE project_id = 'proj'")
-        .unwrap()
-        .query_map([], |row| row.get::<_, String>(0))
-        .unwrap()
-        .map(|r| r.unwrap())
-        .collect();
+    let changes_before = db.conn().total_changes();
 
     db.merge_project_ids("proj", "proj").unwrap();
 
-    let updated_afters: Vec<String> = db
-        .conn()
-        .prepare("SELECT updated_at FROM memories WHERE project_id = 'proj'")
-        .unwrap()
-        .query_map([], |row| row.get::<_, String>(0))
-        .unwrap()
-        .map(|r| r.unwrap())
-        .collect();
-
-    assert_eq!(updated_befores, updated_afters);
+    let changes_after = db.conn().total_changes();
+    assert_eq!(
+        changes_before, changes_after,
+        "self-merge must perform zero row modifications, insertions, or deletions"
+    );
 }
 
 #[test]
