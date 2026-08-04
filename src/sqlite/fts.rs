@@ -249,7 +249,7 @@ impl Database {
     }
 
     /// Check if FTS5 is ready for hybrid search.
-    fn is_fts_initialized(&self) -> Result<bool> {
+    pub(crate) fn is_fts_initialized(&self) -> Result<bool> {
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memories_fts'",
             [],

@@ -161,6 +161,17 @@ pub struct ReindexFailure {
     pub error: String,
 }
 
+/// Response for `project merge` operation.
+#[derive(Serialize)]
+pub struct MergeResponse {
+    /// Source project id (rows moved from this).
+    pub from: String,
+    /// Target project id (rows moved to this).
+    pub to: String,
+    /// Number of rows that were moved.
+    pub rows_moved: usize,
+}
+
 /// Serialize a value as formatted JSON and print to stdout.
 ///
 /// Exits with status 1 if serialization fails.
