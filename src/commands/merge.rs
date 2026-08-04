@@ -60,7 +60,7 @@ pub fn handle_merge(
     })?;
 
     // Set busy timeout to 0ms for fast-fail behavior on database locks
-    db.set_busy_timeout(Duration::ZERO)?;
+    wrap_busy(db.set_busy_timeout(Duration::ZERO).map_err(Error::from))?;
 
     let rows_moved = wrap_busy(
         db.merge_project_ids(from_project_id, to_project_id)
