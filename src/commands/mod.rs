@@ -6,6 +6,9 @@ mod merge;
 mod reindex;
 
 #[cfg(test)]
+mod doctor_projects_tests;
+
+#[cfg(test)]
 mod merge_tests;
 
 #[cfg(test)]
@@ -132,15 +135,20 @@ pub enum Commands {
         #[arg(long)]
         status: Option<String>,
     },
-    /// Diagnose database embedding health.
+    /// Diagnose database health.
+    #[command(group = clap::ArgGroup::new("doctor-mode").args(["embeddings", "projects"]).required(true).multiple(false))]
     Doctor {
         /// Check embedding quality (classifies real/mock/unknown)
         #[arg(long)]
         embeddings: bool,
 
-        /// Scan all projects in the database instead of only the current one
+        /// Scan all projects for suspected split pairs (bare id vs owner/repo)
         #[arg(long)]
-        all_projects: bool,
+        projects: bool,
+
+        /// Project identifier (only relevant for --embeddings; ignored for --projects with a warning)
+        #[arg(long, short = 'p')]
+        project: Option<String>,
     },
 
     /// Re-embed rows with mock embeddings using the real model.
@@ -271,20 +279,19 @@ pub fn execute(
             json,
         ),
         Commands::Doctor {
-            embeddings,
-            all_projects,
+            embeddings: _,
+            projects,
+            project: doctor_project,
         } => {
-            if !*embeddings {
-                return Err(Error::Validation(
-                    "doctor only supports --embeddings flag".to_string(),
-                ));
-            }
-            let project_filter = if !*all_projects {
-                Some(project_id.as_str())
+            if *projects {
+                // doctor --projects always scans all projects; -p is ignored (with warning).
+                let project_filter = doctor_project.as_deref();
+                doctor::handle_doctor_projects(&config.database_path, project_filter, json)
             } else {
-                None
-            };
-            doctor::handle_doctor(&config.database_path, project_filter, json)
+                // doctor --embeddings: use explicit -p or fall back to the detected project_id.
+                let project_filter = doctor_project.as_deref().or(Some(project_id.as_str()));
+                doctor::handle_doctor(&config.database_path, project_filter, json)
+            }
         }
         Commands::Reindex { all_projects } => {
             let project_filter = if !*all_projects {

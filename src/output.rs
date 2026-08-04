@@ -161,6 +161,28 @@ pub struct ReindexFailure {
     pub error: String,
 }
 
+/// A suspected split pair detected by `doctor --projects`.
+///
+/// `pair[0]` is the segment after the first `/` in `pair[1]`. For the common case
+/// (owned id is `owner/repo`), `pair[0]` is the bare id `repo`. For multi-slash ids
+/// like `group/subgroup/project`, `pair[0]` is `subgroup/project`.
+/// `row_counts[0]` corresponds to `pair[0]`, `row_counts[1]` to `pair[1]`.
+/// Ordering is stable so `--json` consumers can attribute counts unambiguously.
+#[derive(Serialize)]
+pub struct DoctorProjectsSuspectedSplit {
+    /// Pair of project ids: `[segment, owned_id]`.
+    pub pair: [String; 2],
+    /// Row counts for each side: `[count_segment, count_owned]`.
+    pub row_counts: [usize; 2],
+}
+
+/// Response for `doctor --projects` scan.
+#[derive(Serialize)]
+pub struct DoctorProjectsResponse {
+    /// List of suspected split pairs. Empty when no splits are found.
+    pub suspected_splits: Vec<DoctorProjectsSuspectedSplit>,
+}
+
 /// Response for `project merge` operation.
 #[derive(Serialize)]
 pub struct MergeResponse {

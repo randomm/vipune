@@ -359,4 +359,75 @@ mod tests {
         let result = Cli::try_parse_from(["vipune", "project", "merge", "only-from"]);
         assert!(result.is_err());
     }
+
+    // ── doctor --projects CLI parse tests ──
+
+    #[test]
+    fn test_cli_parse_doctor_projects() {
+        let cli = Cli::parse_from(["vipune", "doctor", "--projects"]);
+        if let Commands::Doctor {
+            embeddings: false,
+            projects: true,
+            project: None,
+        } = cli.command
+        {
+        } else {
+            panic!("Expected Doctor with --projects flag");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_embeddings() {
+        let cli = Cli::parse_from(["vipune", "doctor", "--embeddings"]);
+        if let Commands::Doctor {
+            embeddings: true,
+            projects: false,
+            project: None,
+        } = cli.command
+        {
+        } else {
+            panic!("Expected Doctor with --embeddings flag");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_projects_with_p() {
+        let cli = Cli::parse_from(["vipune", "doctor", "--projects", "-p", "my-proj"]);
+        if let Commands::Doctor {
+            embeddings: _,
+            projects: true,
+            project: Some(ref p),
+        } = cli.command
+        {
+            assert_eq!(p, "my-proj");
+        } else {
+            panic!("Expected Doctor with --projects and -p flags");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_both_flags_errors() {
+        let result = Cli::try_parse_from(["vipune", "doctor", "--embeddings", "--projects"]);
+        assert!(
+            result.is_err(),
+            "doctor --embeddings --projects should fail at parse or execute time"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_neither_flag_errors() {
+        let result = Cli::try_parse_from(["vipune", "doctor"]);
+        // With clap ArgGroup (required, multiple=false), parse fails when neither flag is given.
+        assert!(
+            result.is_err(),
+            "doctor without --embeddings or --projects should fail at parse time"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_projects_with_json() {
+        let cli = Cli::parse_from(["vipune", "--json", "doctor", "--projects"]);
+        assert!(cli.json);
+        matches!(cli.command, Commands::Doctor { .. });
+    }
 }

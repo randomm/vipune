@@ -289,6 +289,21 @@ impl Database {
         Ok(rows > 0)
     }
 
+    /// Construct a `Database` from an already-opened `Connection`.
+    ///
+    /// Used when the caller wants full control over how the connection is
+    /// opened (e.g. read-only mode for diagnostic commands).
+    ///
+    /// # Warning
+    ///
+    /// This bypasses schema creation and migration. The connection must already
+    /// point to a fully initialised database, otherwise queries will fail with
+    /// raw SQLite errors (e.g. "no such table: memories").
+    #[allow(dead_code)] // lib target compiles src/sqlite/ but not src/commands/; only caller is in binary target
+    pub(crate) fn from_conn(conn: Connection) -> Self {
+        Self { conn }
+    }
+
     /// Get internal connection (for test use only).
     #[cfg(test)]
     pub(crate) fn conn(&self) -> &Connection {
@@ -375,6 +390,20 @@ impl Database {
             results.push(row_result?);
         }
         Ok(results)
+    }
+
+    /// Count rows for a specific project_id.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the database query fails.
+    pub fn count_rows_for_project(&self, project_id: &str) -> Result<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM memories WHERE project_id = ?",
+            [project_id],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 
     /// Merge all rows from one project_id into another within a single transaction.

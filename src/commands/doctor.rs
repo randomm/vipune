@@ -1,13 +1,27 @@
-//! `vipune doctor --embeddings` handler.
+//! `vipune doctor --embeddings` and `vipune doctor --projects` handlers.
 //!
-//! Reports per-project: total / real / mock / unknown rows using the L2-norm classifier.
+//! `--embeddings`: reports per-project total / real / mock / unknown rows.
+//! `--projects`: scans all projects for suspected split pairs (bare id vs owner/repo).
 
 use crate::errors::Error;
-use crate::output::{DoctorResponse, print_json};
+use crate::output::{DoctorProjectsResponse, DoctorResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::embedding::classify_embedding;
+use rusqlite::{Connection, OpenFlags};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
+
+/// Wrap a rusqlite::Error, converting SQLITE_BUSY into the actionable MCP-server message.
+fn wrap_rusqlite_busy<T>(result: Result<T, rusqlite::Error>) -> Result<T, Error> {
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) if e.to_string().contains("database is locked") => Err(Error::Config(
+            "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
+        )),
+        Err(e) => Err(Error::Config(e.to_string())),
+    }
+}
 
 /// Wrap a database error, converting SQLITE_BUSY into the actionable MCP-server message.
 fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
@@ -133,6 +147,150 @@ fn audit_project(db: &Database, project_id: &str) -> Result<AuditResult, Error> 
     }
 
     Ok(result)
+}
+
+/// Run the project split detection scan.
+pub fn handle_doctor_projects(
+    db_path: &Path,
+    project_filter: Option<&str>,
+    json: bool,
+) -> Result<ExitCode, Error> {
+    // Warn if -p was passed alongside --projects (silently ignored but user likely expects it to apply)
+    if let Some(filter) = project_filter {
+        eprintln!(
+            "Warning: -p/--project is ignored for doctor --projects (scan must cover all projects to detect splits). Filter '{}' was not applied.",
+            filter
+        );
+    }
+
+    let response = collect_doctor_projects_response(db_path)?;
+
+    if json {
+        print_json(&response);
+    } else {
+        print_human_projects(&response);
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Collect suspected split pairs from the database, returning the response struct.
+///
+/// Opens the database in read-only mode and runs the split-detection heuristic.
+/// Does not print anything — caller decides how to render the output.
+///
+/// # Errors
+///
+/// Returns error if the database cannot be opened or queried.
+pub(crate) fn collect_doctor_projects_response(
+    db_path: &Path,
+) -> Result<DoctorProjectsResponse, Error> {
+    // Open database in READ-ONLY mode — this is a diagnostic that must not modify the DB.
+    // Any accidental write will fail with SQLITE_READONLY instead of silently corrupting data.
+    let db = Database::from_conn(wrap_rusqlite_busy(Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ))?);
+
+    // Gather all project ids with row counts
+    let project_ids = wrap_busy(db.list_all_project_ids().map_err(Error::from))?;
+
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for pid in &project_ids {
+        counts.insert(
+            pid.clone(),
+            wrap_busy(db.count_rows_for_project(pid).map_err(Error::from))?,
+        );
+    }
+
+    // Detect suspected split pairs using pure heuristic function.
+    let suspected_splits = detect_split_pairs(&project_ids, &counts);
+
+    // Build response.
+    Ok(DoctorProjectsResponse {
+        suspected_splits: suspected_splits
+            .iter()
+            .map(
+                |(bare, owned)| crate::output::DoctorProjectsSuspectedSplit {
+                    pair: [bare.clone(), owned.clone()],
+                    row_counts: [
+                        *counts.get(bare).unwrap_or(&0),
+                        *counts.get(owned).unwrap_or(&0),
+                    ],
+                },
+            )
+            .collect(),
+    })
+}
+
+/// Print human-readable output for the projects doctor check.
+fn print_human_projects(response: &DoctorProjectsResponse) {
+    if response.suspected_splits.is_empty() {
+        println!("No suspected project splits found.");
+        return;
+    }
+
+    println!("Suspected project splits:");
+    println!();
+
+    for split in &response.suspected_splits {
+        println!(
+            "  '{}' ({} rows)  +  '{}' ({} rows)",
+            split.pair[0], split.row_counts[0], split.pair[1], split.row_counts[1]
+        );
+    }
+
+    println!();
+    println!(
+        "These are suspected pairs — confirm they represent the same repository before merging."
+    );
+    println!("Known false positives:");
+    println!("  - a genuinely separate project whose directory name matches");
+    println!("    another project's repo name (e.g. 'ci-runner' vs 'team/ci-runner')");
+    println!("  - multi-slash project ids where the segment after the first '/'");
+    println!("    also exists as a project id (e.g. 'a/b' vs 'c/a/b')");
+    println!();
+    println!("To merge confirmed pairs, run:");
+    println!("  vipune project merge <from> <to>");
+}
+
+/// Detect suspected project split pairs using the bare-id heuristic.
+///
+/// For each owned id (containing "/"), extract the segment after the first "/".
+/// If that segment exists as a separate project_id, the pair is a suspected split.
+/// Returns all matching pairs sorted by (segment, owned) — multiple owned ids
+/// with the same segment are all reported independently.
+///
+/// # Arguments
+///
+/// * `project_ids` - Sorted list of all project ids in the database.
+/// * `counts` - Map from project id to its row count.
+///
+/// # Returns
+///
+/// Sorted list of `(segment, owned)` pairs. Each pair is unique (owned ids are
+/// distinct, so no deduplication is needed).
+pub(crate) fn detect_split_pairs(
+    project_ids: &[String],
+    counts: &HashMap<String, usize>,
+) -> Vec<(String, String)> {
+    let mut suspected_splits: Vec<(String, String)> = Vec::new();
+
+    for owned_str in project_ids {
+        // Extract the segment after the first "/". Skip ids without "/".
+        let (_, segment) = match owned_str.split_once('/') {
+            Some(parts) => parts,
+            None => continue,
+        };
+        // Check if the segment exists as a separate project_id.
+        if counts.contains_key(segment) {
+            suspected_splits.push((segment.to_string(), owned_str.clone()));
+        }
+    }
+
+    // Sort by segment, then by owned id — deterministic output for identical input.
+    suspected_splits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    suspected_splits
 }
 
 #[cfg(test)]
