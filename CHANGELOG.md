@@ -4,13 +4,6 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.7.1] - 2026-08-04
-
-### Bug Fixes
-
-- 4 #[ignore]d tests in src/embedding.rs fail — nightly job added in  ([#159](https://github.com/randomm/vipune/pull/159))
-
-
 ## [0.7.0] - 2026-08-02
 
 ### Features
