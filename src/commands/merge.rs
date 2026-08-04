@@ -22,6 +22,14 @@ fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
     }
 }
 
+/// Build the MCP restart notice text.
+///
+/// This is a pure function so tests can verify the message content without
+/// capturing stderr.
+pub(crate) fn build_mcp_restart_notice() -> String {
+    "Note: If a vipune MCP server is running, it holds its project_id from startup. Restart the MCP server to see rows under the new project id.".to_string()
+}
+
 /// Run the project merge operation.
 ///
 /// # Arguments
@@ -72,6 +80,12 @@ pub fn handle_merge(
             "Merged {} row(s) from '{}' to '{}'",
             response.rows_moved, response.from, response.to
         );
+    }
+
+    // Warn that a running MCP server must be restarted to see the merged rows.
+    // Only emitted when rows were actually moved — if nothing changed, no restart is needed.
+    if response.rows_moved > 0 {
+        eprintln!("\n{}", build_mcp_restart_notice());
     }
 
     Ok(ExitCode::SUCCESS)

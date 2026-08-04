@@ -1,5 +1,6 @@
 //! Tests for `vipune project merge` handler.
 
+use crate::commands::merge::build_mcp_restart_notice;
 use crate::memory::crud::test_fake_embedder;
 use crate::sqlite::Database;
 
@@ -392,4 +393,26 @@ fn test_merge_empty_source() {
     let rows_moved = db.merge_project_ids("nonexistent", "dst").unwrap();
     assert_eq!(rows_moved, 0);
     assert_eq!(count_project_rows(&db, "dst"), 1);
+}
+
+#[test]
+fn test_mcp_restart_notice_contains_required_content() {
+    let msg = build_mcp_restart_notice();
+
+    // Must mention MCP server
+    assert!(
+        msg.contains("MCP server"),
+        "message must mention MCP server"
+    );
+    // Must mention project_id is held from startup
+    assert!(
+        msg.contains("project_id"),
+        "message must mention project_id"
+    );
+    assert!(msg.contains("startup"), "message must mention startup");
+    // Must instruct to restart
+    assert!(
+        msg.contains("restart") || msg.contains("Restart"),
+        "message must instruct to restart"
+    );
 }

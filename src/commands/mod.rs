@@ -301,18 +301,7 @@ pub fn execute(
         }
         Commands::Project { command } => match command {
             ProjectCommands::Merge { from, to } => {
-                merge::handle_merge(&config.database_path, from, to, json)?;
-
-                // Warn about MCP server caching
-                if !json {
-                    eprintln!();
-                    eprintln!(
-                        "Note: If a vipune MCP server is running, it holds its project_id from startup."
-                    );
-                    eprintln!("Restart the MCP server to see rows under the new project id.");
-                }
-
-                Ok(ExitCode::SUCCESS)
+                merge::handle_merge(&config.database_path, from, to, json)
             }
         },
         Commands::Version => handlers::handle_version(json),
