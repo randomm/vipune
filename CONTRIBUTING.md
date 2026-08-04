@@ -120,6 +120,11 @@ Releases are automated via release-plz. When your PR is merged to `main`, the re
 3. **Generates CHANGELOG.md**: Auto-updates from commit messages
 4. **Creates GitHub release**: Draft release with changelog
 
+**Hard rules — do not violate:**
+
+- **NEVER leave a release PR open across subsequent merges to main.** release-plz may not recompute its version or changelog, so the PR can silently go stale. Close and regenerate instead (see issue [#155](https://github.com/randomm/vipune/issues/155)).
+- **A release PR is armed — merging it publishes to crates.io irreversibly.** It must never be merged to "close" it. If a release PR needs to be abandoned, close it via the GitHub UI.
+
 **Important:**
 - Do NOT manually edit `CHANGELOG.md` — it's auto-generated
 - Do NOT manually create Git tags — release-plz handles this
