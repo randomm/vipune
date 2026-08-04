@@ -12,6 +12,17 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
+/// Wrap a rusqlite::Error, converting SQLITE_BUSY into the actionable MCP-server message.
+fn wrap_rusqlite_busy<T>(result: Result<T, rusqlite::Error>) -> Result<T, Error> {
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) if e.to_string().contains("database is locked") => Err(Error::Config(
+            "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
+        )),
+        Err(e) => Err(Error::Config(e.to_string())),
+    }
+}
+
 /// Wrap a database error, converting SQLITE_BUSY into the actionable MCP-server message.
 fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
     match result {
@@ -176,26 +187,19 @@ pub(crate) fn collect_doctor_projects_response(
 ) -> Result<DoctorProjectsResponse, Error> {
     // Open database in READ-ONLY mode — this is a diagnostic that must not modify the DB.
     // Any accidental write will fail with SQLITE_READONLY instead of silently corrupting data.
-    let db = Database::from_conn(
-        Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
-            let err_msg = e.to_string();
-            if err_msg.contains("database is locked") {
-                return Error::Config(
-                    "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-                );
-            }
-            Error::Config(err_msg)
-        })?,
-    );
+    let db = Database::from_conn(wrap_rusqlite_busy(Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ))?);
 
     // Gather all project ids with row counts
-    let project_ids = db.list_all_project_ids().map_err(Error::from)?;
+    let project_ids = wrap_busy(db.list_all_project_ids().map_err(Error::from))?;
 
     let mut counts: HashMap<String, usize> = HashMap::new();
     for pid in &project_ids {
         counts.insert(
             pid.clone(),
-            db.count_rows_for_project(pid).map_err(Error::from)?,
+            wrap_busy(db.count_rows_for_project(pid).map_err(Error::from))?,
         );
     }
 

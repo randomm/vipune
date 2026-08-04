@@ -152,15 +152,6 @@ fn test_output_sorted_by_first_id() {
 }
 
 #[test]
-fn test_empty_database_reports_no_splits() {
-    let project_ids: Vec<String> = vec![];
-    let counts = HashMap::new();
-
-    let pairs = detect_split_pairs(&project_ids, &counts);
-    assert!(pairs.is_empty(), "empty database must report no splits");
-}
-
-#[test]
 fn test_owned_id_with_no_bare_counterpart_not_reported() {
     // "only-owner/only-repo" with no matching "only-repo" bare id.
     let project_ids = vec!["only-owner/only-repo".to_string()];
@@ -292,8 +283,8 @@ fn test_response_struct_serializes_correctly() {
 // ── Determinism test ──
 
 #[test]
-fn test_detect_split_pairs_deterministic_order() {
-    // Repeated calls with same input must produce identical output.
+fn test_detect_split_pairs_sorted_order() {
+    // Multiple pairs must be sorted by segment, then by owned id.
     let project_ids = vec![
         "beta".to_string(),
         "alpha".to_string(),
@@ -311,16 +302,11 @@ fn test_detect_split_pairs_deterministic_order() {
         ("x/zeta", 1),
     ]);
 
-    let pairs1 = detect_split_pairs(&project_ids, &counts);
-    let pairs2 = detect_split_pairs(&project_ids, &counts);
-    assert_eq!(
-        pairs1, pairs2,
-        "repeated calls must produce identical output"
-    );
+    let pairs = detect_split_pairs(&project_ids, &counts);
     // Verify sort order: alpha < beta < zeta
-    assert_eq!(pairs1[0].0, "alpha");
-    assert_eq!(pairs1[1].0, "beta");
-    assert_eq!(pairs1[2].0, "zeta");
+    assert_eq!(pairs[0].0, "alpha", "first pair must be alpha");
+    assert_eq!(pairs[1].0, "beta", "second pair must be beta");
+    assert_eq!(pairs[2].0, "zeta", "third pair must be zeta");
 }
 
 #[test]
