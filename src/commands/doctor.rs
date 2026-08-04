@@ -8,7 +8,7 @@ use crate::output::{DoctorProjectsResponse, DoctorResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::embedding::classify_embedding;
 use rusqlite::{Connection, OpenFlags};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -139,23 +139,6 @@ fn audit_project(db: &Database, project_id: &str) -> Result<AuditResult, Error> 
 }
 
 /// Run the project split detection scan.
-///
-/// Scans ALL projects in the database regardless of `-p/--project`. A split spans
-/// two project_ids by definition, so a scoped scan structurally cannot see one.
-/// Performs no database writes.
-///
-/// Heuristic: id `A` is a suspected split of id `B` when `A` equals the segment
-/// after `/` in `B`. Example: `pi-an` pairs with `randomm/pi-an`.
-///
-/// # Arguments
-///
-/// * `db_path` - Path to the SQLite database
-/// * `project_filter` - Intended project filter (always ignored; warn if Some)
-/// * `json` - If true, output JSON; otherwise human-readable
-///
-/// # Errors
-///
-/// Returns error if the database cannot be opened or queried.
 pub fn handle_doctor_projects(
     db_path: &Path,
     project_filter: Option<&str>,
@@ -194,46 +177,16 @@ pub fn handle_doctor_projects(
         );
     }
 
-    // Detect suspected split pairs.
-    // Heuristic: bare_id == repo segment after "/" in "owner/repo".
-    // pair[0] = bare_id (no "/"), pair[1] = owner/repo_id.
-    let mut suspected_splits: Vec<(&str, &str)> = Vec::new();
-    let mut reported: HashSet<&str> = HashSet::new();
-
-    // Collect owner/repo ids (those containing "/").
-    let owned_ids: Vec<&str> = project_ids
-        .iter()
-        .filter(|s| s.contains('/'))
-        .map(|s| s.as_str())
-        .collect();
-
-    for owned in &owned_ids {
-        // Extract the repo segment (after the first "/")
-        let repo_segment = match owned.split_once('/') {
-            Some((_, repo)) => repo,
-            None => continue,
-        };
-        // Check if the bare id exists AND hasn't already been reported
-        if counts.contains_key(repo_segment) && !reported.contains(repo_segment) {
-            reported.insert(repo_segment);
-            // Avoid self-pair: bare id must not equal the full owned id
-            // (can't happen since bare has no "/", but be explicit)
-            if repo_segment != *owned {
-                suspected_splits.push((repo_segment, owned));
-            }
-        }
-    }
-
-    // Sort by bare_id for deterministic output.
-    suspected_splits.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.cmp(b.1)));
+    // Detect suspected split pairs using pure heuristic function.
+    let suspected_splits = detect_split_pairs(&project_ids, &counts);
 
     // Build response.
     let response = DoctorProjectsResponse {
         suspected_splits: suspected_splits
-            .into_iter()
+            .iter()
             .map(
                 |(bare, owned)| crate::output::DoctorProjectsSuspectedSplit {
-                    pair: [bare.to_string(), owned.to_string()],
+                    pair: [bare.clone(), owned.clone()],
                     row_counts: [
                         *counts.get(bare).unwrap_or(&0),
                         *counts.get(owned).unwrap_or(&0),
@@ -273,11 +226,53 @@ fn print_human_projects(response: &DoctorProjectsResponse) {
     println!(
         "These are suspected pairs — confirm they represent the same repository before merging."
     );
-    println!("Known false positive: a genuinely separate project whose directory name matches");
-    println!("another project's repo name (e.g. 'ci-runner' vs 'team/ci-runner').");
+    println!("Known false positives:");
+    println!("  - a genuinely separate project whose directory name matches");
+    println!("    another project's repo name (e.g. 'ci-runner' vs 'team/ci-runner')");
+    println!("  - multi-slash project ids where the segment after the first '/'");
+    println!("    also exists as a project id (e.g. 'a/b' vs 'c/a/b')");
     println!();
     println!("To merge confirmed pairs, run:");
     println!("  vipune project merge <from> <to>");
+}
+
+/// Detect suspected project split pairs using the bare-id heuristic.
+///
+/// For each owned id (containing "/"), extract the segment after the first "/".
+/// If that segment exists as a separate project_id, the pair is a suspected split.
+/// Returns all matching pairs sorted by (segment, owned) — multiple owned ids
+/// with the same segment are all reported independently.
+///
+/// # Arguments
+///
+/// * `project_ids` - Sorted list of all project ids in the database.
+/// * `counts` - Map from project id to its row count.
+///
+/// # Returns
+///
+/// Sorted list of `(segment, owned)` pairs. Each pair is unique (owned ids are
+/// distinct, so no deduplication is needed).
+pub(crate) fn detect_split_pairs(
+    project_ids: &[String],
+    counts: &HashMap<String, usize>,
+) -> Vec<(String, String)> {
+    let mut suspected_splits: Vec<(String, String)> = Vec::new();
+
+    for owned_str in project_ids {
+        // Extract the segment after the first "/". Skip ids without "/".
+        let (_, segment) = match owned_str.split_once('/') {
+            Some(parts) => parts,
+            None => continue,
+        };
+        // Check if the segment exists as a separate project_id.
+        if counts.contains_key(segment) {
+            suspected_splits.push((segment.to_string(), owned_str.clone()));
+        }
+    }
+
+    // Sort by segment, then by owned id — deterministic output for identical input.
+    suspected_splits.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    suspected_splits
 }
 
 #[cfg(test)]

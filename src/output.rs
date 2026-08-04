@@ -163,15 +163,16 @@ pub struct ReindexFailure {
 
 /// A suspected split pair detected by `doctor --projects`.
 ///
-/// `pair[0]` is always the bare id (no `/`), `pair[1]` is always the
-/// `owner/repo` id. `row_counts[0]` corresponds to `pair[0]`, `row_counts[1]`
-/// to `pair[1]`. This ordering is stable so `--json` consumers can attribute
-/// counts unambiguously.
+/// `pair[0]` is the segment after the first `/` in `pair[1]`. For the common case
+/// (owned id is `owner/repo`), `pair[0]` is the bare id `repo`. For multi-slash ids
+/// like `group/subgroup/project`, `pair[0]` is `subgroup/project`.
+/// `row_counts[0]` corresponds to `pair[0]`, `row_counts[1]` to `pair[1]`.
+/// Ordering is stable so `--json` consumers can attribute counts unambiguously.
 #[derive(Serialize)]
 pub struct DoctorProjectsSuspectedSplit {
-    /// Pair of project ids: `[bare_id, owner/repo_id]`.
+    /// Pair of project ids: `[segment, owned_id]`.
     pub pair: [String; 2],
-    /// Row counts for each side: `[count_bare, count_owner_repo]`.
+    /// Row counts for each side: `[count_segment, count_owned]`.
     pub row_counts: [usize; 2],
 }
 

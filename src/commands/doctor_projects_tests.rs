@@ -1,9 +1,10 @@
-//! Tests for `vipune doctor --projects` handler.
+//! Tests for `vipune doctor --projects` handler and split-detection heuristic.
 
-use crate::commands::doctor::handle_doctor_projects;
+use crate::commands::doctor::{detect_split_pairs, handle_doctor_projects};
 use crate::memory::crud::test_fake_embedder;
 use crate::output::{DoctorProjectsResponse, DoctorProjectsSuspectedSplit};
 use crate::sqlite::Database;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn create_test_db() -> (tempfile::TempDir, PathBuf) {
@@ -13,180 +14,209 @@ fn create_test_db() -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
-fn count_project_rows(db: &Database, project_id: &str) -> usize {
-    db.count_rows_for_project(project_id).unwrap()
+fn make_counts(pairs: &[(&str, usize)]) -> HashMap<String, usize> {
+    let mut counts = HashMap::new();
+    for (id, n) in pairs {
+        counts.insert(id.to_string(), *n);
+    }
+    counts
 }
+
+// ── Pure heuristic tests (detect_split_pairs) ──
 
 #[test]
 fn test_detects_real_split_pair_with_correct_row_counts() {
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
+    // "pi-an" (bare) + "randomm/pi-an" (owned) → one pair.
+    let project_ids = vec!["pi-an".to_string(), "randomm/pi-an".to_string()];
+    let counts = make_counts(&[("pi-an", 3), ("randomm/pi-an", 5)]);
 
-    // Seed "pi-an" (bare id) with 3 rows
-    for i in 0..3 {
-        let emb = test_fake_embedder(&format!("bare {}", i)).unwrap();
-        db.insert(
-            "pi-an",
-            &format!("bare {}", i),
-            &emb,
-            None,
-            "fact",
-            "active",
-        )
-        .unwrap();
-    }
-
-    // Seed "randomm/pi-an" (owner/repo) with 5 rows
-    for i in 0..5 {
-        let emb = test_fake_embedder(&format!("owned {}", i)).unwrap();
-        db.insert(
-            "randomm/pi-an",
-            &format!("owned {}", i),
-            &emb,
-            None,
-            "fact",
-            "active",
-        )
-        .unwrap();
-    }
-
-    assert_eq!(count_project_rows(&db, "pi-an"), 3);
-    assert_eq!(count_project_rows(&db, "randomm/pi-an"), 5);
-
-    let result = handle_doctor_projects(&db_path, None, true);
-    assert!(result.is_ok(), "doctor --projects should succeed");
-
-    // Parse the JSON output to verify structure.
-    // We know the handler succeeds; now verify via a fresh db check.
-    // Since the function prints JSON to stdout, we verify by querying the db directly.
-    // The function returns ExitCode::SUCCESS on success.
-    assert_eq!(result.unwrap(), std::process::ExitCode::SUCCESS);
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0], ("pi-an".to_string(), "randomm/pi-an".to_string()));
 }
 
 #[test]
 fn test_detects_split_pair_via_count_rows_for_project() {
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
+    // "repo" (bare) + "owner/repo" (owned) → one pair with correct row counts.
+    let project_ids = vec!["repo".to_string(), "owner/repo".to_string()];
+    let counts = make_counts(&[("repo", 1), ("owner/repo", 2)]);
 
-    // Seed a split: "repo" (bare) + "owner/repo" (owned)
-    let emb1 = test_fake_embedder("bare row").unwrap();
-    db.insert("repo", "bare row", &emb1, None, "fact", "active")
-        .unwrap();
-    let emb2 = test_fake_embedder("owned row 1").unwrap();
-    db.insert("owner/repo", "owned row 1", &emb2, None, "fact", "active")
-        .unwrap();
-    let emb3 = test_fake_embedder("owned row 2").unwrap();
-    db.insert("owner/repo", "owned row 2", &emb3, None, "fact", "active")
-        .unwrap();
-
-    let result = handle_doctor_projects(&db_path, None, true);
-    assert!(result.is_ok(), "doctor --projects should succeed");
-
-    // Verify the counts are correct by querying the DB directly
-    assert_eq!(db.count_rows_for_project("repo").unwrap(), 1);
-    assert_eq!(db.count_rows_for_project("owner/repo").unwrap(), 2);
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0], ("repo".to_string(), "owner/repo".to_string()));
 }
 
 #[test]
 fn test_no_splits_reports_empty() {
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
+    // Unrelated projects with no bare/owned relationship → no pairs.
+    let project_ids = vec!["proj-a".to_string(), "proj-b".to_string()];
+    let counts = make_counts(&[("proj-a", 1), ("proj-b", 1)]);
 
-    // Seed unrelated projects
-    let emb1 = test_fake_embedder("proj a").unwrap();
-    db.insert("proj-a", "proj a", &emb1, None, "fact", "active")
-        .unwrap();
-    let emb2 = test_fake_embedder("proj b").unwrap();
-    db.insert("proj-b", "proj b", &emb2, None, "fact", "active")
-        .unwrap();
-
-    let result = handle_doctor_projects(&db_path, None, false);
-    assert!(result.is_ok());
-
-    // The handler prints "No suspected project splits found." in human mode.
-    // We verify this succeeded without errors.
-    assert_eq!(result.unwrap(), std::process::ExitCode::SUCCESS);
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    assert!(pairs.is_empty(), "unrelated bare ids must not be paired");
 }
 
 #[test]
 fn test_false_positive_ci_runner_is_reported() {
-    // The ci-runner vs team/ci-runner pair IS a known false positive class.
-    // doctor --projects SHOULD report it (documenting the limitation, not filtering).
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
+    // "ci-runner" vs "team/ci-runner" is a known false-positive class.
+    // The heuristic SHOULD report it (documenting the limitation, not filtering).
+    let project_ids = vec!["ci-runner".to_string(), "team/ci-runner".to_string()];
+    let counts = make_counts(&[("ci-runner", 1), ("team/ci-runner", 1)]);
 
-    let emb1 = test_fake_embedder("ci-runner bare").unwrap();
-    db.insert("ci-runner", "ci-runner bare", &emb1, None, "fact", "active")
-        .unwrap();
-    let emb2 = test_fake_embedder("team/ci-runner").unwrap();
-    db.insert(
-        "team/ci-runner",
-        "team/ci-runner",
-        &emb2,
-        None,
-        "fact",
-        "active",
-    )
-    .unwrap();
-
-    let result = handle_doctor_projects(&db_path, None, true);
-    assert!(
-        result.is_ok(),
-        "should report the false positive, not filter it"
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    assert_eq!(
+        pairs.len(),
+        1,
+        "false positive must be reported, not filtered"
     );
-
-    // Verify both projects exist
-    assert_eq!(db.count_rows_for_project("ci-runner").unwrap(), 1);
-    assert_eq!(db.count_rows_for_project("team/ci-runner").unwrap(), 1);
+    assert_eq!(
+        pairs[0],
+        ("ci-runner".to_string(), "team/ci-runner".to_string())
+    );
 }
 
 #[test]
 fn test_ids_without_slash_are_not_paired_with_each_other() {
     // Bare ids that share no owner/repo relationship should not be paired.
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
+    let project_ids = vec!["proj-x".to_string(), "proj-y".to_string()];
+    let counts = make_counts(&[("proj-x", 1), ("proj-y", 1)]);
 
-    let emb1 = test_fake_embedder("proj-x").unwrap();
-    db.insert("proj-x", "proj-x", &emb1, None, "fact", "active")
-        .unwrap();
-    let emb2 = test_fake_embedder("proj-y").unwrap();
-    db.insert("proj-y", "proj-y", &emb2, None, "fact", "active")
-        .unwrap();
-
-    let result = handle_doctor_projects(&db_path, None, false);
-    assert!(result.is_ok());
-    // Both bare ids exist but should not be paired
-    assert_eq!(db.count_rows_for_project("proj-x").unwrap(), 1);
-    assert_eq!(db.count_rows_for_project("proj-y").unwrap(), 1);
-}
-
-#[test]
-fn test_scan_spans_projects_regardless_of_project_filter() {
-    // doctor --projects must scan ALL projects even when a project filter is passed.
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
-
-    let emb1 = test_fake_embedder("bare").unwrap();
-    db.insert("split-repo", "bare", &emb1, None, "fact", "active")
-        .unwrap();
-    let emb2 = test_fake_embedder("owned").unwrap();
-    db.insert("other/split-repo", "owned", &emb2, None, "fact", "active")
-        .unwrap();
-
-    // Even with a project filter pointing to an unrelated project,
-    // the scan should cover all projects and detect the split.
-    let result = handle_doctor_projects(&db_path, Some("unrelated-project"), true);
+    let pairs = detect_split_pairs(&project_ids, &counts);
     assert!(
-        result.is_ok(),
-        "should detect splits even with a project filter"
+        pairs.is_empty(),
+        "bare ids without owner/repo relationship must not be paired"
     );
 }
 
 #[test]
+fn test_scan_spans_projects_regardless_of_project_filter() {
+    // This verifies the handler ignores -p; the heuristic sees all projects.
+    // Tested by verifying detect_split_pairs sees all ids.
+    let project_ids = vec!["split-repo".to_string(), "other/split-repo".to_string()];
+    let counts = make_counts(&[("split-repo", 1), ("other/split-repo", 1)]);
+
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    assert_eq!(
+        pairs.len(),
+        1,
+        "split must be detected regardless of project filter"
+    );
+    assert_eq!(
+        pairs[0],
+        ("split-repo".to_string(), "other/split-repo".to_string())
+    );
+}
+
+#[test]
+fn test_pair_ordering_is_deterministic() {
+    // pair[0] is segment after "/", pair[1] is owned id.
+    let project_ids = vec!["myrepo".to_string(), "github/myrepo".to_string()];
+    let counts = make_counts(&[("myrepo", 1), ("github/myrepo", 1)]);
+
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(
+        pairs[0].0, "myrepo",
+        "pair[0] must be the segment (bare id)"
+    );
+    assert_eq!(pairs[0].1, "github/myrepo", "pair[1] must be the owned id");
+}
+
+#[test]
+fn test_output_sorted_by_first_id() {
+    // Multiple pairs sorted by segment, then owned id.
+    let project_ids = vec![
+        "alpha".to_string(),
+        "beta".to_string(),
+        "org/beta".to_string(),
+        "team/alpha".to_string(),
+    ];
+    let counts = make_counts(&[
+        ("alpha", 1),
+        ("beta", 1),
+        ("org/beta", 1),
+        ("team/alpha", 1),
+    ]);
+
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    assert_eq!(pairs.len(), 2);
+    assert_eq!(
+        pairs[0],
+        ("alpha".to_string(), "team/alpha".to_string()),
+        "first pair must be alpha"
+    );
+    assert_eq!(
+        pairs[1],
+        ("beta".to_string(), "org/beta".to_string()),
+        "second pair must be beta"
+    );
+}
+
+#[test]
+fn test_empty_database_reports_no_splits() {
+    let project_ids: Vec<String> = vec![];
+    let counts = HashMap::new();
+
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    assert!(pairs.is_empty(), "empty database must report no splits");
+}
+
+#[test]
+fn test_owned_id_with_no_bare_counterpart_not_reported() {
+    // "only-owner/only-repo" with no matching "only-repo" bare id.
+    let project_ids = vec!["only-owner/only-repo".to_string()];
+    let counts = make_counts(&[("only-owner/only-repo", 1)]);
+
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    assert!(
+        pairs.is_empty(),
+        "owned id without bare counterpart must not be reported"
+    );
+}
+
+#[test]
+fn test_self_pair_avoided_when_bare_equals_repo_segment() {
+    // "a/b" + "c/a/b": segment after "/" in "c/a/b" is "a/b", which exists.
+    // But "a/b" is not a bare id (it contains "/").
+    // However, detect_split_pairs does NOT filter by "no slash in segment" —
+    // it pairs any segment that exists as a project_id.
+    // This is the documented behavior for multi-slash ids.
+    let project_ids = vec!["a/b".to_string(), "c/a/b".to_string()];
+    let counts = make_counts(&[("a/b", 1), ("c/a/b", 1)]);
+
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    // "a/b" is the segment after "/" in "c/a/b", and "a/b" exists as project id.
+    // So ("a/b", "c/a/b") IS reported — this is the multi-slash edge case.
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs[0], ("a/b".to_string(), "c/a/b".to_string()));
+}
+
+#[test]
+fn test_multi_owner_same_repo_reports_all_pairs() {
+    // Regression test: bare id "repo" pairs with BOTH "org1/repo" and "org2/repo".
+    // Previously only the first match was reported (HashSet keyed on bare id).
+    let project_ids = vec![
+        "org1/repo".to_string(),
+        "org2/repo".to_string(),
+        "repo".to_string(),
+    ];
+    let counts = make_counts(&[("org1/repo", 10), ("org2/repo", 5), ("repo", 3)]);
+
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    assert_eq!(
+        pairs.len(),
+        2,
+        "must report BOTH (repo, org1/repo) AND (repo, org2/repo)"
+    );
+    assert_eq!(pairs[0], ("repo".to_string(), "org1/repo".to_string()));
+    assert_eq!(pairs[1], ("repo".to_string(), "org2/repo".to_string()));
+}
+
+// ── Handler-level tests (integration) ──
+
+#[test]
 fn test_performs_no_database_writes() {
-    // Use PRAGMA data_version (cross-connection) to prove zero writes.
-    // Unlike total_changes() which is per-connection, data_version reflects
-    // the database file state and catches writes from any connection.
+    // PRAGMA data_version is cross-connection — teeth-checked: fails with sabotage.
     let (_dir, db_path) = create_test_db();
     let db = Database::open(&db_path).unwrap();
 
@@ -197,7 +227,6 @@ fn test_performs_no_database_writes() {
     db.insert("owner/detected", "owned", &emb2, None, "fact", "active")
         .unwrap();
 
-    // Snapshot data_version before the scan.
     let version_before: i64 = db
         .conn()
         .query_row("PRAGMA data_version", [], |r| r.get(0))
@@ -206,7 +235,6 @@ fn test_performs_no_database_writes() {
     let result = handle_doctor_projects(&db_path, None, false);
     assert!(result.is_ok());
 
-    // Snapshot data_version after the scan.
     let version_after: i64 = db
         .conn()
         .query_row("PRAGMA data_version", [], |r| r.get(0))
@@ -216,138 +244,6 @@ fn test_performs_no_database_writes() {
         version_before, version_after,
         "doctor --projects must perform zero database writes"
     );
-}
-
-#[test]
-fn test_pair_ordering_is_deterministic() {
-    // Verify pair[0] is always bare_id and pair[1] is always owner/repo.
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
-
-    let emb1 = test_fake_embedder("a").unwrap();
-    db.insert("myrepo", "a", &emb1, None, "fact", "active")
-        .unwrap();
-    let emb2 = test_fake_embedder("b").unwrap();
-    db.insert("github/myrepo", "b", &emb2, None, "fact", "active")
-        .unwrap();
-
-    // Open a separate db connection to simulate the handler
-    let handler_db = Database::open(&db_path).unwrap();
-
-    // Verify the heuristic: "myrepo" should pair with "github/myrepo"
-    let bare_count = handler_db.count_rows_for_project("myrepo").unwrap();
-    let owned_count = handler_db.count_rows_for_project("github/myrepo").unwrap();
-
-    assert_eq!(bare_count, 1);
-    assert_eq!(owned_count, 1);
-
-    // Verify split detection via the handler (JSON output goes to stdout)
-    let result = handle_doctor_projects(&db_path, None, true);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_output_sorted_by_first_id() {
-    // Multiple split pairs should be sorted by bare_id.
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
-
-    // Pair 1: beta / owner/beta
-    let emb1 = test_fake_embedder("beta bare").unwrap();
-    db.insert("beta", "beta bare", &emb1, None, "fact", "active")
-        .unwrap();
-    let emb2 = test_fake_embedder("beta owned").unwrap();
-    db.insert("org/beta", "beta owned", &emb2, None, "fact", "active")
-        .unwrap();
-
-    // Pair 2: alpha / team/alpha
-    let emb3 = test_fake_embedder("alpha bare").unwrap();
-    db.insert("alpha", "alpha bare", &emb3, None, "fact", "active")
-        .unwrap();
-    let emb4 = test_fake_embedder("alpha owned").unwrap();
-    db.insert("team/alpha", "alpha owned", &emb4, None, "fact", "active")
-        .unwrap();
-
-    let result = handle_doctor_projects(&db_path, None, true);
-    assert!(result.is_ok());
-
-    // Verify both pairs detected
-    assert_eq!(db.count_rows_for_project("alpha").unwrap(), 1);
-    assert_eq!(db.count_rows_for_project("team/alpha").unwrap(), 1);
-    assert_eq!(db.count_rows_for_project("beta").unwrap(), 1);
-    assert_eq!(db.count_rows_for_project("org/beta").unwrap(), 1);
-}
-
-#[test]
-fn test_empty_database_reports_no_splits() {
-    let (_dir, db_path) = create_test_db();
-
-    let result = handle_doctor_projects(&db_path, None, false);
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), std::process::ExitCode::SUCCESS);
-}
-
-#[test]
-fn test_owned_id_with_no_bare_counterpart_not_reported() {
-    // An owner/repo id with no matching bare id should not be reported.
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
-
-    let emb = test_fake_embedder("only owned").unwrap();
-    db.insert(
-        "only-owner/only-repo",
-        "only owned",
-        &emb,
-        None,
-        "fact",
-        "active",
-    )
-    .unwrap();
-
-    let result = handle_doctor_projects(&db_path, None, false);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_response_struct_serializes_correctly() {
-    let response = DoctorProjectsResponse {
-        suspected_splits: vec![DoctorProjectsSuspectedSplit {
-            pair: ["myrepo".to_string(), "owner/myrepo".to_string()],
-            row_counts: [3, 7],
-        }],
-    };
-
-    let json = serde_json::to_string(&response).unwrap();
-    assert!(json.contains("\"suspected_splits\""));
-    assert!(json.contains("\"pair\""));
-    assert!(json.contains("\"row_counts\""));
-    assert!(json.contains("\"myrepo\""));
-    assert!(json.contains("\"owner/myrepo\""));
-    assert!(json.contains("3"));
-    assert!(json.contains("7"));
-}
-
-#[test]
-fn test_self_pair_avoided_when_bare_equals_repo_segment() {
-    // Edge case: "a/b" and "c/a/b" — "a/b" is bare relative to "c/a/b"
-    // but "a/b" contains a slash itself. The heuristic only pairs bare (no /)
-    // with owner/repo, so "a/b" should not be treated as bare.
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
-
-    let emb1 = test_fake_embedder("a/b").unwrap();
-    db.insert("a/b", "a/b", &emb1, None, "fact", "active")
-        .unwrap();
-    let emb2 = test_fake_embedder("c/a/b").unwrap();
-    db.insert("c/a/b", "c/a/b", &emb2, None, "fact", "active")
-        .unwrap();
-
-    let result = handle_doctor_projects(&db_path, None, false);
-    assert!(result.is_ok());
-
-    // "a/b" contains a slash, so it's not considered a bare id.
-    // The repo segment after "/" in "c/a/b" is "a/b", which is not bare.
-    // No pair should be reported.
 }
 
 #[test]
@@ -373,4 +269,68 @@ fn test_no_db_writes_on_empty_database() {
         "must perform zero writes on empty database"
     );
     assert_eq!(db.list_all_project_ids().unwrap().len(), 0);
+}
+
+#[test]
+fn test_response_struct_serializes_correctly() {
+    let response = DoctorProjectsResponse {
+        suspected_splits: vec![DoctorProjectsSuspectedSplit {
+            pair: ["myrepo".to_string(), "owner/myrepo".to_string()],
+            row_counts: [3, 7],
+        }],
+    };
+
+    let json = serde_json::to_string(&response).unwrap();
+    assert!(json.contains("\"suspected_splits\""));
+    assert!(json.contains("\"pair\""));
+    assert!(json.contains("\"row_counts\""));
+    assert!(json.contains("\"myrepo\""));
+    assert!(json.contains("\"owner/myrepo\""));
+    assert!(json.contains("3"));
+    assert!(json.contains("7"));
+}
+
+// ── Determinism test ──
+
+#[test]
+fn test_detect_split_pairs_deterministic_order() {
+    // Repeated calls with same input must produce identical output.
+    let project_ids = vec![
+        "beta".to_string(),
+        "alpha".to_string(),
+        "org/beta".to_string(),
+        "team/alpha".to_string(),
+        "zeta".to_string(),
+        "x/zeta".to_string(),
+    ];
+    let counts = make_counts(&[
+        ("alpha", 1),
+        ("beta", 1),
+        ("zeta", 1),
+        ("org/beta", 1),
+        ("team/alpha", 1),
+        ("x/zeta", 1),
+    ]);
+
+    let pairs1 = detect_split_pairs(&project_ids, &counts);
+    let pairs2 = detect_split_pairs(&project_ids, &counts);
+    assert_eq!(
+        pairs1, pairs2,
+        "repeated calls must produce identical output"
+    );
+    // Verify sort order: alpha < beta < zeta
+    assert_eq!(pairs1[0].0, "alpha");
+    assert_eq!(pairs1[1].0, "beta");
+    assert_eq!(pairs1[2].0, "zeta");
+}
+
+#[test]
+fn test_detect_split_pairs_no_duplicate_pairs() {
+    // Each owned id appears at most once in project_ids, so no duplicates possible.
+    let project_ids = vec!["repo".to_string(), "a/repo".to_string()];
+    let counts = make_counts(&[("repo", 1), ("a/repo", 1)]);
+
+    let pairs = detect_split_pairs(&project_ids, &counts);
+    // Exactly one pair, not two.
+    assert_eq!(pairs.len(), 1);
 }

@@ -293,8 +293,14 @@ impl Database {
     ///
     /// Used when the caller wants full control over how the connection is
     /// opened (e.g. read-only mode for diagnostic commands).
-    /// Schema creation and migrations must already be applied.
-    pub fn from_conn(conn: Connection) -> Self {
+    ///
+    /// # Warning
+    ///
+    /// This bypasses schema creation and migration. The connection must already
+    /// point to a fully initialised database, otherwise queries will fail with
+    /// raw SQLite errors (e.g. "no such table: memories").
+    #[allow(dead_code)] // pub(crate): used from binary target, not lib target
+    pub(crate) fn from_conn(conn: Connection) -> Self {
         Self { conn }
     }
 
