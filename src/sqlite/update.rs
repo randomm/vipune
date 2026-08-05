@@ -72,6 +72,12 @@ impl super::Database {
         set_clauses.push("updated_at = ?");
         params.push(Box::new(now));
 
+        if set_clauses.len() == 1 {
+            return Err(Error::InvalidInput(
+                "At least one field must be provided for update".to_string(),
+            ));
+        }
+
         let sql = format!(
             "UPDATE memories SET {} WHERE id = ? AND project_id = ?",
             set_clauses.join(", ")
@@ -85,9 +91,9 @@ impl super::Database {
         let rows = self.conn.execute(&sql, param_refs.as_slice())?;
 
         if rows == 0 {
-            return Err(Error::NotFound(format!(
-                "No memory found for id {id} in project {project_id}"
-            )));
+            return Err(Error::NotFound(
+                "No memory found for the given id".to_string(),
+            ));
         }
 
         Ok(())

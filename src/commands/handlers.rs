@@ -346,37 +346,7 @@ pub(crate) fn handle_update(
     args: UpdateParams<'_>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    if args.text.is_none()
-        && args.metadata.is_none()
-        && args.memory_type.is_none()
-        && args.status.is_none()
-    {
-        return Err(Error::InvalidInput(
-            "At least one of text, metadata, memory_type, or status must be provided".to_string(),
-        ));
-    }
-
-    if let Some(meta) = args.metadata {
-        if meta.trim().is_empty() {
-            return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
-        }
-        serde_json::from_str::<serde_json::Value>(meta)
-            .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
-    }
-
-    let memory_type_val = args.memory_type;
-    let status_val = args.status;
-
-    store.update(
-        id,
-        project_id,
-        UpdateParams {
-            text: args.text,
-            metadata: args.metadata,
-            memory_type: memory_type_val,
-            status: status_val,
-        },
-    )?;
+    store.update(id, project_id, args)?;
     if json {
         print_json(&UpdateResponse {
             status: "updated".to_string(),

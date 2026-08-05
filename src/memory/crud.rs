@@ -13,7 +13,7 @@ use super::store::MemoryStore;
 ///
 /// Groups the optional fields that may be updated, reducing function signatures
 /// and making call sites self-documenting across all layers (handler, store, wrapper).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct UpdateParams<'a> {
     /// New text content for the memory.
     pub text: Option<&'a str>,

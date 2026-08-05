@@ -435,9 +435,7 @@ mod tool_handler_tests {
             project_id,
             UpdateParams {
                 text: Some("updated content"),
-                metadata: None,
-                memory_type: None,
-                status: None,
+                ..Default::default()
             },
         );
         assert!(update_result.is_ok(), "update should succeed");
@@ -457,10 +455,8 @@ mod tool_handler_tests {
             id,
             project_id,
             UpdateParams {
-                text: None,
                 metadata: Some(&metadata_str),
-                memory_type: None,
-                status: None,
+                ..Default::default()
             },
         );
         assert!(update_meta_result.is_ok());
@@ -477,16 +473,7 @@ mod tool_handler_tests {
         assert_eq!(stored_metadata, new_metadata);
 
         // Try to update with all None optional fields, should fail
-        let update_none_result = wrapper.update(
-            id,
-            project_id,
-            UpdateParams {
-                text: None,
-                metadata: None,
-                memory_type: None,
-                status: None,
-            },
-        );
+        let update_none_result = wrapper.update(id, project_id, UpdateParams::default());
         assert!(
             update_none_result.is_err(),
             "update with all None fields should fail"
@@ -497,10 +484,9 @@ mod tool_handler_tests {
             id,
             project_id,
             UpdateParams {
-                text: None,
-                metadata: None,
                 memory_type: Some(MemoryType::Preference),
                 status: Some(MemoryStatus::Candidate),
+                ..Default::default()
             },
         );
         assert!(update_type_status_result.is_ok());
