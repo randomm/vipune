@@ -2,7 +2,7 @@
 #[cfg(test)]
 mod crud_tests {
     use crate::embedding::EMBEDDING_DIMS;
-    use crate::sqlite::Database;
+    use crate::sqlite::{Database, UpdateOptions};
     use tempfile::TempDir;
 
     fn create_test_db() -> Database {
@@ -70,8 +70,18 @@ mod crud_tests {
             .insert("proj1", "original", &embedding, None, "fact", "active")
             .unwrap();
 
-        db.update(&id, "proj1", Some("updated"), Some(&embedding), None, None, None)
-            .unwrap();
+        db.update(
+            &id,
+            "proj1",
+            UpdateOptions {
+                content: Some("updated"),
+                embedding: Some(&embedding),
+                metadata: None,
+                memory_type: None,
+                status: None,
+            },
+        )
+        .unwrap();
 
         let m = db.get(&id, "proj1").unwrap().unwrap();
         assert_eq!(m.content, "updated");
@@ -84,11 +94,13 @@ mod crud_tests {
         let result = db.update(
             "nonexistent",
             "proj1",
-            Some("content"),
-            Some(&embedding),
-            None,
-            None,
-            None,
+            UpdateOptions {
+                content: Some("content"),
+                embedding: Some(&embedding),
+                metadata: None,
+                memory_type: None,
+                status: None,
+            },
         );
         assert!(result.is_err());
     }

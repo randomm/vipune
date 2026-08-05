@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use vipune::errors::Error;
 use vipune::{
     Config, IngestPolicy, MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT, MemoryStatus, MemoryStore,
-    MemoryType, detect_project,
+    MemoryType, UpdateParams, detect_project,
 };
 
 /// Test basic memory add and search operations.
@@ -352,7 +352,16 @@ fn test_update_with_empty_input_returns_error() {
     };
 
     // Try to update with empty string
-    let result = store.update(&memory_id, "test", Some(""), None, None, None);
+    let result = store.update(
+        &memory_id,
+        "test",
+        UpdateParams {
+            text: Some(""),
+            metadata: None,
+            memory_type: None,
+            status: None,
+        },
+    );
     assert!(result.is_err());
     if !matches!(result.as_ref().unwrap_err(), Error::EmptyInput) {
         panic!("Expected EmptyInput error");
@@ -388,7 +397,16 @@ fn test_update_with_oversized_input_returns_error() {
 
     // Try to update with oversized content
     let long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.update(&memory_id, "test", Some(&long_text), None, None, None);
+    let result = store.update(
+        &memory_id,
+        "test",
+        UpdateParams {
+            text: Some(&long_text),
+            metadata: None,
+            memory_type: None,
+            status: None,
+        },
+    );
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -1223,10 +1241,12 @@ fn test_update_text_only_preserves_metadata() {
         .update(
             &id,
             "test-project",
-            Some("updated content"),
-            None,
-            None,
-            None,
+            UpdateParams {
+                text: Some("updated content"),
+                metadata: None,
+                memory_type: None,
+                status: None,
+            },
         )
         .expect("Failed to update");
 
@@ -1273,10 +1293,12 @@ fn test_update_with_invalid_json_metadata_returns_error() {
     let result = store.update(
         &id,
         "test-project",
-        None,
-        Some(r#"{this is not valid json"#),
-        None,
-        None,
+        UpdateParams {
+            text: None,
+            metadata: Some(r#"{this is not valid json"#),
+            memory_type: None,
+            status: None,
+        },
     );
     assert!(result.is_err());
     match result {
@@ -1326,7 +1348,16 @@ fn test_update_with_empty_metadata_returns_error() {
     };
 
     // Try to update with empty metadata - should fail
-    let result = store.update(&id, "test-project", None, Some(""), None, None);
+    let result = store.update(
+        &id,
+        "test-project",
+        UpdateParams {
+            text: None,
+            metadata: Some(""),
+            memory_type: None,
+            status: None,
+        },
+    );
     assert!(result.is_err());
     match result {
         Err(Error::InvalidInput(msg)) => {
@@ -1375,7 +1406,16 @@ fn test_update_with_whitespace_only_metadata_returns_error() {
     };
 
     // Try to update with whitespace-only metadata - should fail
-    let result = store.update(&id, "test-project", None, Some("   "), None, None);
+    let result = store.update(
+        &id,
+        "test-project",
+        UpdateParams {
+            text: None,
+            metadata: Some("   "),
+            memory_type: None,
+            status: None,
+        },
+    );
     assert!(result.is_err());
     match result {
         Err(Error::InvalidInput(msg)) => {
@@ -1428,10 +1468,12 @@ fn test_update_metadata_only() {
         .update(
             &id,
             "test-project",
-            None,
-            Some(r#"{"tag": "new"}"#),
-            None,
-            None,
+            UpdateParams {
+                text: None,
+                metadata: Some(r#"{"tag": "new"}"#),
+                memory_type: None,
+                status: None,
+            },
         )
         .expect("Failed to update");
 
@@ -1479,10 +1521,12 @@ fn test_update_both_text_and_metadata() {
         .update(
             &id,
             project_id,
-            Some("new content"),
-            Some(r#"{"new": "value"}"#),
-            None,
-            None,
+            UpdateParams {
+                text: Some("new content"),
+                metadata: Some(r#"{"new": "value"}"#),
+                memory_type: None,
+                status: None,
+            },
         )
         .expect("Failed to update");
 

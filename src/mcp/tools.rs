@@ -5,8 +5,8 @@ use crate::mcp::store_wrapper::{McpError, StoreWrapper};
 
 use crate::errors::Error;
 use crate::mcp::params::*;
-use crate::memory::MemoryStore;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::{MemoryStore, UpdateParams};
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
@@ -432,10 +432,12 @@ impl ToolHandler {
         self.store.update(
             &params.id,
             &self.project_id,
-            text_str,
-            metadata_str.as_deref(),
-            memory_type_val,
-            status_val,
+            UpdateParams {
+                text: text_str,
+                metadata: metadata_str.as_deref(),
+                memory_type: memory_type_val,
+                status: status_val,
+            },
         )?;
 
         let result = serde_json::json!({

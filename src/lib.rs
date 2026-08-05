@@ -56,9 +56,9 @@ pub mod mcp;
 pub use config::Config;
 pub use embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine};
 pub use errors::Error;
-pub use memory::MemoryStore;
 pub use memory::lifecycle::{MemoryStatus, MemoryType};
 pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
+pub use memory::{MemoryStore, UpdateParams};
 pub use memory_types::{
     AddResult, BatchIngestItemResult, BatchIngestResult, ConflictMemory, IngestPolicy,
 }; // Library-only: conflict detection and batch ingest types

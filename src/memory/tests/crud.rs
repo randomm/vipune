@@ -1,6 +1,6 @@
 //! Tests for basic CRUD operations.
 
-use crate::sqlite::Database;
+use crate::sqlite::{Database, UpdateOptions};
 
 #[test]
 fn test_memory_store_new() {
@@ -64,11 +64,13 @@ fn test_update_memory() {
     db.update(
         &id,
         "test-project",
-        Some("updated"),
-        Some(&embedding_new),
-        None,
-        None,
-        None,
+        UpdateOptions {
+            content: Some("updated"),
+            embedding: Some(&embedding_new),
+            metadata: None,
+            memory_type: None,
+            status: None,
+        },
     )
     .unwrap();
 
@@ -90,11 +92,13 @@ fn test_update_nonexistent() {
     let result = db.update(
         "does-not-exist",
         "test-project",
-        Some("content"),
-        Some(&embedding),
-        None,
-        None,
-        None,
+        UpdateOptions {
+            content: Some("content"),
+            embedding: Some(&embedding),
+            metadata: None,
+            memory_type: None,
+            status: None,
+        },
     );
     assert!(result.is_err());
 }
@@ -124,11 +128,13 @@ fn test_update_cross_project_isolation() {
     let result = db.update(
         &id,
         "proj-b",
-        Some("malicious update"),
-        Some(&embedding),
-        None,
-        None,
-        None,
+        UpdateOptions {
+            content: Some("malicious update"),
+            embedding: Some(&embedding),
+            metadata: None,
+            memory_type: None,
+            status: None,
+        },
     );
     assert!(result.is_err(), "update with wrong project_id must fail");
 

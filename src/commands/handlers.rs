@@ -1,8 +1,8 @@
 //! Command handlers for vipune CLI.
 
 use crate::errors::Error;
-use crate::memory::MemoryStore;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::{MemoryStore, UpdateParams};
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
 use crate::{config, embedding::EmbeddingEngine, temporal};
@@ -339,24 +339,24 @@ pub(crate) fn handle_delete(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_update(
     store: &mut MemoryStore,
     id: &str,
     project_id: &str,
-    text: Option<&str>,
-    metadata: Option<&str>,
-    memory_type: Option<&str>,
-    status: Option<&str>,
+    args: UpdateParams<'_>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    if text.is_none() && metadata.is_none() && memory_type.is_none() && status.is_none() {
+    if args.text.is_none()
+        && args.metadata.is_none()
+        && args.memory_type.is_none()
+        && args.status.is_none()
+    {
         return Err(Error::InvalidInput(
             "At least one of text, metadata, memory_type, or status must be provided".to_string(),
         ));
     }
 
-    if let Some(meta) = metadata {
+    if let Some(meta) = args.metadata {
         if meta.trim().is_empty() {
             return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
         }
@@ -364,10 +364,19 @@ pub(crate) fn handle_update(
             .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
     }
 
-    let memory_type_val = memory_type.map(MemoryType::from_str).transpose()?;
-    let status_val = status.map(MemoryStatus::from_str).transpose()?;
+    let memory_type_val = args.memory_type;
+    let status_val = args.status;
 
-    store.update(id, project_id, text, metadata, memory_type_val, status_val)?;
+    store.update(
+        id,
+        project_id,
+        UpdateParams {
+            text: args.text,
+            metadata: args.metadata,
+            memory_type: memory_type_val,
+            status: status_val,
+        },
+    )?;
     if json {
         print_json(&UpdateResponse {
             status: "updated".to_string(),

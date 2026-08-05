@@ -93,7 +93,9 @@ impl From<crate::sqlite::Error> for Error {
         // Convert specific SQLite errors to NotFound when applicable
         // Sanitize: don't leak memory IDs in error messages to library consumers
         let err_str = err.to_string();
-        if err_str.contains("No memory found with id:") {
+        if err_str.contains("No memory found with id:")
+            || err_str.contains("No memory found for id")
+        {
             return Error::NotFound("memory not found".to_string());
         }
         Error::SqliteModule(err_str)

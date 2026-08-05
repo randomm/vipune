@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 pub use self::embedding::{blob_to_vec, vec_to_blob};
 pub use self::query_mod::map_row_to_memory;
+pub use self::update::UpdateOptions;
 
 /// A single memory record with metadata, embedding vector, and optional similarity score.
 ///

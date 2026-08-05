@@ -1,7 +1,7 @@
 //! Tests for search operations.
 
-use crate::memory::MemoryStore;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::{MemoryStore, UpdateParams};
 use crate::sqlite::Database;
 
 #[test]
@@ -369,10 +369,12 @@ fn test_integration_update_changes_embedding() {
         .update(
             &id,
             "test-project",
-            Some("completely different content"),
-            None,
-            None,
-            None,
+            UpdateParams {
+                text: Some("completely different content"),
+                metadata: None,
+                memory_type: None,
+                status: None,
+            },
         )
         .unwrap();
 
