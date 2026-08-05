@@ -72,6 +72,10 @@ impl super::Database {
         set_clauses.push("updated_at = ?");
         params.push(Box::new(now));
 
+        // Guard: set_clauses.len() == 1 means only `updated_at` was pushed (it is always
+        // appended unconditionally). That happens when NO optional fields were supplied,
+        // i.e. the caller asked to update nothing. We reject this rather than running a
+        // no-op UPDATE that silently returns 0 rows affected.
         if set_clauses.len() == 1 {
             return Err(Error::InvalidInput(
                 "At least one field must be provided for update".to_string(),

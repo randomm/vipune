@@ -16,6 +16,9 @@ pub mod search;
 pub mod supersede;
 pub mod update;
 
+#[cfg(test)]
+mod tests;
+
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
