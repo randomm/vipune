@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-05
+
+### Features
+
+- Add project_id scoping to update() SQL query for defense-in-depth ([#172](https://github.com/randomm/vipune/pull/172))
+
+### Miscellaneous
+
+- Realign version to 0.7.1 after accidental revert ([#155](https://github.com/randomm/vipune/pull/155)) ([#170](https://github.com/randomm/vipune/pull/170))
+
+
 ## [0.7.1] - 2026-08-04
 
 ### Features
