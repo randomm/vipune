@@ -6,7 +6,7 @@ use crate::memory_types::ConflictMemory as InternalConflictMemory;
 use crate::memory_types::IngestPolicy;
 use std::sync::{Arc, Mutex};
 
-use crate::memory::MemoryStore;
+use crate::memory::{MemoryStore, UpdateParams};
 
 /// Wrapper for MemoryStore to allow async-sound use.
 ///
@@ -355,10 +355,8 @@ impl StoreWrapper {
     pub(crate) fn update(
         &self,
         id: &str,
-        text: Option<&str>,
-        metadata: Option<&str>,
-        memory_type: Option<MemoryType>,
-        status: Option<MemoryStatus>,
+        project_id: &str,
+        params: UpdateParams<'_>,
     ) -> Result<(), rmcp::ErrorData> {
         let mut store = self.0.lock().map_err(|e| {
             rmcp::ErrorData::new(
@@ -368,7 +366,7 @@ impl StoreWrapper {
             )
         })?;
         store
-            .update(id, text, metadata, memory_type, status)
+            .update(id, project_id, params)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
     }
 

@@ -16,7 +16,8 @@ mod reindex_tests;
 
 use crate::config;
 use crate::errors::Error;
-use crate::memory::MemoryStore;
+use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::{MemoryStore, UpdateParams};
 use std::process::ExitCode;
 
 /// Commands supported by vipune CLI.
@@ -269,15 +270,25 @@ pub fn execute(
             metadata,
             memory_type,
             status,
-        } => handlers::handle_update(
-            store,
-            id,
-            text.as_deref(),
-            metadata.as_deref(),
-            memory_type.as_deref(),
-            status.as_deref(),
-            json,
-        ),
+        } => {
+            let memory_type_val = memory_type
+                .as_deref()
+                .map(MemoryType::from_str)
+                .transpose()?;
+            let status_val = status.as_deref().map(MemoryStatus::from_str).transpose()?;
+            handlers::handle_update(
+                store,
+                id,
+                &project_id,
+                UpdateParams {
+                    text: text.as_deref(),
+                    metadata: metadata.as_deref(),
+                    memory_type: memory_type_val,
+                    status: status_val,
+                },
+                json,
+            )
+        }
         Commands::Doctor {
             embeddings: _,
             projects,

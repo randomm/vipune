@@ -2,7 +2,7 @@
 #[cfg(test)]
 mod crud_tests {
     use crate::embedding::EMBEDDING_DIMS;
-    use crate::sqlite::Database;
+    use crate::sqlite::{Database, UpdateOptions};
     use tempfile::TempDir;
 
     fn create_test_db() -> Database {
@@ -70,8 +70,18 @@ mod crud_tests {
             .insert("proj1", "original", &embedding, None, "fact", "active")
             .unwrap();
 
-        db.update(&id, Some("updated"), Some(&embedding), None, None, None)
-            .unwrap();
+        db.update(
+            &id,
+            "proj1",
+            UpdateOptions {
+                content: Some("updated"),
+                embedding: Some(&embedding),
+                metadata: None,
+                memory_type: None,
+                status: None,
+            },
+        )
+        .unwrap();
 
         let m = db.get(&id, "proj1").unwrap().unwrap();
         assert_eq!(m.content, "updated");
@@ -83,11 +93,14 @@ mod crud_tests {
         let embedding = vec![0.1f32; 384];
         let result = db.update(
             "nonexistent",
-            Some("content"),
-            Some(&embedding),
-            None,
-            None,
-            None,
+            "proj1",
+            UpdateOptions {
+                content: Some("content"),
+                embedding: Some(&embedding),
+                metadata: None,
+                memory_type: None,
+                status: None,
+            },
         );
         assert!(result.is_err());
     }
@@ -138,7 +151,14 @@ mod crud_tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         let id = db
-            .insert("proj1", "secret content", &embedding, None, "fact", "active")
+            .insert(
+                "proj1",
+                "secret content",
+                &embedding,
+                None,
+                "fact",
+                "active",
+            )
             .unwrap();
 
         // proj1 can access its own memory
@@ -159,7 +179,14 @@ mod crud_tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         let id = db
-            .insert("proj1", "content to protect", &embedding, None, "fact", "active")
+            .insert(
+                "proj1",
+                "content to protect",
+                &embedding,
+                None,
+                "fact",
+                "active",
+            )
             .unwrap();
 
         // proj2 must NOT delete proj1's memory
@@ -216,9 +243,45 @@ mod crud_tests {
     }
 
     #[test]
+    fn test_update_no_fields_supplied_returns_error() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        let id = db
+            .insert("proj1", "original", &embedding, None, "fact", "active")
+            .unwrap();
+
+        // All optional fields are None — only updated_at would be set, which is rejected
+        let result = db.update(
+            &id,
+            "proj1",
+            UpdateOptions {
+                content: None,
+                embedding: None,
+                metadata: None,
+                memory_type: None,
+                status: None,
+            },
+        );
+        assert!(
+            result.is_err(),
+            "update with no fields supplied must return an error"
+        );
+        match result.unwrap_err() {
+            crate::sqlite::Error::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("At least one field"),
+                    "expected 'At least one field' message, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected InvalidInput error, got: {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_embedding_roundtrip() {
         let db = create_test_db();
-        let original = vec![0.123f32, 0.456f32, 0.789f32];
+        let original = [0.123f32, 0.456f32, 0.789f32];
         let mut full_embedding = vec![0.1f32; EMBEDDING_DIMS];
         full_embedding[0] = original[0];
         full_embedding[1] = original[1];

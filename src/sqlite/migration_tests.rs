@@ -354,7 +354,7 @@ mod migration_tests {
             .unwrap();
 
         assert_eq!(results1.len(), results2.len());
-        if results1.len() > 0 {
+        if !results1.is_empty() {
             assert_eq!(results1[0].id, results2[0].id);
         }
 
@@ -438,8 +438,15 @@ mod migration_tests {
         let db = create_test_db();
         let embedding = vec![0.1f32; 384];
         for i in 0..5 {
-            db.insert("proj1", &format!("content {}", i), &embedding, None, "fact", "active")
-                .unwrap();
+            db.insert(
+                "proj1",
+                &format!("content {}", i),
+                &embedding,
+                None,
+                "fact",
+                "active",
+            )
+            .unwrap();
         }
 
         let memories = db.list("proj1", 2, None, None).unwrap();

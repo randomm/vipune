@@ -1,7 +1,7 @@
 //! FTS5 tests.
 #[cfg(test)]
 mod tests {
-    use super::super::Database;
+    use super::super::{Database, UpdateOptions};
     use tempfile::TempDir;
 
     fn create_test_db() -> Database {
@@ -50,11 +50,14 @@ mod tests {
 
         db.update(
             &id,
-            Some("updated text"),
-            Some(&embedding.as_slice()),
-            None,
-            None,
-            None,
+            "proj1",
+            UpdateOptions {
+                content: Some("updated text"),
+                embedding: Some(&embedding.as_slice()),
+                metadata: None,
+                memory_type: None,
+                status: None,
+            },
         )
         .unwrap();
         assert_eq!(

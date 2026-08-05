@@ -1,8 +1,8 @@
 //! Command handlers for vipune CLI.
 
 use crate::errors::Error;
-use crate::memory::MemoryStore;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::{MemoryStore, UpdateParams};
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
 use crate::{config, embedding::EmbeddingEngine, temporal};
@@ -342,30 +342,11 @@ pub(crate) fn handle_delete(
 pub(crate) fn handle_update(
     store: &mut MemoryStore,
     id: &str,
-    text: Option<&str>,
-    metadata: Option<&str>,
-    memory_type: Option<&str>,
-    status: Option<&str>,
+    project_id: &str,
+    args: UpdateParams<'_>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    if text.is_none() && metadata.is_none() && memory_type.is_none() && status.is_none() {
-        return Err(Error::InvalidInput(
-            "At least one of text, metadata, memory_type, or status must be provided".to_string(),
-        ));
-    }
-
-    if let Some(meta) = metadata {
-        if meta.trim().is_empty() {
-            return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
-        }
-        serde_json::from_str::<serde_json::Value>(meta)
-            .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
-    }
-
-    let memory_type_val = memory_type.map(MemoryType::from_str).transpose()?;
-    let status_val = status.map(MemoryStatus::from_str).transpose()?;
-
-    store.update(id, text, metadata, memory_type_val, status_val)?;
+    store.update(id, project_id, args)?;
     if json {
         print_json(&UpdateResponse {
             status: "updated".to_string(),

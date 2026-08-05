@@ -9,6 +9,22 @@ use crate::sqlite::Memory;
 
 use super::store::MemoryStore;
 
+/// Parameters for updating a memory.
+///
+/// Groups the optional fields that may be updated, reducing function signatures
+/// and making call sites self-documenting across all layers (handler, store, wrapper).
+#[derive(Clone, Debug, Default)]
+pub struct UpdateParams<'a> {
+    /// New text content for the memory.
+    pub text: Option<&'a str>,
+    /// New metadata JSON string (full replacement).
+    pub metadata: Option<&'a str>,
+    /// New memory type.
+    pub memory_type: Option<MemoryType>,
+    /// New lifecycle status.
+    pub status: Option<MemoryStatus>,
+}
+
 /// Generate a deterministic mock embedding for specific content.
 /// Uses the content's bytes to create a unique but consistent embedding.
 /// This ensures that the same content always gets the same embedding.
@@ -267,15 +283,13 @@ impl MemoryStore {
     /// # Arguments
     ///
     /// * `id` - Memory ID to update
-    /// * `content` - Optional new content for the memory
-    /// * `metadata` - Optional JSON metadata string (replaces existing metadata)
-    /// * `memory_type` - Optional memory type to update
-    /// * `status` - Optional lifecycle status to update
+    /// * `project_id` - Project identifier
+    /// * `params` - Update parameters (at least one field must be provided)
     ///
     /// # Errors
     ///
     /// Returns error if:
-    /// - All content, metadata, memory_type, and status are None
+    /// - All fields in params are None
     /// - Content is provided and exceeds 100,000 characters
     /// - Memory doesn't exist
     /// - memory_type is invalid
@@ -283,11 +297,16 @@ impl MemoryStore {
     pub fn update(
         &mut self,
         id: &str,
-        content: Option<&str>,
-        metadata: Option<&str>,
-        memory_type: Option<MemoryType>,
-        status: Option<MemoryStatus>,
+        project_id: &str,
+        params: UpdateParams<'_>,
     ) -> Result<(), Error> {
+        let UpdateParams {
+            text: content,
+            metadata,
+            memory_type,
+            status,
+        } = params;
+
         if content.is_none() && metadata.is_none() && memory_type.is_none() && status.is_none() {
             return Err(Error::InvalidInput(
                 "At least one of content, metadata, memory_type, or status must be provided"
@@ -324,11 +343,14 @@ impl MemoryStore {
 
         Ok(self.db.update(
             id,
-            content,
-            embedding.as_deref(),
-            metadata,
-            memory_type.map(|t| t.as_str()),
-            status.map(|s| s.as_str()),
+            project_id,
+            crate::sqlite::UpdateOptions {
+                content,
+                embedding: embedding.as_deref(),
+                metadata,
+                memory_type: memory_type.map(|t| t.as_str()),
+                status: status.map(|s| s.as_str()),
+            },
         )?)
     }
 
