@@ -19,9 +19,11 @@ impl super::Database {
     /// - Embedding has invalid dimensions (when content is provided)
     /// - Memory not found
     /// - Query fails
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &self,
         id: &str,
+        project_id: &str,
         content: Option<&str>,
         embedding: Option<&[f32]>,
         metadata: Option<&str>,
@@ -71,12 +73,13 @@ impl super::Database {
         params.push(Box::new(now));
 
         let sql = format!(
-            "UPDATE memories SET {} WHERE id = ?",
+            "UPDATE memories SET {} WHERE id = ? AND project_id = ?",
             set_clauses.join(", ")
         );
 
-        // Add id as last parameter
+        // Add id and project_id as last parameters
         params.push(Box::new(id.to_string()));
+        params.push(Box::new(project_id.to_string()));
 
         let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
         let rows = self.conn.execute(&sql, param_refs.as_slice())?;

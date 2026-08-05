@@ -70,7 +70,7 @@ mod crud_tests {
             .insert("proj1", "original", &embedding, None, "fact", "active")
             .unwrap();
 
-        db.update(&id, Some("updated"), Some(&embedding), None, None, None)
+        db.update(&id, "proj1", Some("updated"), Some(&embedding), None, None, None)
             .unwrap();
 
         let m = db.get(&id, "proj1").unwrap().unwrap();
@@ -83,6 +83,7 @@ mod crud_tests {
         let embedding = vec![0.1f32; 384];
         let result = db.update(
             "nonexistent",
+            "proj1",
             Some("content"),
             Some(&embedding),
             None,

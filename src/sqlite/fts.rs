@@ -333,6 +333,7 @@ mod tests {
 
         db.update(
             &id,
+            "proj1",
             Some("updated text"),
             Some(&embedding.as_slice()),
             None,

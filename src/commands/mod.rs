@@ -272,6 +272,7 @@ pub fn execute(
         } => handlers::handle_update(
             store,
             id,
+            &project_id,
             text.as_deref(),
             metadata.as_deref(),
             memory_type.as_deref(),

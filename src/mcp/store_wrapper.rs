@@ -355,6 +355,7 @@ impl StoreWrapper {
     pub(crate) fn update(
         &self,
         id: &str,
+        project_id: &str,
         text: Option<&str>,
         metadata: Option<&str>,
         memory_type: Option<MemoryType>,
@@ -368,7 +369,7 @@ impl StoreWrapper {
             )
         })?;
         store
-            .update(id, text, metadata, memory_type, status)
+            .update(id, project_id, text, metadata, memory_type, status)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
     }
 

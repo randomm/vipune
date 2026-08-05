@@ -283,6 +283,7 @@ impl MemoryStore {
     pub fn update(
         &mut self,
         id: &str,
+        project_id: &str,
         content: Option<&str>,
         metadata: Option<&str>,
         memory_type: Option<MemoryType>,
@@ -324,6 +325,7 @@ impl MemoryStore {
 
         Ok(self.db.update(
             id,
+            project_id,
             content,
             embedding.as_deref(),
             metadata,

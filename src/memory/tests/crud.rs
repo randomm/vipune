@@ -61,8 +61,16 @@ fn test_update_memory() {
         )
         .unwrap();
 
-    db.update(&id, Some("updated"), Some(&embedding_new), None, None, None)
-        .unwrap();
+    db.update(
+        &id,
+        "test-project",
+        Some("updated"),
+        Some(&embedding_new),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let memory = db.get(&id, "test-project").unwrap().unwrap();
     assert_eq!(memory.content, "updated");
@@ -81,6 +89,7 @@ fn test_update_nonexistent() {
 
     let result = db.update(
         "does-not-exist",
+        "test-project",
         Some("content"),
         Some(&embedding),
         None,
@@ -88,6 +97,44 @@ fn test_update_nonexistent() {
         None,
     );
     assert!(result.is_err());
+}
+
+#[test]
+fn test_update_cross_project_isolation() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.db");
+    std::mem::forget(dir);
+
+    let db = Database::open(&path).unwrap();
+    let embedding = vec![0.5f32; 384];
+
+    let id = db
+        .insert(
+            "proj-a",
+            "content in proj-a",
+            &embedding,
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+
+    // Attempt to update with wrong project_id — should fail (0 rows affected)
+    let result = db.update(
+        &id,
+        "proj-b",
+        Some("malicious update"),
+        Some(&embedding),
+        None,
+        None,
+        None,
+    );
+    assert!(result.is_err(), "update with wrong project_id must fail");
+
+    // Verify content was NOT modified
+    let memory = db.get(&id, "proj-a").unwrap().unwrap();
+    assert_eq!(memory.content, "content in proj-a");
 }
 
 #[test]

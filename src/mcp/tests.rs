@@ -430,7 +430,8 @@ mod tool_handler_tests {
         let id = response["id"].as_str().unwrap();
 
         // Update the memory with new text
-        let update_result = wrapper.update(id, Some("updated content"), None, None, None);
+        let update_result =
+            wrapper.update(id, project_id, Some("updated content"), None, None, None);
         assert!(update_result.is_ok(), "update should succeed");
 
         // Verify the content changed by getting the memory
@@ -444,7 +445,8 @@ mod tool_handler_tests {
         // Update with new metadata
         let new_metadata = serde_json::json!({"topic": "test", "updated": true});
         let metadata_str = serde_json::to_string(&new_metadata).unwrap();
-        let update_meta_result = wrapper.update(id, None, Some(&metadata_str), None, None);
+        let update_meta_result =
+            wrapper.update(id, project_id, None, Some(&metadata_str), None, None);
         assert!(update_meta_result.is_ok());
 
         // Verify metadata updated
@@ -459,7 +461,7 @@ mod tool_handler_tests {
         assert_eq!(stored_metadata, new_metadata);
 
         // Try to update with all None optional fields, should fail
-        let update_none_result = wrapper.update(id, None, None, None, None);
+        let update_none_result = wrapper.update(id, project_id, None, None, None, None);
         assert!(
             update_none_result.is_err(),
             "update with all None fields should fail"
@@ -468,6 +470,7 @@ mod tool_handler_tests {
         // Update with new type and status
         let update_type_status_result = wrapper.update(
             id,
+            project_id,
             None,
             None,
             Some(MemoryType::Preference),

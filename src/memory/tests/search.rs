@@ -366,7 +366,14 @@ fn test_integration_update_changes_embedding() {
     };
 
     store
-        .update(&id, Some("completely different content"), None, None, None)
+        .update(
+            &id,
+            "test-project",
+            Some("completely different content"),
+            None,
+            None,
+            None,
+        )
         .unwrap();
 
     let memory = store.get(&id, "test-project").unwrap().unwrap();

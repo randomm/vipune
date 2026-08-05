@@ -431,6 +431,7 @@ impl ToolHandler {
         // Perform the update
         self.store.update(
             &params.id,
+            &self.project_id,
             text_str,
             metadata_str.as_deref(),
             memory_type_val,

@@ -339,9 +339,11 @@ pub(crate) fn handle_delete(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_update(
     store: &mut MemoryStore,
     id: &str,
+    project_id: &str,
     text: Option<&str>,
     metadata: Option<&str>,
     memory_type: Option<&str>,
@@ -365,7 +367,7 @@ pub(crate) fn handle_update(
     let memory_type_val = memory_type.map(MemoryType::from_str).transpose()?;
     let status_val = status.map(MemoryStatus::from_str).transpose()?;
 
-    store.update(id, text, metadata, memory_type_val, status_val)?;
+    store.update(id, project_id, text, metadata, memory_type_val, status_val)?;
     if json {
         print_json(&UpdateResponse {
             status: "updated".to_string(),

@@ -352,7 +352,7 @@ fn test_update_with_empty_input_returns_error() {
     };
 
     // Try to update with empty string
-    let result = store.update(&memory_id, Some(""), None, None, None);
+    let result = store.update(&memory_id, "test", Some(""), None, None, None);
     assert!(result.is_err());
     if !matches!(result.as_ref().unwrap_err(), Error::EmptyInput) {
         panic!("Expected EmptyInput error");
@@ -388,7 +388,7 @@ fn test_update_with_oversized_input_returns_error() {
 
     // Try to update with oversized content
     let long_text = "x".repeat(MAX_INPUT_LENGTH + 1);
-    let result = store.update(&memory_id, Some(&long_text), None, None, None);
+    let result = store.update(&memory_id, "test", Some(&long_text), None, None, None);
     assert!(result.is_err());
     if let Error::InputTooLong {
         max_length,
@@ -1220,7 +1220,14 @@ fn test_update_text_only_preserves_metadata() {
 
     // Update only text
     store
-        .update(&id, Some("updated content"), None, None, None)
+        .update(
+            &id,
+            "test-project",
+            Some("updated content"),
+            None,
+            None,
+            None,
+        )
         .expect("Failed to update");
 
     // Verify content updated but metadata preserved
@@ -1263,7 +1270,14 @@ fn test_update_with_invalid_json_metadata_returns_error() {
     };
 
     // Try to update with invalid JSON - should fail
-    let result = store.update(&id, None, Some(r#"{this is not valid json"#), None, None);
+    let result = store.update(
+        &id,
+        "test-project",
+        None,
+        Some(r#"{this is not valid json"#),
+        None,
+        None,
+    );
     assert!(result.is_err());
     match result {
         Err(Error::InvalidInput(msg)) => {
@@ -1312,7 +1326,7 @@ fn test_update_with_empty_metadata_returns_error() {
     };
 
     // Try to update with empty metadata - should fail
-    let result = store.update(&id, None, Some(""), None, None);
+    let result = store.update(&id, "test-project", None, Some(""), None, None);
     assert!(result.is_err());
     match result {
         Err(Error::InvalidInput(msg)) => {
@@ -1361,7 +1375,7 @@ fn test_update_with_whitespace_only_metadata_returns_error() {
     };
 
     // Try to update with whitespace-only metadata - should fail
-    let result = store.update(&id, None, Some("   "), None, None);
+    let result = store.update(&id, "test-project", None, Some("   "), None, None);
     assert!(result.is_err());
     match result {
         Err(Error::InvalidInput(msg)) => {
@@ -1411,7 +1425,14 @@ fn test_update_metadata_only() {
 
     // Update metadata only
     store
-        .update(&id, None, Some(r#"{"tag": "new"}"#), None, None)
+        .update(
+            &id,
+            "test-project",
+            None,
+            Some(r#"{"tag": "new"}"#),
+            None,
+            None,
+        )
         .expect("Failed to update");
 
     // Verify metadata added but content unchanged
@@ -1457,6 +1478,7 @@ fn test_update_both_text_and_metadata() {
     store
         .update(
             &id,
+            project_id,
             Some("new content"),
             Some(r#"{"new": "value"}"#),
             None,
