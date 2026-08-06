@@ -65,6 +65,28 @@ fn main() -> ExitCode {
     }
 }
 
+/// Map the binary crate's locally-loaded `config::Config` into the library
+/// crate's `vipune::Config`.
+///
+/// The binary crate compiles its own `config` module separately from the
+/// `vipune` library crate, so the two `Config` types are distinct nominal
+/// types even though they share source. This mapping must stay pure, total,
+/// and field-by-field — no `..Default::default()` — because a
+/// `..Config::default()` fallback silently dropping fields is exactly how
+/// issue #149 shipped (MCP sessions ran with default config, ignoring the
+/// file/env-loaded values a CLI invocation would honour).
+#[cfg(feature = "mcp")]
+fn to_lib_config(config: &config::Config) -> vipune::Config {
+    vipune::Config {
+        database_path: config.database_path.clone(),
+        embedding_model: config.embedding_model.clone(),
+        model_cache: config.model_cache.clone(),
+        similarity_threshold: config.similarity_threshold,
+        recency_weight: config.recency_weight,
+        hybrid: config.hybrid,
+    }
+}
+
 fn run(cli: &Cli) -> Result<ExitCode, Error> {
     let mut config = config::Config::load()?;
     config.ensure_directories()?;
@@ -78,13 +100,15 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
     // Handle MCP command separately (doesn't use MemoryStore directly)
     #[cfg(feature = "mcp")]
     if matches!(cli.command, Commands::Mcp) {
-        // MCP server run_mcp uses library types; map to local error type
-        vipune::mcp::server::run_mcp(
-            config.embedding_model.clone(),
-            &project_id,
-            config.database_path.clone(),
-        )
-        .map_err(|e| Error::Config(e.to_string()))?;
+        // MCP server run_mcp uses library types; map to local error type.
+        // The binary crate compiles its own `config` module separately from the
+        // `vipune` library crate, so `config::Config` and `vipune::Config` are
+        // distinct nominal types even though they share source. Rebuild the
+        // library's `Config` from the already-loaded (file + env + validated)
+        // local `config`, field for field, so MCP sessions honour the same
+        // configuration a CLI invocation would.
+        vipune::mcp::server::run_mcp(to_lib_config(&config), &project_id)
+            .map_err(|e| Error::Config(e.to_string()))?;
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -101,6 +125,42 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
 mod tests {
     use super::*;
     use memory_types::{BatchIngestItemResult, IngestPolicy};
+    #[cfg(feature = "mcp")]
+    use std::path::PathBuf;
+
+    /// Regression test for #149: the `config::Config -> vipune::Config`
+    /// mapping must carry every field through unchanged. Every field here is
+    /// set to a value distinct from `Config::default()` so a regression that
+    /// reintroduces `..Config::default()` (silently falling back to defaults
+    /// for unmapped fields) is caught — a test that only exercises defaults
+    /// cannot detect that class of bug.
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn test_to_lib_config_maps_all_fields_non_default() {
+        let local_config = config::Config {
+            database_path: PathBuf::from("/nondefault/db/path.sqlite"),
+            embedding_model: "nondefault/embedding-model".to_string(),
+            model_cache: PathBuf::from("/nondefault/model/cache"),
+            similarity_threshold: 0.42,
+            recency_weight: 0.77,
+            hybrid: true,
+        };
+
+        let lib_config = to_lib_config(&local_config);
+
+        assert_eq!(
+            lib_config.database_path,
+            PathBuf::from("/nondefault/db/path.sqlite")
+        );
+        assert_eq!(lib_config.embedding_model, "nondefault/embedding-model");
+        assert_eq!(
+            lib_config.model_cache,
+            PathBuf::from("/nondefault/model/cache")
+        );
+        assert_eq!(lib_config.similarity_threshold, 0.42);
+        assert_eq!(lib_config.recency_weight, 0.77);
+        assert!(lib_config.hybrid);
+    }
 
     #[test]
     fn test_cli_parse_add() {
