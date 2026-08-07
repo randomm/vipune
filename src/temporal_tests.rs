@@ -2,8 +2,8 @@
 #[cfg(test)]
 mod tests {
     use super::super::{DecayConfig, DecayFunction, apply_recency_weight, validate_recency_weight};
-    use chrono::{DateTime, Utc};
     use chrono::Duration;
+    use chrono::Utc;
 
     #[test]
     fn test_exponential_decay_brand_new() {
