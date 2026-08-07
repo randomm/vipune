@@ -18,7 +18,7 @@
 //! use vipune::mcp::server::run_mcp;
 //!
 //! let config = Config::default();
-//! run_mcp(config.embedding_model, "default", config.database_path).expect("Failed to start MCP server");
+//! run_mcp(config, "default").expect("Failed to start MCP server");
 //! ```
 
 mod helpers;

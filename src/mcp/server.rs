@@ -5,7 +5,6 @@ use crate::embedding::EmbeddingEngine;
 use crate::errors::Error;
 use crate::mcp::tools::ToolHandler;
 use crate::memory::MemoryStore;
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,18 +16,17 @@ use std::time::Duration;
 /// 2. Creates a tokio runtime
 /// 3. Serves the MCP protocol over stdio
 ///
+/// The caller is responsible for producing a fully-loaded `Config` (defaults
+/// merged with config-file values and `VIPUNE_*` environment overrides, e.g.
+/// via `Config::load()`) so that MCP sessions honour the same configuration
+/// a CLI invocation would.
+///
 /// # Errors
 ///
 /// Returns error if:
 /// - MemoryStore initialization fails
 /// - Project detection fails
-pub fn run_mcp(embedding_model: String, project_id: &str, db_path: PathBuf) -> Result<(), Error> {
-    // Use provided embedding_model and db_path directly
-    let config = Config {
-        embedding_model,
-        database_path: db_path.clone(),
-        ..Config::default()
-    };
+pub fn run_mcp(config: Config, project_id: &str) -> Result<(), Error> {
     let mut store = MemoryStore::new(
         &config.database_path,
         &config.embedding_model,

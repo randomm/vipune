@@ -43,6 +43,30 @@ mod tool_handler_tests {
         );
     }
 
+    /// Regression test for #149: `ToolHandler::new` must retain the exact
+    /// config it is constructed with. `recency_weight` and `hybrid` are set
+    /// to non-default values here so a regression that falls back to
+    /// `Config::default()` (or drops a field via `..Config::default()`
+    /// somewhere upstream of construction) is observable on the handler.
+    #[test]
+    fn test_tool_handler_retains_non_default_config() {
+        let store = create_test_store();
+        let config = Config {
+            recency_weight: 0.91,
+            hybrid: true,
+            ..Config::default()
+        };
+
+        let handler = ToolHandler::new(
+            Arc::new(Mutex::new(store)),
+            "test-project".to_string(),
+            config,
+        );
+
+        assert_eq!(handler.config().recency_weight, 0.91);
+        assert!(handler.config().hybrid);
+    }
+
     /// Test that parameter structs are valid for serde.
     #[test]
     fn test_store_memory_params_serde() {

@@ -36,6 +36,14 @@ impl ToolHandler {
             config,
         }
     }
+
+    /// Test-only accessor exposing the stored config, so tests can assert
+    /// that `ToolHandler::new` retains the exact config it was given rather
+    /// than silently falling back to defaults for any field (see #149).
+    #[cfg(test)]
+    pub(crate) fn config(&self) -> &crate::config::Config {
+        &self.config
+    }
 }
 
 #[tool_router]
