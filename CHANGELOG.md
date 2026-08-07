@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ## [0.9.0] - 2026-08-07
 
+### Bug Fixes
+
+- *(#149)* Honour loaded config in MCP server sessions ([#175](https://github.com/randomm/vipune/pull/175))
+
+  `run_mcp` rebuilt its `Config` from only `embedding_model` and `database_path` with `..Config::default()`, so `similarity_threshold`, `recency_weight` and `hybrid` silently reverted to defaults for every MCP session. MCP now honours the same file- and environment-loaded configuration a CLI invocation does.
+
+  Note: `model_cache` is carried through the mapping but remains inert — nothing outside `config/` reads it. Making it functional is tracked in #148.
+
+### ⚠ Breaking Changes
+
+- `vipune::mcp::server::run_mcp` now takes `(config: Config, project_id: &str)` instead of `(embedding_model: String, project_id: &str, db_path: PathBuf)`. Library consumers calling `run_mcp` directly must pass a fully-loaded `Config` (e.g. from `Config::load()`). CLI and MCP users are unaffected.
+
 
 ## [0.8.0] - 2026-08-05
 
