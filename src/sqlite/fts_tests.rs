@@ -1,7 +1,7 @@
 //! FTS5 tests.
 #[cfg(test)]
 mod tests {
-    use super::super::{Database, UpdateOptions};
+    use crate::sqlite::{Database, UpdateOptions};
     use tempfile::TempDir;
 
     fn create_test_db() -> Database {
