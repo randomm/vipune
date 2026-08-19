@@ -85,7 +85,32 @@ pub fn blob_to_vec(blob: &[u8]) -> Result<Vec<f32>> {
 /// - Returns `Error::EmptyVector` if either vector is empty.
 /// - Returns `Error::MismatchedDimensions` if vectors have different lengths.
 /// - Returns `Error::InvalidEmbedding` if any value is NaN or infinite.
+// Only called from tests; production search paths use
+// `cosine_similarity_with_norm` with a hoisted query norm. The exact-equality
+// test locks this function as the reference implementation.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f64> {
+    let norm_a: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    cosine_similarity_with_norm(a, norm_a, b)
+}
+
+/// Compute cosine similarity between two embedding vectors, taking the L2 norm
+/// of `a` as a precomputed parameter so a caller (e.g. `Database::search`) can
+/// hoist the query-vector norm out of a per-row loop.
+///
+/// **Invariant:** `norm_a` MUST be the L2 norm of `a`, computed with the same
+/// f64 accumulation expression as here (`(*x as f64).powi(2)` / `.sum::<f64>()`
+/// / `.sqrt()`). Passing a norm computed from `b` — or computed in f32, e.g.
+/// via `l2_normalize` — silently yields wrong results: the zero-norm guard is
+/// bypassed or misfired, and the division is off. The exact-equality test in
+/// `tests` is the lock against operand-order or precision regressions.
+///
+/// # Errors
+///
+/// - Returns `Error::EmptyVector` if either vector is empty.
+/// - Returns `Error::MismatchedDimensions` if vectors have different lengths.
+/// - Returns `Error::InvalidEmbedding` if any value is NaN or infinite.
+pub(crate) fn cosine_similarity_with_norm(a: &[f32], norm_a: f64, b: &[f32]) -> Result<f64> {
     if a.is_empty() || b.is_empty() {
         return Err(Error::EmptyVector);
     }
@@ -110,7 +135,6 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f64> {
         .zip(b.iter())
         .map(|(x, y)| (*x as f64) * (*y as f64))
         .sum();
-    let norm_a: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
     let norm_b: f64 = b.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
 
     if norm_a == 0.0 || norm_b == 0.0 {
@@ -213,6 +237,89 @@ mod tests {
         let vec = vec![1.0f32; 384];
         let sim = cosine_similarity(&zero, &vec).unwrap();
         assert_eq!(sim, 0.0);
+    }
+
+    fn norm_of(v: &[f32]) -> f64 {
+        v.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt()
+    }
+
+    /// Fixed-seed pseudorandom vector in [-1, 1] (SplitMix64, seed 42).
+    fn fixed_seed_pseudorandom() -> Vec<f32> {
+        let mut state: u64 = 42;
+        (0..384)
+            .map(|_| {
+                state = state.wrapping_add(0x9e3779b97f4a7c15);
+                let mut z = state;
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+                z ^= z >> 31;
+                (z % 2000) as f32 / 1000.0 - 1.0
+            })
+            .collect()
+    }
+
+    /// Behaviour-preservation lock: the hoisted-norm variant must be bit-
+    /// identical to `cosine_similarity` for the same inputs. `assert_eq!` is
+    /// exact — any reordering of the f64 accumulation or an operand swap in
+    /// `norm_a` breaks at least one of these fixtures.
+    #[test]
+    fn test_cosine_similarity_with_norm_exact_equality() {
+        let b = vec![0.7f32; 384];
+        let fixtures: Vec<Vec<f32>> = vec![
+            vec![0.1f32; 384],
+            vec![0.5f32; 384],
+            vec![1.0f32; 384],
+            (0..384)
+                .map(|i| if i % 2 == 0 { 1.0f32 } else { -1.0f32 })
+                .collect(),
+            fixed_seed_pseudorandom(),
+            vec![0.0f32; 384],
+        ];
+        for a in &fixtures {
+            let expected = cosine_similarity(a, &b).unwrap();
+            let actual = cosine_similarity_with_norm(a, norm_of(a), &b).unwrap();
+            assert_eq!(actual, expected, "fixture norm: {}", norm_of(a));
+        }
+    }
+
+    /// A zero-norm query through the hoisted variant returns Ok(0.0), matching
+    /// `test_cosine_similarity_zero_norm`.
+    #[test]
+    fn test_cosine_similarity_with_norm_zero_norm_query() {
+        let zero = vec![0.0f32; 384];
+        let vec = vec![1.0f32; 384];
+        let sim = cosine_similarity_with_norm(&zero, norm_of(&zero), &vec).unwrap();
+        assert_eq!(sim, 0.0);
+    }
+
+    /// Both entry points must return the same Error variant for each invalid
+    /// input shape: empty, mismatched dimensions, NaN, infinite.
+    #[test]
+    fn test_cosine_similarity_error_parity() {
+        let empty = Vec::new();
+        let a384 = vec![1.0f32; 384];
+        let b256 = vec![1.0f32; 256];
+        let mut nan = vec![1.0f32; 384];
+        nan[0] = f32::NAN;
+        let mut inf = vec![1.0f32; 384];
+        inf[0] = f32::INFINITY;
+
+        let cases: [(&[f32], &[f32]); 4] = [
+            (&empty, &a384),
+            (&a384, &b256),
+            (&nan, &a384),
+            (&inf, &a384),
+        ];
+        for (a, b) in cases {
+            let na = norm_of(a);
+            match (
+                cosine_similarity(a, b),
+                cosine_similarity_with_norm(a, na, b),
+            ) {
+                (Err(e1), Err(e2)) => assert_eq!(format!("{e1:?}"), format!("{e2:?}")),
+                other => panic!("expected both to error, got {:?}", other),
+            }
+        }
     }
 
     // ---- Embedding classification tests ----
