@@ -340,6 +340,30 @@ The final score combines semantic similarity and recency time decay:
 - `score = (1 - recency_weight) * similarity + recency_weight * time_score`
 - Default balance: 70% semantic, 30% recency
 
+## Benchmarks
+
+The repo ships a [Criterion](https://github.com/bheemallarasu/criterion)-style benchmark for the `Database::search` path. It benchmarks search over a synthetic corpus of 384-dim vectors at 1k and 10k rows, seeded only through the public API — no ONNX model and no network access required.
+
+Run the benchmark locally:
+
+```bash
+cargo bench
+```
+
+Criterion saves the results under `target/criterion/`, and the run named `main` is kept as the baseline for later runs. Compare a new run against it:
+
+```bash
+cargo bench -- --baseline main
+```
+
+On CI or shared runners where timings are noisier, use a more lenient comparison window:
+
+```bash
+cargo bench -- --baseline main --baseline-lenient
+```
+
+The bench reports timings only — it asserts no timing thresholds, so a slower result is a signal to look at, never a build failure.
+
 ## License
 
 Apache-2.0 © [Janni Turunen](https://github.com/randomm/vipune)

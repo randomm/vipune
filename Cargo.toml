@@ -57,7 +57,17 @@ path = "src/lib.rs"
 name = "vipune"
 path = "src/main.rs"
 
+# Criterion harness for Database::search (issue #183).
+# `test = false` is required: bench targets default to `test = true`, which would
+# build and run the bench binary during the default `cargo test` path and
+# lengthen the CI Test job. `harness = false` is required by criterion.
+[[bench]]
+name = "db_search"
+harness = false
+test = false
+
 [dev-dependencies]
+criterion = "0.5"
 tempfile = "3.13"
 tokio = { version = "1", features = ["macros", "rt"] }
 
