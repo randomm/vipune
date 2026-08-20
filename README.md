@@ -340,6 +340,40 @@ The final score combines semantic similarity and recency time decay:
 - `score = (1 - recency_weight) * similarity + recency_weight * time_score`
 - Default balance: 70% semantic, 30% recency
 
+## Benchmarks
+
+The repo ships a [Criterion](https://github.com/bheisler/criterion.rs) benchmark for the `Database::search` path. It benchmarks search over a synthetic corpus of 384-dim vectors at 1k and 10k rows, seeded only through the public API — no ONNX model and no network access required.
+
+Run the benchmark locally:
+
+```bash
+cargo bench
+```
+
+A plain `cargo bench` compares the run against a stored `main` baseline when one exists (lenient mode: reports differences, never fails on them) and **never overwrites the baseline**.
+
+Record or refresh the `main` baseline deliberately — this is the only run that writes to the baseline store:
+
+```bash
+cargo bench -- --save-baseline main
+```
+
+After a performance-shaped change, force a strict comparison against it (fails only if the baseline is missing; a regression is reported in red text but does not fail the run):
+
+```bash
+cargo bench -- --baseline main
+```
+
+Or a lenient comparison (reports the difference, no failure if the baseline is missing):
+
+```bash
+cargo bench -- --baseline-lenient main
+```
+
+Criterion stores results and baselines under `target/criterion/`. No committed baseline is bundled: baselines are machine-specific, so each machine records its own `main` baseline and later runs diff against that stable reference numerically.
+
+The bench reports timings only — it asserts no timing thresholds, so a slower result is a signal to look at, never a build failure.
+
 ## License
 
 Apache-2.0 © [Janni Turunen](https://github.com/randomm/vipune)
