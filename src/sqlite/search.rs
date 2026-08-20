@@ -105,6 +105,22 @@ impl Database {
 
         let mut memories: Vec<Memory> = Vec::new();
 
+        // The query vector is identical for every row in the scan, so its L2
+        // norm is computed exactly once here (f64 accumulation, matching
+        // `cosine_similarity_with_norm`) instead of once per row. This is
+        // safe because `query_norm` is read only at the final division, which
+        // is unreachable for the degenerate cases: an empty corpus leaves the
+        // per-row loop unrun; a NaN, empty, or dimension-mismatched query
+        // errors before the division; and a zero-norm operand (all-zero
+        // query or stored vector) hits the `Ok(0.0)` guard first. (A NaN
+        // query yields a NaN hoisted norm — NaN squared is NaN — but that
+        // path errors as well.)
+        let query_norm: f64 = query_embedding
+            .iter()
+            .map(|x| (*x as f64).powi(2))
+            .sum::<f64>()
+            .sqrt();
+
         let rows = stmt.query_map(params.as_slice(), |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -144,8 +160,9 @@ impl Database {
                     Box::new(e),
                 )
             })?;
-            let similarity = Some(embedding::cosine_similarity(
+            let similarity = Some(embedding::cosine_similarity_with_norm(
                 query_embedding,
+                query_norm,
                 &stored_embedding,
             )?);
 
@@ -301,6 +318,26 @@ mod tests {
         let results = db.search("proj1", &embedding, 10, None, None).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].project_id, "proj1");
+    }
+
+    #[test]
+    fn test_search_empty_corpus_degenerate_queries() {
+        let db = create_test_db();
+
+        // Zero rows for "proj1": the per-row validation inside cosine_similarity
+        // never runs, so degenerate query vectors must return Ok(empty), not Err.
+        // This locks the empty-corpus contract: hoisting validation out of the
+        // loop (a follow-up) would break this test and force an explicit
+        // contract decision.
+
+        // Empty query vector
+        let results = db.search("proj1", &[], 10, None, None).unwrap();
+        assert!(results.is_empty());
+
+        // NaN-containing query vector
+        let nan_query: Vec<f32> = vec![f32::NAN; 384];
+        let results = db.search("proj1", &nan_query, 10, None, None).unwrap();
+        assert!(results.is_empty());
     }
 
     #[test]
