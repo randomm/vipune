@@ -342,7 +342,7 @@ The final score combines semantic similarity and recency time decay:
 
 ## Benchmarks
 
-The repo ships a [Criterion](https://github.com/bheemallarasu/criterion)-style benchmark for the `Database::search` path. It benchmarks search over a synthetic corpus of 384-dim vectors at 1k and 10k rows, seeded only through the public API — no ONNX model and no network access required.
+The repo ships a [Criterion](https://github.com/bheisler/criterion.rs) benchmark for the `Database::search` path. It benchmarks search over a synthetic corpus of 384-dim vectors at 1k and 10k rows, seeded only through the public API — no ONNX model and no network access required.
 
 Run the benchmark locally:
 
@@ -350,17 +350,27 @@ Run the benchmark locally:
 cargo bench
 ```
 
-Criterion saves the results under `target/criterion/`, and the run named `main` is kept as the baseline for later runs. Compare a new run against it:
+A plain `cargo bench` compares the run against a stored `main` baseline when one exists (lenient mode: reports differences, never fails on them) and **never overwrites the baseline**.
+
+Record or refresh the `main` baseline deliberately — this is the only run that writes to the baseline store:
+
+```bash
+cargo bench -- --save-baseline main
+```
+
+After a performance-shaped change, force a strict comparison against it (fails only if the baseline is missing; a regression is reported in red text but does not fail the run):
 
 ```bash
 cargo bench -- --baseline main
 ```
 
-On CI or shared runners where timings are noisier, use a more lenient comparison window:
+Or a lenient comparison (reports the difference, no failure if the baseline is missing):
 
 ```bash
-cargo bench -- --baseline main --baseline-lenient
+cargo bench -- --baseline-lenient main
 ```
+
+Criterion stores results and baselines under `target/criterion/`. No committed baseline is bundled: baselines are machine-specific, so each machine records its own `main` baseline and later runs diff against that stable reference numerically.
 
 The bench reports timings only — it asserts no timing thresholds, so a slower result is a signal to look at, never a build failure.
 
