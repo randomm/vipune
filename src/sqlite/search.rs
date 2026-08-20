@@ -107,9 +107,14 @@ impl Database {
 
         // The query vector is identical for every row in the scan, so its L2
         // norm is computed exactly once here (f64 accumulation, matching
-        // `cosine_similarity_with_norm`) instead of once per row. For
-        // degenerate queries (NaN, empty) the value may be NaN or 0.0; it is
-        // simply unused because the per-row call errors or the loop never runs.
+        // `cosine_similarity_with_norm`) instead of once per row. This is
+        // safe because `query_norm` is read only at the final division, which
+        // is unreachable for the degenerate cases: an empty corpus leaves the
+        // per-row loop unrun; a NaN, empty, or dimension-mismatched query
+        // errors before the division; and a zero-norm operand (all-zero
+        // query or stored vector) hits the `Ok(0.0)` guard first. (A NaN
+        // query yields a NaN hoisted norm — NaN squared is NaN — but that
+        // path errors as well.)
         let query_norm: f64 = query_embedding
             .iter()
             .map(|x| (*x as f64).powi(2))
@@ -148,7 +153,13 @@ impl Database {
                 retrieval_count,
                 last_retrieved_at,
             ) = row_result?;
-            let stored_embedding = embedding::blob_to_vec(&blob)?;
+            let stored_embedding = embedding::blob_to_vec(&blob).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Blob,
+                    Box::new(e),
+                )
+            })?;
             let similarity = Some(embedding::cosine_similarity_with_norm(
                 query_embedding,
                 query_norm,

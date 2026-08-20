@@ -78,22 +78,6 @@ pub fn blob_to_vec(blob: &[u8]) -> Result<Vec<f32>> {
     Ok(vec)
 }
 
-/// Compute cosine similarity between two embedding vectors.
-///
-/// # Errors
-///
-/// - Returns `Error::EmptyVector` if either vector is empty.
-/// - Returns `Error::MismatchedDimensions` if vectors have different lengths.
-/// - Returns `Error::InvalidEmbedding` if any value is NaN or infinite.
-// Only called from tests; production search paths use
-// `cosine_similarity_with_norm` with a hoisted query norm. The exact-equality
-// test locks this function as the reference implementation.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f64> {
-    let norm_a: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
-    cosine_similarity_with_norm(a, norm_a, b)
-}
-
 /// Compute cosine similarity between two embedding vectors, taking the L2 norm
 /// of `a` as a precomputed parameter so a caller (e.g. `Database::search`) can
 /// hoist the query-vector norm out of a per-row loop.
@@ -142,6 +126,15 @@ pub(crate) fn cosine_similarity_with_norm(a: &[f32], norm_a: f64, b: &[f32]) -> 
     }
 
     Ok(dot / (norm_a * norm_b))
+}
+
+/// Test-only reference implementation: computes `a`'s L2 norm with the exact
+/// expression documented on `cosine_similarity_with_norm`, then delegates.
+/// Locked as the reference by the exact-equality test in `tests`.
+#[cfg(test)]
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> Result<f64> {
+    let norm_a: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    cosine_similarity_with_norm(a, norm_a, b)
 }
 
 #[cfg(test)]
