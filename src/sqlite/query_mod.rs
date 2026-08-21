@@ -4,7 +4,7 @@
 
 use rusqlite::{Result as SqliteResult, Row, types::Type};
 
-use super::{Error, Memory};
+use super::{EMBEDDING_COLUMN, Error, Memory};
 use crate::embedding::EMBEDDING_DIMS;
 
 /// Map a SQLite row to a Memory struct without similarity score.
@@ -20,12 +20,13 @@ use crate::embedding::EMBEDDING_DIMS;
 /// Returns error if any column extraction fails or embedding has invalid dimensions.
 pub fn map_row_to_memory(row: &Row) -> SqliteResult<Memory> {
     let blob: Vec<u8> = row.get(4)?;
-    let embedding = super::embedding::blob_to_vec(&blob)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, Type::Blob, Box::new(e)))?;
+    let embedding = super::embedding::blob_to_vec(&blob).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(EMBEDDING_COLUMN, Type::Blob, Box::new(e))
+    })?;
 
     if embedding.len() != EMBEDDING_DIMS {
         return Err(rusqlite::Error::FromSqlConversionFailure(
-            4,
+            EMBEDDING_COLUMN,
             Type::Blob,
             Box::new(Error::MismatchedDimensions {
                 expected: EMBEDDING_DIMS,

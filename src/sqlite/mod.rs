@@ -125,6 +125,15 @@ impl From<rusqlite::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// 0-indexed column position of `embedding` in the canonical memory row shape
+/// `SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status,
+/// superseded_by, retrieval_count, last_retrieved_at [ , bm25(memories_fts) as bm25_score]`.
+///
+/// The `embedding` column is 0-indexed at 4 in every such SELECT. Shared by
+/// `FromSqlConversionFailure` error wrappers so the index cannot drift from the
+/// column list (issue #186).
+pub const EMBEDDING_COLUMN: usize = 4;
+
 /// SQLite database backend for vipune.
 pub struct Database {
     /// Active SQLite connection to the database.

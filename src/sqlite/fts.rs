@@ -1,6 +1,6 @@
 //! FTS5 full-text search and BM25 ranking (Issue #40).
 
-use super::{Database, Error, Memory};
+use super::{Database, EMBEDDING_COLUMN, Error, Memory};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -222,7 +222,7 @@ impl Database {
                 let blob: Vec<u8> = row.get(4)?;
                 let embedding = super::embedding::blob_to_vec(&blob).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        4,
+                        EMBEDDING_COLUMN,
                         rusqlite::types::Type::Blob,
                         Box::new(e),
                     )

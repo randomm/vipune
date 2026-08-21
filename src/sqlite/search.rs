@@ -1,6 +1,6 @@
 //! Semantic search and similarity operations.
 
-use super::{Database, Error, Memory, embedding};
+use super::{Database, EMBEDDING_COLUMN, Error, Memory, embedding};
 use crate::memory::store::MAX_SEARCH_LIMIT;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -155,7 +155,7 @@ impl Database {
             ) = row_result?;
             let stored_embedding = embedding::blob_to_vec(&blob).map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    6,
+                    EMBEDDING_COLUMN,
                     rusqlite::types::Type::Blob,
                     Box::new(e),
                 )
@@ -338,6 +338,38 @@ mod tests {
         let nan_query: Vec<f32> = vec![f32::NAN; 384];
         let results = db.search("proj1", &nan_query, 10, None, None).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_corrupt_embedding_names_embedding_column() {
+        let db = create_test_db();
+        let conn = db.conn();
+        // Insert a row whose embedding BLOB is not a valid f32 buffer:
+        // 3 bytes cannot be reinterpreted as f32 values.
+        conn.execute(
+            r#"
+            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, retrieval_count, last_retrieved_at)
+            VALUES ('corrupt-id', 'proj1', 'corrupt', X'000102', NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'fact', 'active', 0, NULL)
+            "#,
+            [],
+        )
+        .unwrap();
+
+        let query = vec![0.1f32; 384];
+        let err = db.search("proj1", &query, 10, None, None).unwrap_err();
+
+        // The error surfaces as Error::Sqlite(err.to_string()); the
+        // FromSqlConversionFailure display includes "Conversion error from type Blob at index: 4".
+        match err {
+            Error::Sqlite(msg) => {
+                assert!(
+                    msg.contains("at index: 4"),
+                    "expected embedding column index 4 in error, got: {}",
+                    msg
+                );
+            }
+            other => panic!("expected Sqlite error, got: {:?}", other),
+        }
     }
 
     #[test]

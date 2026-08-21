@@ -2,7 +2,7 @@
 
 use rusqlite::Result as SqliteResult;
 
-use super::{Error, Result, map_row_to_memory};
+use super::{EMBEDDING_COLUMN, Error, Result, map_row_to_memory};
 
 impl super::Database {
     /// List memories for a project, ordered by creation time (newest first).
@@ -249,7 +249,7 @@ impl super::Database {
                 let blob: Vec<u8> = row.get(4)?;
                 let embedding = super::blob_to_vec(&blob).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(
-                        4,
+                        EMBEDDING_COLUMN,
                         rusqlite::types::Type::Blob,
                         Box::new(e),
                     )
