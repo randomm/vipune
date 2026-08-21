@@ -2,10 +2,25 @@
 //!
 //! Provides common row mapping and query construction utilities for the SQLite backend.
 
-use rusqlite::{Result as SqliteResult, Row, types::Type};
+use rusqlite::{Result as SqliteResult, Row, types::FromSqlError};
 
-use super::{Error, Memory};
+use super::{EMBEDDING_COLUMN, Error, Memory};
 use crate::embedding::EMBEDDING_DIMS;
+
+/// Build a row-level conversion failure at the embedding column that carries a
+/// `CorruptEmbedding` domain error (naming the affected memory id) as its
+/// source, so `From<rusqlite::Error> for Error` can surface it directly to
+/// callers (issue #186).
+pub(crate) fn corrupt_embedding_error(id: String, reason: Error) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        EMBEDDING_COLUMN,
+        rusqlite::types::Type::Blob,
+        Box::new(FromSqlError::other(Error::CorruptEmbedding {
+            id,
+            reason: reason.to_string(),
+        })),
+    )
+}
 
 /// Map a SQLite row to a Memory struct without similarity score.
 ///
@@ -17,25 +32,29 @@ use crate::embedding::EMBEDDING_DIMS;
 ///
 /// # Errors
 ///
-/// Returns error if any column extraction fails or embedding has invalid dimensions.
+/// Returns error if any column extraction fails or the embedding BLOB cannot be
+/// decoded. A corrupt BLOB yields `Error::CorruptEmbedding` naming the affected
+/// memory id, surfaced via the domain error carried as the source of the row-
+/// level `FromSqlConversionFailure` (issue #186).
 pub fn map_row_to_memory(row: &Row) -> SqliteResult<Memory> {
-    let blob: Vec<u8> = row.get(4)?;
-    let embedding = super::embedding::blob_to_vec(&blob)
-        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, Type::Blob, Box::new(e)))?;
+    // Positions match the canonical 12-column SELECT (see EMBEDDING_COLUMN).
+    let id: String = row.get(0)?;
+    let blob: Vec<u8> = row.get(EMBEDDING_COLUMN)?;
+    let embedding =
+        super::embedding::blob_to_vec(&blob).map_err(|e| corrupt_embedding_error(id.clone(), e))?;
 
     if embedding.len() != EMBEDDING_DIMS {
-        return Err(rusqlite::Error::FromSqlConversionFailure(
-            4,
-            Type::Blob,
-            Box::new(Error::MismatchedDimensions {
+        return Err(corrupt_embedding_error(
+            id,
+            Error::MismatchedDimensions {
                 expected: EMBEDDING_DIMS,
                 actual: embedding.len(),
-            }),
+            },
         ));
     }
 
     Ok(Memory {
-        id: row.get(0)?,
+        id,
         project_id: row.get(1)?,
         content: row.get(2)?,
         metadata: row.get(3)?,

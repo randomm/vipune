@@ -1,6 +1,6 @@
 //! FTS5 full-text search and BM25 ranking (Issue #40).
 
-use super::{Database, Error, Memory};
+use super::{Database, EMBEDDING_COLUMN, Error, Memory};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -219,14 +219,11 @@ impl Database {
 
         let memories: rusqlite::Result<Vec<Memory>> = stmt
             .query_map(params.as_slice(), |row| {
-                let blob: Vec<u8> = row.get(4)?;
-                let embedding = super::embedding::blob_to_vec(&blob).map_err(|e| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        4,
-                        rusqlite::types::Type::Blob,
-                        Box::new(e),
-                    )
-                })?;
+                // Positions match the SELECT above (see EMBEDDING_COLUMN).
+                let id: String = row.get(0)?;
+                let blob: Vec<u8> = row.get(EMBEDDING_COLUMN)?;
+                let embedding = super::embedding::blob_to_vec(&blob)
+                    .map_err(|e| super::query_mod::corrupt_embedding_error(id.clone(), e))?;
                 Ok(Memory {
                     id: row.get(0)?,
                     project_id: row.get(1)?,
