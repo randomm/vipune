@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-08-21
+
+### Bug Fixes
+
+- Correct column index for corrupt embedding BLOB errors in search ([#188](https://github.com/randomm/vipune/pull/188))
+
+
 ## [0.9.1] - 2026-08-20
 
 ### Bug Fixes
