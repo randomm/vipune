@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-08-20
+
+### Bug Fixes
+
+- *(#173)* De-duplicate orphaned test modules and guard against recurrence ([#180](https://github.com/randomm/vipune/pull/180))
+
+### Miscellaneous
+
+- Hoist the query-vector norm out of the per-row cosine loop in Database::search ([#184](https://github.com/randomm/vipune/pull/184))
+- Add a criterion benchmark harness for the Database::search path ([#185](https://github.com/randomm/vipune/pull/185))
+
+
 ## [0.9.0] - 2026-08-07
 
 ### Bug Fixes
