@@ -68,10 +68,16 @@ pub struct Memory {
 }
 
 /// Error types for SQLite operations.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Error {
     /// SQLite database error with message.
     Sqlite(String),
+    /// Embedding BLOB for a specific memory failed to decode.
+    ///
+    /// Carries the affected memory `id` so the corrupt row can be located and
+    /// repaired (see issue #186) instead of surfacing as a generic per-column
+    /// conversion failure.
+    CorruptEmbedding { id: String, reason: String },
     /// Embedding BLOB has unexpected size.
     InvalidBlobSize { expected: usize, actual: usize },
     /// Embedding vector dimensions do not match model dimensions.
@@ -92,6 +98,9 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Sqlite(msg) => write!(f, "Database error: {}", msg),
+            Error::CorruptEmbedding { id, reason } => {
+                write!(f, "Corrupt embedding for memory id: {} ({})", id, reason)
+            }
             Error::InvalidBlobSize { expected, actual } => {
                 write!(
                     f,
@@ -119,23 +128,38 @@ impl std::error::Error for Error {}
 
 impl From<rusqlite::Error> for Error {
     fn from(err: rusqlite::Error) -> Self {
+        // Row-level `FromSqlConversionFailure`s built by
+        // `query_mod::corrupt_embedding_error` carry a `CorruptEmbedding`
+        // domain error (naming the affected memory id) as their source —
+        // surface it directly so the id reaches the caller (issue #186).
+        if let rusqlite::Error::FromSqlConversionFailure(_, _, boxed) = &err {
+            if let Some(source) = (**boxed).source() {
+                if let Some(domain) = source.downcast_ref::<Error>() {
+                    return domain.clone();
+                }
+            }
+        }
         Error::Sqlite(err.to_string())
     }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// 0-indexed column position of `embedding` in the canonical memory row shape
+/// 0-indexed column position of `embedding` in the canonical 12-column memory
+/// row shape
 /// `SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status,
 /// superseded_by, retrieval_count, last_retrieved_at [ , bm25(memories_fts) as bm25_score]`.
 ///
-/// The `embedding` column is 0-indexed at 4 in the SELECTs that use this
-/// constant (get/list/get_many via `map_row_to_memory`, FTS search, and
-/// semantic search). Shared by `FromSqlConversionFailure` error wrappers so
-/// the diagnostic index cannot drift from the column list (issue #186).
+/// Applies to the SELECTs that read memory rows in that shape: get/list/
+/// list_since/get_many via `map_row_to_memory`, FTS search, and semantic
+/// search. Shared by both the `row.get(EMBEDDING_COLUMN)` reads and the
+/// `FromSqlConversionFailure` wrappers in `query_mod::corrupt_embedding_error`
+/// so the read position and the diagnostic index cannot drift from the column
+/// list (issue #186).
 ///
-/// `search.rs` previously reported index 6 for this 12-column SELECT — a
-/// latent diagnostic bug now fixed by this constant.
+/// NOT applicable to projections that omit leading columns — e.g.
+/// `list_all_rows_for_project` selects `id, content, embedding`, where
+/// `embedding` is column 2, not 4.
 pub(crate) const EMBEDDING_COLUMN: usize = 4;
 
 /// SQLite database backend for vipune.
@@ -366,7 +390,8 @@ impl Database {
         let mut results = Vec::new();
         for row_result in rows {
             let (id, content, blob) = row_result?;
-            let embedding = blob_to_vec(&blob)?;
+            let embedding = blob_to_vec(&blob)
+                .map_err(|e| query_mod::corrupt_embedding_error(id.clone(), e))?;
             results.push((id, content, embedding));
         }
         Ok(results)
