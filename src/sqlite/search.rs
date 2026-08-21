@@ -122,6 +122,8 @@ impl Database {
             .sqrt();
 
         let rows = stmt.query_map(params.as_slice(), |row| {
+            // Positions match the SELECT above: column 4 = `embedding`
+            // (see EMBEDDING_COLUMN).
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,

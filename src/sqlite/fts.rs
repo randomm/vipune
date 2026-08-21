@@ -219,6 +219,7 @@ impl Database {
 
         let memories: rusqlite::Result<Vec<Memory>> = stmt
             .query_map(params.as_slice(), |row| {
+                // Column 4 = `embedding` in this SELECT (see EMBEDDING_COLUMN).
                 let blob: Vec<u8> = row.get(4)?;
                 let embedding = super::embedding::blob_to_vec(&blob).map_err(|e| {
                     rusqlite::Error::FromSqlConversionFailure(

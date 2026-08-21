@@ -19,6 +19,7 @@ use crate::embedding::EMBEDDING_DIMS;
 ///
 /// Returns error if any column extraction fails or embedding has invalid dimensions.
 pub fn map_row_to_memory(row: &Row) -> SqliteResult<Memory> {
+    // Column 4 = `embedding` in the canonical 12-column SELECT (see EMBEDDING_COLUMN).
     let blob: Vec<u8> = row.get(4)?;
     let embedding = super::embedding::blob_to_vec(&blob).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(EMBEDDING_COLUMN, Type::Blob, Box::new(e))

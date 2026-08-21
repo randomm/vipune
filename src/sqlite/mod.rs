@@ -129,10 +129,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// `SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status,
 /// superseded_by, retrieval_count, last_retrieved_at [ , bm25(memories_fts) as bm25_score]`.
 ///
-/// The `embedding` column is 0-indexed at 4 in every such SELECT. Shared by
-/// `FromSqlConversionFailure` error wrappers so the index cannot drift from the
-/// column list (issue #186).
-pub const EMBEDDING_COLUMN: usize = 4;
+/// The `embedding` column is 0-indexed at 4 in the SELECTs that use this
+/// constant (get/list/get_many via `map_row_to_memory`, FTS search, and
+/// semantic search). Shared by `FromSqlConversionFailure` error wrappers so
+/// the diagnostic index cannot drift from the column list (issue #186).
+///
+/// `search.rs` previously reported index 6 for this 12-column SELECT — a
+/// latent diagnostic bug now fixed by this constant.
+pub(crate) const EMBEDDING_COLUMN: usize = 4;
 
 /// SQLite database backend for vipune.
 pub struct Database {
