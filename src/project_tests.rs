@@ -349,22 +349,19 @@ fn test_remote_derived_ids_unchanged() {
         ("git@github.com:randomm/vipune.git", "randomm/vipune"),
         ("git@github.com:randomm/vipune", "randomm/vipune"),
         ("ssh://git@github.com/randomm/vipune.git", "randomm/vipune"),
-        // BUG (#164): these two entries are the SAME repo but produce
-        // DIFFERENT project_ids depending on whether the remote is HTTPS
-        // or SSH. This divergence is a known defect in `parse_git_remote`,
-        // NOT intended behaviour. The rows are pinned here to lock in
-        // current output so #158 Phase 1 provably does not change any
-        // existing project_id. Fixing the rule requires #158 Phase 2
-        // merge tooling first — correcting it rewrites project_ids for
-        // users on nested-namespace hosts (GitLab subgroups, Gitea orgs,
-        // Forgejo, Azure DevOps).
+        // #164 (fixed): these two entries are the SAME repo referenced via
+        // HTTPS and SSH. Previously `parse_git_remote` produced DIFFERENT
+        // project_ids for the two forms (`subgroup/project` vs
+        // `group/subgroup/project`). The fix applies the last-two-segment
+        // rule uniformly to the SSH-shorthand branch as well, so both forms
+        // now resolve to `subgroup/project` — one repo, one id.
         (
             "https://gitlab.example.com/group/subgroup/project.git",
             "subgroup/project",
         ),
         (
             "git@gitlab.example.com:group/subgroup/project.git",
-            "group/subgroup/project",
+            "subgroup/project",
         ),
     ];
 
