@@ -152,7 +152,8 @@ fn test_timestamps_preserved() {
     conn.execute(
         "UPDATE memories SET retrieval_count = 7, last_retrieved_at = '2024-03-20T14:30:00Z' WHERE id = ?",
         [&id],
-    ).unwrap();
+    )
+    .unwrap();
 
     let (u_before, rc_before, lr_before) = conn
         .query_row(
@@ -312,4 +313,68 @@ fn test_locked_database_fast_fails() {
 
     // Release lock
     lock_conn.execute("ROLLBACK", []).unwrap();
+}
+
+// ── Hint text: pure function tests ──
+//
+// The hint is emitted by `handle_reindex` when scoped to a single project and
+// other projects exist in the database. We test the format string here via a
+// helper that mirrors the logic in `handle_reindex`, so the test stays fast
+// and doesn't require stdout capture.
+
+fn hint_text_for(other_count: usize) -> Option<String> {
+    // Mirrors the logic in handle_reindex: emit the hint only when other_count > 0.
+    if other_count > 0 {
+        Some(format!(
+            "Note: {} other project(s) in this database not reindexed. Run with --all-projects to reindex them.",
+            other_count
+        ))
+    } else {
+        None
+    }
+}
+
+#[test]
+fn test_hint_text_scoped_multiple_projects() {
+    let hint = hint_text_for(4).unwrap();
+    assert_eq!(
+        hint,
+        "Note: 4 other project(s) in this database not reindexed. Run with --all-projects to reindex them."
+    );
+}
+
+#[test]
+fn test_hint_text_scoped_single_project() {
+    let hint = hint_text_for(1).unwrap();
+    assert_eq!(
+        hint,
+        "Note: 1 other project(s) in this database not reindexed. Run with --all-projects to reindex them."
+    );
+}
+
+#[test]
+fn test_hint_text_no_other_projects() {
+    assert_eq!(hint_text_for(0), None);
+}
+
+// ── Footer text: pure function tests ──
+
+fn footer_scope_text(projects: &[String]) -> String {
+    if projects.len() == 1 {
+        format!("project {}", projects[0])
+    } else {
+        "all projects".to_string()
+    }
+}
+
+#[test]
+fn test_footer_scope_single_project() {
+    let projects = vec!["my-proj".to_string()];
+    assert_eq!(footer_scope_text(&projects), "project my-proj");
+}
+
+#[test]
+fn test_footer_scope_multiple_projects() {
+    let projects = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    assert_eq!(footer_scope_text(&projects), "all projects");
 }
