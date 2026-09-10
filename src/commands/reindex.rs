@@ -81,6 +81,25 @@ pub fn handle_reindex(
         return Ok(ExitCode::SUCCESS);
     }
 
+    // Human mode, scoped to a single project: nudge the user about the other
+    // projects in the store so a scoped reindex doesn't quietly leave them
+    // behind (mirrors the issue #156 under-reporting concern).
+    if !json {
+        if let Some(filter) = project_filter {
+            let all_project_ids = wrap_busy(db.list_all_project_ids().map_err(Error::from))?;
+            let other_count = all_project_ids
+                .iter()
+                .filter(|pid| pid.as_str() != filter)
+                .count();
+            if other_count > 0 {
+                println!(
+                    "Note: {} other project(s) in this database not reindexed. Run with --all-projects to reindex them.",
+                    other_count
+                );
+            }
+        }
+    }
+
     // Initialise the embedding engine (downloads model if needed)
     let mut engine = EmbeddingEngine::new(model_id)?;
 
@@ -139,9 +158,14 @@ pub fn handle_reindex(
         }
     }
 
-    // Print total summary for all projects (always shown in human mode)
+    // Print total summary (always shown in human mode)
     if !json {
-        println!("Total across all projects:");
+        let scope = if projects.len() == 1 {
+            format!("project {}", projects[0])
+        } else {
+            "all projects".to_string()
+        };
+        println!("Total across {}:", scope);
         println!("  Reindexed: {}", total_reindexed);
         println!("  Skipped:   {}", total_skipped);
         println!("  Failed:    {}", total_failed);
