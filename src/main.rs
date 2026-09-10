@@ -40,8 +40,32 @@ struct Cli {
     command: Commands,
 }
 
+/// Exit code for clap usage errors (sysexits `EX_USAGE` = 64).
+///
+/// clap's default usage-error exit code is 2, which collides with vipune's
+/// documented semantic exit code 2 ("Conflicts detected"). A caller branching
+/// on exit code alone could mistake a typo'd flag for a conflict and
+/// "resolve" it with `--force`, writing garbage into the store (issue #177).
+/// Overriding usage errors to 64 leaves 2 unambiguously meaning conflicts.
+const USAGE_ERROR_EXIT_CODE: i32 = 64;
+
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // clap's own `error.exit()` hardcodes exit code 2 (clap's USAGE_CODE),
+    // so we handle parse errors by hand: print the clap error to stderr,
+    // then exit with EX_USAGE. Success paths and the `--help`/`--version`
+    // flows are preserved: `Error::exit()` returns 0 for those kinds.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            if error.use_stderr() {
+                eprint!("{error}");
+                std::process::exit(USAGE_ERROR_EXIT_CODE);
+            } else {
+                print!("{error}");
+                std::process::exit(0);
+            }
+        }
+    };
 
     match run(&cli) {
         Ok(exit_code) => exit_code,
@@ -418,6 +442,54 @@ mod tests {
     fn test_cli_parse_project_merge_missing_args_fails() {
         let result = Cli::try_parse_from(["vipune", "project", "merge", "only-from"]);
         assert!(result.is_err());
+    }
+
+    // ── usage-error exit code (issue #177) ──
+    //
+    // clap's default usage-error exit code (2) collides with vipune's
+    // documented semantic exit code 2 ("Conflicts detected"). `main()`
+    // overrides it to 64 (sysexits EX_USAGE) via `parse_exit_from(args, 64)`.
+    //
+    // The override lives in `main()`'s `try_parse` arm, which calls
+    // `process::exit` directly, so a unit test cannot observe the exit code
+    // itself without terminating the test process. What we can pin in-process:
+    // clap reports usage errors (typo'd flag, missing subcommand) as parse
+    // errors routed to stderr, and help/version as stdout successes — the
+    // exact split the override branches on. The 64 exit code itself is
+    // verified by the issue's reproduction steps against the built binary.
+    #[test]
+    fn test_clap_usage_errors_fail_parse_to_stderr() {
+        // `unwrap_err` needs the `Ok` variant to be `Debug`, so bind the
+        // `Err` from the `Result` directly (no `Cli` `Debug` impl needed).
+        let Err(error) = Cli::try_parse_from(["vipune", "add", "x", "--memory-typo"]) else {
+            panic!("typo'd flag should be a parse error");
+        };
+        assert!(
+            error.use_stderr(),
+            "typo'd flag should be routed to stderr (and exit with EX_USAGE in main)"
+        );
+
+        let Err(error) = Cli::try_parse_from(["vipune"]) else {
+            panic!("missing subcommand should be a parse error");
+        };
+        assert!(
+            error.use_stderr(),
+            "missing subcommand should be routed to stderr (and exit with EX_USAGE in main)"
+        );
+    }
+
+    #[test]
+    fn test_clap_help_is_stdout_path() {
+        // `--help` short-circuits `try_parse` with a `DisplayHelp` error. It
+        // is the only error kind routed to stdout (and exit 0) in `main()` —
+        // everything else must stay on the stderr / EX_USAGE path.
+        let Err(error) = Cli::try_parse_from(["vipune", "--help"]) else {
+            panic!("--help should short-circuit as a display-help error");
+        };
+        assert!(
+            !error.use_stderr(),
+            "--help must be routed to stdout (and exit 0 in main), not stderr"
+        );
     }
 
     // ── doctor --projects CLI parse tests ──
