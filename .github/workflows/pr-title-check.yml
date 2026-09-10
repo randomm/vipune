@@ -1,0 +1,53 @@
+name: PR title check
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  pr-title:
+    name: PR title check
+    runs-on: ubicloud-standard-4
+
+    steps:
+      - name: Reject issue-number scopes in PR titles
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+
+          # Rejects a title whose scope contains an issue number, e.g. fix(#173):
+          # Equivalent semantics to the spec's ^[a-z]+(\([^)]*#[0-9]+[^)]*\))?!:
+          # but without the !-operator, which is unreliable in bash 3.2 [[ =~ ]].
+          # The reject case is precisely "type(<scope with #NNN>):" — a bare
+          # "type:" has no scope and is not the reject case.
+          reject_re='^[a-z]+\([^)]*#[0-9]+[^)]*\):'
+
+          if printf '%s\n' "$TITLE" | grep -Eq -- "$reject_re"; then
+            {
+              echo "## PR title rejected"
+              echo
+              echo "The title \`$TITLE\` uses an issue number as the scope (e.g. \`fix(#173):\`)."
+              echo
+              echo "Why this is forbidden: this repo squash-merges, so the PR title becomes the"
+              echo " commit subject. release-plz's default commit preprocessor rewrites unanchored"
+              echo " \`(#NNN)\` into a markdown link — a scope like \`fix(#173):\` becomes"
+              echo " \`fix([#173](url)):\`, which is not a valid conventional-commit header."
+              echo " git-cliff-core then silently drops the commit from the changelog while still"
+              echo " counting it toward the version bump, so the loss is invisible."
+              echo
+              echo "Correct forms (both accepted by this check):"
+              echo
+              echo "    - fix: correct column index for corrupt embedding BLOB errors"
+              echo "    - fix(sqlite): correct column index   # alphabetic scopes are fine"
+              echo
+              echo "Move the issue linkage into the PR body using \`Closes #NNN\` or"
+              echo " \`Fixes #NNN\`. Squash-merge appends the PR number to the commit,"
+              echo " which renders safely in the changelog."
+              echo
+              echo "Root cause and full analysis: https://github.com/randomm/vipune/issues/155"
+            } | tee /dev/stderr
+            exit 1
+          fi
+
+          echo "PR title is valid: $TITLE"
