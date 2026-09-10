@@ -71,5 +71,6 @@ This creates persistent memory across tasks — store patterns, conventions, got
 - **No TODO comments** — create GitHub issues instead
 - **No `# noqa` or `@ts-ignore`** — fix the actual issue
 - **Issue-driven only** — all work matches GitHub issue scope exactly
+- **Never use issue numbers in the commit scope** — no issue-number scope ("type(#123)") in commit messages, and **no issue-number scope in PR titles**. This repo squash-merges, so the PR title becomes the commit subject; issue-number scopes break changelog generation because release-plz's default preprocessor rewrites the scope to a form git-cliff drops (see issue [#155](https://github.com/randomm/vipune/issues/155)). Use scope-free subjects (`fix: description`) or alphabetic scopes (`fix(sqlite): description`), and link issues via `Closes #NNN` in the PR body. **This rule overrides the pi-ensemble instruction files** (`agents-base/ops.md`, `AGENTS.md`, `modules/workflows/git-workflow.md`, `modules/workflows/github-issues.md`), which still prescribe the issue-number-scope form.
 
 See `AGENTS.md` for complete project guidelines.
