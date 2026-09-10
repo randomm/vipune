@@ -29,6 +29,10 @@ pub struct SearchResultItem {
     pub similarity: f64,
     /// Creation timestamp in RFC3339 format.
     pub created_at: String,
+    /// Number of times this memory was retrieved via search or get.
+    pub retrieval_count: i64,
+    /// RFC3339 timestamp of last retrieval (null if never retrieved).
+    pub last_retrieved_at: Option<String>,
 }
 
 /// Response for retrieving a specific memory.
@@ -46,6 +50,10 @@ pub struct GetResponse {
     pub created_at: String,
     /// Last update timestamp in RFC3339 format.
     pub updated_at: String,
+    /// Number of times this memory was retrieved via search or get.
+    pub retrieval_count: i64,
+    /// RFC3339 timestamp of last retrieval (null if never retrieved).
+    pub last_retrieved_at: Option<String>,
 }
 
 /// Response for listing memories.
@@ -64,6 +72,10 @@ pub struct ListItem {
     pub content: String,
     /// Creation timestamp in RFC3339 format.
     pub created_at: String,
+    /// Number of times this memory was retrieved via search or get.
+    pub retrieval_count: i64,
+    /// RFC3339 timestamp of last retrieval (null if never retrieved).
+    pub last_retrieved_at: Option<String>,
 }
 
 /// Response for successful memory deletion.
@@ -230,10 +242,56 @@ mod tests {
                 content: "test content".to_string(),
                 similarity: 0.95,
                 created_at: "2024-01-01T00:00:00Z".to_string(),
+                retrieval_count: 3,
+                last_retrieved_at: Some("2024-01-02T00:00:00Z".to_string()),
             }],
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"results\""));
         assert!(json.contains("\"similarity\":0.95"));
+        assert!(json.contains("\"retrieval_count\":3"));
+        assert!(json.contains("\"last_retrieved_at\":\"2024-01-02T00:00:00Z\""));
+    }
+
+    #[test]
+    fn test_serialize_search_result_null_last_retrieved() {
+        let response = SearchResponse {
+            results: vec![SearchResultItem {
+                id: "test-id".to_string(),
+                content: "test content".to_string(),
+                similarity: 0.95,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                retrieval_count: 0,
+                last_retrieved_at: None,
+            }],
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"retrieval_count\":0"));
+        assert!(json.contains("\"last_retrieved_at\":null"));
+    }
+
+    #[test]
+    fn test_serialize_list_item_with_retrieval_fields() {
+        let item = ListItem {
+            id: "test-id".to_string(),
+            content: "test content".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            retrieval_count: 5,
+            last_retrieved_at: Some("2024-01-02T12:00:00Z".to_string()),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("\"retrieval_count\":5"));
+        assert!(json.contains("\"last_retrieved_at\":\"2024-01-02T12:00:00Z\""));
+
+        let item_none = ListItem {
+            id: "test-id".to_string(),
+            content: "test content".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            retrieval_count: 0,
+            last_retrieved_at: None,
+        };
+        let json_none = serde_json::to_string(&item_none).unwrap();
+        assert!(json_none.contains("\"retrieval_count\":0"));
+        assert!(json_none.contains("\"last_retrieved_at\":null"));
     }
 }

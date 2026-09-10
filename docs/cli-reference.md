@@ -110,9 +110,11 @@ vipune search <query> [--limit <n>] [--recency <weight>] [--hybrid] [--memory-ty
 - `--memory-type <types>` - Filter by memory type (comma-separated, e.g., `guard,procedure`)
 - `--status <statuses>` - Filter by status (comma-separated, e.g., `active,candidate`)
 - `--include-candidates` - Shorthand to include both `active` and `candidate` memories
+- `--no-touch` - Do not update retrieval telemetry (`retrieval_count`, `last_retrieved_at`) for the returned memories (default: telemetry is updated)
 
 **Behavior:**
 - Generates embedding for query
+- Unless `--no-touch` is set, increments `retrieval_count` and sets `last_retrieved_at` for every returned memory (see [Retrieval telemetry](#retrieval-telemetry))
 - Finds memories with highest cosine similarity
 - Combines semantic similarity with time decay for final score
 - Returns results sorted by final score (highest first)
@@ -145,13 +147,17 @@ The final score combines: `(1 - recency_weight) * similarity + recency_weight * 
       "id": "123e4567-e89b-12d3-a456-426614174000",
       "content": "Alice works at Microsoft as a senior engineer",
       "similarity": 0.95,
-      "created_at": "2024-01-15T10:30:00Z"
+      "created_at": "2024-01-15T10:30:00Z",
+      "retrieval_count": 12,
+      "last_retrieved_at": "2024-01-20T09:15:00Z"
     },
     {
       "id": "234e5678-e89b-12d3-a456-426614174001",
       "content": "Bob is a software engineer at Google",
       "similarity": 0.87,
-      "created_at": "2024-01-16T14:20:00Z"
+      "created_at": "2024-01-16T14:20:00Z",
+      "retrieval_count": 0,
+      "last_retrieved_at": null
     }
   ]
 }
@@ -176,11 +182,14 @@ vipune search "authentication" --recency 0.0
 Retrieve a memory by ID.
 
 ```
-vipune get <id>
+vipune get <id> [--no-touch]
 ```
 
 **Arguments:**
 - `id` - Memory ID (required)
+
+**Flags:**
+- `--no-touch` - Do not update retrieval telemetry (`retrieval_count`, `last_retrieved_at`) for the retrieved memory (default: telemetry is updated)
 
 **Exit codes:**
 - `0` - Memory found
@@ -204,9 +213,13 @@ Updated: 2024-01-15T10:30:00Z
   "project_id": "git@github.com:user/repo.git",
   "metadata": "{\"topic\": \"team\"}",
   "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": "2024-01-15T10:30:00Z"
+  "updated_at": "2024-01-15T10:30:00Z",
+  "retrieval_count": 5,
+  "last_retrieved_at": "2024-01-15T10:30:00Z"
 }
 ```
+
+- `retrieval_count` / `last_retrieved_at` reflect retrieval telemetry (see `--no-touch` under `search`). Note that a `get` without `--no-touch` increments the counter before the JSON is emitted, so the value shown is the post-retrieval count.
 
 ---
 
@@ -228,6 +241,7 @@ vipune list [--limit <n>] [--memory-type <types>] [--status <statuses>] [--inclu
 - Returns memories ordered by creation time (newest first)
 - Limited to current project scope
 - **Default filtering:** Only `active` memories are returned by default. Use `--status` or `--include-candidates` to include other statuses.
+- Listing does not update retrieval telemetry — `retrieval_count` and `last_retrieved_at` are touched only by `search` and `get` (and the equivalent MCP tools). The `list` command has no `--no-touch` flag because there is nothing to suppress.
 
 **Exit codes:**
 - `0` - Success (may return empty list)
@@ -245,12 +259,16 @@ vipune list [--limit <n>] [--memory-type <types>] [--status <statuses>] [--inclu
     {
       "id": "123e4567-e89b-12d3-a456-426614174000",
       "content": "Alice works at Microsoft",
-      "created_at": "2024-01-15T10:30:00Z"
+      "created_at": "2024-01-15T10:30:00Z",
+      "retrieval_count": 3,
+      "last_retrieved_at": "2024-01-17T08:45:00Z"
     },
     {
       "id": "234e5678-e89b-12d3-a456-426614174001",
       "content": "Bob is a software engineer at Google",
-      "created_at": "2024-01-16T14:20:00Z"
+      "created_at": "2024-01-16T14:20:00Z",
+      "retrieval_count": 0,
+      "last_retrieved_at": null
     }
   ]
 }
@@ -476,6 +494,12 @@ vipune mcp
 v0.3 includes automatic schema migrations — no manual steps required. On first run after upgrading, vipune will add the new `type`, `status`, and `superseded_by` columns to your existing database. All existing memories default to type `fact` and status `active`.
 
 **Breaking change:** Content that previously was silently truncated when exceeding the embedding token limit now fails with exit code 3. Use `vipune validate <text>` to check content length before adding.
+
+## Retrieval telemetry
+
+`search` and `get` maintain two telemetry columns per memory: `retrieval_count` (how many times the memory has been returned by `search` or `get`) and `last_retrieved_at` (timestamp of the most recent retrieval). Both commands accept `--no-touch` to skip updating them — useful for reads that should not influence ranking or promotion signals.
+
+`search` and `get` include `retrieval_count` and `last_retrieved_at` in their JSON output (`--json`). Retrieval via `list` does not count as a retrieval and never touches telemetry.
 
 ---
 
