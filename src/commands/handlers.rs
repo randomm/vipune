@@ -220,6 +220,8 @@ pub(crate) fn handle_search(
                 created_at: m.created_at,
                 retrieval_count: m.retrieval_count,
                 last_retrieved_at: m.last_retrieved_at,
+                memory_type: m.memory_type,
+                status: m.status,
             })
             .collect();
         print_json(&SearchResponse { results });
@@ -262,6 +264,8 @@ pub(crate) fn handle_get(
             updated_at: memory.updated_at,
             retrieval_count: memory.retrieval_count,
             last_retrieved_at: memory.last_retrieved_at.clone(),
+            memory_type: memory.memory_type,
+            status: memory.status,
         });
     } else {
         println!("ID: {}", memory.id);
@@ -312,6 +316,8 @@ pub(crate) fn handle_list(
                 created_at: m.created_at,
                 retrieval_count: m.retrieval_count,
                 last_retrieved_at: m.last_retrieved_at,
+                memory_type: m.memory_type,
+                status: m.status,
             })
             .collect();
         print_json(&ListResponse { memories: items });
@@ -393,6 +399,8 @@ mod tests {
             updated_at: "2024-01-15T10:30:00Z".to_string(),
             retrieval_count: 5,
             last_retrieved_at: Some("2024-01-15T10:30:00Z".to_string()),
+            memory_type: "fact".to_string(),
+            status: "active".to_string(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"retrieval_count\":5"));
@@ -435,6 +443,8 @@ mod tests {
             updated_at: memory.updated_at,
             retrieval_count: memory.retrieval_count,
             last_retrieved_at: memory.last_retrieved_at,
+            memory_type: memory.memory_type,
+            status: memory.status,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"retrieval_count\":1"));
