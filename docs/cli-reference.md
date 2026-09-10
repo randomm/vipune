@@ -487,6 +487,9 @@ v0.3 includes automatic schema migrations — no manual steps required. On first
 | `1` | Error (invalid input, database error, not found) |
 | `2` | Conflicts detected (similar memories exist) |
 | `3` | Content too long (exceeds embedding token limit) |
+| `64` | Usage error (invalid flag or argument — clap argument-parsing failure) |
+
+*Note: Argument-parsing errors exit `64` (`EX_USAGE` from the sysexits convention), so exit code `2` unambiguously means "conflicts detected". Previously, usage errors also exited `2`, which collided with the conflict code — integrations that branched on exit code alone could not distinguish a semantic conflict from a typo'd flag.*
 
 ---
 
