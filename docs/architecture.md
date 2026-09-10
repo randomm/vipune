@@ -159,10 +159,10 @@ Priority: CLI flags > environment variables > TOML file > defaults
 Configurable parameters include:
 - `similarity_threshold`: Minimum score for conflict detection (default: 0.85)
 - `recency_weight`: Mix semantic and temporal signals (0.0-1.0)
-- `decay_function`: Exponential or linear recency decay
-- `decay_lambda`: Decay rate parameter
-- `cache_dir`: Override model cache location
-- `db_path`: Override database location
+- `database_path`: Override database location (default: `~/.vipune/memories.db`)
+- `embedding_model`: HuggingFace model ID (default: `BAAI/bge-small-en-v1.5`)
+
+Model files are cached in the standard HuggingFace Hub cache at `~/.cache/huggingface/hub/`; its location is controlled by the `HF_HOME` environment variable (via `hf-hub`), not by vipune configuration.
 
 ## Design Constraints
 

@@ -12,14 +12,12 @@ use super::tests_utils::{ENV_MUTEX, cleanup_env_vars};
 pub fn apply_env_overrides(
     database_path: &mut PathBuf,
     embedding_model: &mut String,
-    model_cache: &mut PathBuf,
     similarity_threshold: &mut f64,
     recency_weight: &mut f64,
     hybrid: &mut bool,
 ) -> Result<(), Error> {
     env_parser::apply_database_path_override(database_path)?;
     env_parser::apply_embedding_model_override(embedding_model)?;
-    env_parser::apply_model_cache_override(model_cache)?;
     env_parser::apply_similarity_threshold_override(similarity_threshold)?;
     env_parser::apply_recency_weight_override(recency_weight)?;
     env_parser::apply_hybrid_override(hybrid)?;
@@ -30,36 +28,52 @@ pub fn apply_env_overrides(
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_env_var_overrides_config() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+    fn overrides(
+        database_path: &mut PathBuf,
+        embedding_model: &mut String,
+        similarity_threshold: &mut f64,
+        recency_weight: &mut f64,
+        hybrid: &mut bool,
+    ) -> Result<(), Error> {
+        apply_env_overrides(
+            database_path,
+            embedding_model,
+            similarity_threshold,
+            recency_weight,
+            hybrid,
+        )
+    }
+
+    fn clean_env() {
         cleanup_env_vars(&[
             "VIPUNE_DATABASE_PATH",
             "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
             "VIPUNE_HYBRID",
         ]);
+    }
+
+    #[test]
+    fn test_env_var_overrides_config() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        clean_env();
 
         unsafe {
             std::env::set_var("VIPUNE_DATABASE_PATH", "/custom/path/db.db");
             std::env::set_var("VIPUNE_EMBEDDING_MODEL", "env/model");
-            std::env::set_var("VIPUNE_MODEL_CACHE", "/custom/cache");
             std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "0.95");
         }
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
-        let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
         let mut hybrid = false;
 
-        apply_env_overrides(
+        overrides(
             &mut database_path,
             &mut embedding_model,
-            &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
             &mut hybrid,
@@ -68,30 +82,15 @@ mod tests {
 
         assert_eq!(database_path, PathBuf::from("/custom/path/db.db"));
         assert_eq!(embedding_model, "env/model");
-        assert_eq!(model_cache, PathBuf::from("/custom/cache"));
         assert_eq!(similarity_threshold, 0.95);
 
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
     }
 
     #[test]
     fn test_invalid_similarity_threshold() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
 
         unsafe {
             std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "invalid");
@@ -99,15 +98,13 @@ mod tests {
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
-        let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
         let mut hybrid = false;
 
-        let result = apply_env_overrides(
+        let result = overrides(
             &mut database_path,
             &mut embedding_model,
-            &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
             &mut hybrid,
@@ -115,27 +112,13 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Config(_))));
 
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
     }
 
     #[test]
     fn test_empty_env_var_rejected() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
 
         unsafe {
             std::env::set_var("VIPUNE_DATABASE_PATH", "");
@@ -143,15 +126,13 @@ mod tests {
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
-        let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
         let mut hybrid = false;
 
-        let result = apply_env_overrides(
+        let result = overrides(
             &mut database_path,
             &mut embedding_model,
-            &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
             &mut hybrid,
@@ -159,27 +140,13 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Config(_))));
 
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
     }
 
     #[test]
     fn test_whitespace_env_var_rejected() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
 
         unsafe {
             std::env::set_var("VIPUNE_EMBEDDING_MODEL", "   ");
@@ -187,15 +154,13 @@ mod tests {
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
-        let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
         let mut hybrid = false;
 
-        let result = apply_env_overrides(
+        let result = overrides(
             &mut database_path,
             &mut embedding_model,
-            &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
             &mut hybrid,
@@ -203,27 +168,13 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Config(_))));
 
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
     }
 
     #[test]
     fn test_recency_weight_env_var_override() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
 
         unsafe {
             std::env::set_var("VIPUNE_RECENCY_WEIGHT", "0.5");
@@ -231,15 +182,13 @@ mod tests {
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
-        let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
         let mut hybrid = false;
 
-        apply_env_overrides(
+        overrides(
             &mut database_path,
             &mut embedding_model,
-            &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
             &mut hybrid,
@@ -248,27 +197,13 @@ mod tests {
 
         assert_eq!(recency_weight, 0.5);
 
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
     }
 
     #[test]
     fn test_hybrid_env_var_override() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
 
         unsafe {
             std::env::set_var("VIPUNE_HYBRID", "true");
@@ -276,15 +211,13 @@ mod tests {
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
-        let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
         let mut hybrid = false;
 
-        apply_env_overrides(
+        overrides(
             &mut database_path,
             &mut embedding_model,
-            &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
             &mut hybrid,
@@ -293,27 +226,13 @@ mod tests {
 
         assert!(hybrid);
 
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
     }
 
     #[test]
     fn test_hybrid_env_var_override_false() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
 
         unsafe {
             std::env::set_var("VIPUNE_HYBRID", "false");
@@ -321,15 +240,13 @@ mod tests {
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
-        let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
         let mut hybrid = true;
 
-        apply_env_overrides(
+        overrides(
             &mut database_path,
             &mut embedding_model,
-            &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
             &mut hybrid,
@@ -338,27 +255,13 @@ mod tests {
 
         assert!(!hybrid);
 
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
     }
 
     #[test]
     fn test_invalid_recency_weight_format() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
 
         unsafe {
             std::env::set_var("VIPUNE_RECENCY_WEIGHT", "invalid");
@@ -366,15 +269,13 @@ mod tests {
 
         let mut database_path = PathBuf::from("/default");
         let mut embedding_model = "default/model".to_string();
-        let mut model_cache = PathBuf::from("/default/cache");
         let mut similarity_threshold = 0.85;
         let mut recency_weight = 0.3;
         let mut hybrid = false;
 
-        let result = apply_env_overrides(
+        let result = overrides(
             &mut database_path,
             &mut embedding_model,
-            &mut model_cache,
             &mut similarity_threshold,
             &mut recency_weight,
             &mut hybrid,
@@ -382,13 +283,6 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Config(_))));
 
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-        ]);
+        clean_env();
     }
 }

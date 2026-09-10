@@ -198,7 +198,6 @@ fn test_config_default_with_no_env_vars_returns_valid_config() {
     unsafe {
         env::remove_var("VIPUNE_DATABASE_PATH");
         env::remove_var("VIPUNE_EMBEDDING_MODEL");
-        env::remove_var("VIPUNE_MODEL_CACHE");
         env::remove_var("VIPUNE_SIMILARITY_THRESHOLD");
         env::remove_var("VIPUNE_RECENCY_WEIGHT");
     }
@@ -207,7 +206,6 @@ fn test_config_default_with_no_env_vars_returns_valid_config() {
 
     assert!(config.database_path.ends_with(".vipune/memories.db"));
     assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
-    assert!(config.model_cache.ends_with(".vipune/models"));
     assert_eq!(config.similarity_threshold, 0.85);
     assert_eq!(config.recency_weight, 0.3);
 }

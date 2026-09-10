@@ -15,10 +15,6 @@ pub struct ConfigFile {
     #[serde(default)]
     pub embedding_model: String,
 
-    /// Directory for caching ONNX models.
-    #[serde(default)]
-    pub model_cache: PathBuf,
-
     /// Minimum similarity threshold for search results.
     #[serde(default = "default_threshold")]
     pub similarity_threshold: f64,
@@ -91,7 +87,6 @@ This is not valid TOML
         let config = result.unwrap();
         assert!(config.database_path.as_os_str().is_empty());
         assert!(config.embedding_model.is_empty());
-        assert!(config.model_cache.as_os_str().is_empty());
         assert_eq!(config.similarity_threshold, 0.85);
     }
 

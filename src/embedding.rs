@@ -2,7 +2,7 @@
 //!
 //! Uses bge-small-en-v1.5 model (384 dimensions) with mean pooling and L2 normalization.
 
-use hf_hub::{Repo, RepoType, api::sync::Api};
+use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use ort::inputs;
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
@@ -55,9 +55,11 @@ impl EmbeddingEngine {
     /// `EMBED_MODEL_REVISION` is used to ensure reproducibility. Custom model IDs
     /// fall back to the `main` branch.
     ///
-    /// Files are cached locally in HF Hub cache, only downloaded once.
+    /// Files are cached locally in the HF Hub cache
+    /// (`~/.cache/huggingface/hub/` by default, or `$HF_HOME/hub` when `HF_HOME`
+    /// is set), only downloaded once.
     pub fn new(model_id: &str) -> Result<Self, Error> {
-        let api = Api::new()?;
+        let api = ApiBuilder::new().build()?;
 
         // Use pinned revision for default model, "main" for custom models
         let revision = if model_id == EMBED_MODEL_ID {
@@ -277,6 +279,55 @@ mod tests {
     fn test_embed_model_constants() {
         assert_eq!(EMBED_MODEL_ID, "BAAI/bge-small-en-v1.5");
         assert!(!EMBED_MODEL_REVISION.is_empty());
+    }
+
+    /// The README's air-gapped instructions and the CI HuggingFace cache key
+    /// both embed the pinned revision outside of source code. If any of those
+    /// copies drift from `EMBED_MODEL_REVISION`, offline users pre-fetch the
+    /// wrong revision and offline operation silently breaks. This test pins
+    /// all three together (same drift class as
+    /// `test_default_model_matches_embed_constant` in `config/mod.rs`).
+    #[test]
+    fn test_air_gapped_docs_and_ci_cache_match_embed_revision() {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+        let repo_root = std::path::Path::new(&manifest_dir);
+
+        let readme = std::fs::read_to_string(repo_root.join("README.md")).expect("read README");
+        let ci = std::fs::read_to_string(repo_root.join(".github/workflows/ci.yml"))
+            .expect("read CI workflow");
+
+        // README air-gapped section must instruct downloading the exact pinned
+        // revision. The check is tolerant of line wrapping (backslash-continuation
+        // in the docs) — what must not drift is the revision value itself.
+        let download_line = readme
+            .lines()
+            // The README uses the user-facing command; the in-code helper
+            // message embeds the same command as a format-string placeholder.
+            .find(|line| line.contains("huggingface-cli download"))
+            .map(str::to_string);
+        assert!(
+            download_line
+                .as_deref()
+                .unwrap_or("missing")
+                .contains(EMBED_MODEL_ID),
+            "README air-gapped instructions must download EMBED_MODEL_ID ({})",
+            EMBED_MODEL_ID
+        );
+        assert!(
+            readme.contains(&format!("--revision {}", EMBED_MODEL_REVISION)),
+            "README air-gapped instructions must use `--revision {}` (the pinned EMBED_MODEL_REVISION) — drift between docs and code",
+            EMBED_MODEL_REVISION
+        );
+
+        // CI cache key must be keyed on the same revision prefix (the key embeds
+        // the SHA prefix, so it changes whenever the pinned revision changes —
+        // otherwise CI could serve a stale model cache).
+        let revision_prefix: String = EMBED_MODEL_REVISION.chars().take(7).collect();
+        assert!(
+            ci.contains(&revision_prefix),
+            "CI HuggingFace cache key must reference a prefix of the pinned revision {} — otherwise CI may serve a stale model cache",
+            EMBED_MODEL_REVISION
+        );
     }
 
     #[test]
