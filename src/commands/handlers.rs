@@ -218,6 +218,8 @@ pub(crate) fn handle_search(
                 content: m.content,
                 similarity: m.similarity.unwrap_or(0.0),
                 created_at: m.created_at,
+                retrieval_count: m.retrieval_count,
+                last_retrieved_at: m.last_retrieved_at,
             })
             .collect();
         print_json(&SearchResponse { results });
@@ -258,6 +260,8 @@ pub(crate) fn handle_get(
             metadata: memory.metadata,
             created_at: memory.created_at,
             updated_at: memory.updated_at,
+            retrieval_count: memory.retrieval_count,
+            last_retrieved_at: memory.last_retrieved_at.clone(),
         });
     } else {
         println!("ID: {}", memory.id);
@@ -306,6 +310,8 @@ pub(crate) fn handle_list(
                 id: m.id,
                 content: m.content,
                 created_at: m.created_at,
+                retrieval_count: m.retrieval_count,
+                last_retrieved_at: m.last_retrieved_at,
             })
             .collect();
         print_json(&ListResponse { memories: items });
@@ -368,4 +374,73 @@ pub(crate) fn handle_version(json: bool) -> Result<ExitCode, Error> {
         println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::MemoryStore;
+
+    /// Assert GetResponse carries the telemetry fields so `get --json` exposes them.
+    #[test]
+    fn test_get_response_serializes_retrieval_telemetry() {
+        let response = GetResponse {
+            id: "mem-1".to_string(),
+            content: "a memory".to_string(),
+            project_id: "proj".to_string(),
+            metadata: None,
+            created_at: "2024-01-15T10:30:00Z".to_string(),
+            updated_at: "2024-01-15T10:30:00Z".to_string(),
+            retrieval_count: 5,
+            last_retrieved_at: Some("2024-01-15T10:30:00Z".to_string()),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"retrieval_count\":5"));
+        assert!(json.contains("\"last_retrieved_at\":\"2024-01-15T10:30:00Z\""));
+
+        // Null case: never-retrieved memory.
+        let response = GetResponse {
+            retrieval_count: 0,
+            last_retrieved_at: None,
+            ..response
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"retrieval_count\":0"));
+        assert!(json.contains("\"last_retrieved_at\":null"));
+    }
+
+    /// End-to-end: `get --json` on a touched memory returns the telemetry fields,
+    /// and `--no-touch` leaves the counter untouched.
+    #[test]
+    fn test_get_json_surfaces_retrieval_telemetry() {
+        let mut store = MemoryStore::test_store();
+        let AddResult::Added { id } = store
+            .ingest("proj", "a memory with telemetry", None, IngestPolicy::Force)
+            .unwrap()
+        else {
+            panic!("expected Added")
+        };
+
+        // Simulate one retrieval so the counter is non-trivial.
+        let ids: Vec<&str> = vec![id.as_str()];
+        store.db.touch_memories(&ids).unwrap();
+
+        let memory = store.get(&id, "proj").unwrap().expect("memory exists");
+        let response = GetResponse {
+            id: memory.id,
+            content: memory.content,
+            project_id: memory.project_id,
+            metadata: memory.metadata,
+            created_at: memory.created_at,
+            updated_at: memory.updated_at,
+            retrieval_count: memory.retrieval_count,
+            last_retrieved_at: memory.last_retrieved_at,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"retrieval_count\":1"));
+        assert!(
+            json.contains("\"last_retrieved_at\":\"")
+                && !json.contains("\"last_retrieved_at\":null")
+        );
+    }
 }
