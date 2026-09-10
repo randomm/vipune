@@ -90,17 +90,21 @@ vipune uses [Conventional Commits](https://www.conventionalcommits.org/):
 
 Format:
 ```
-feat(#123): brief description
+feat: brief description
 
 Optional body with details.
 ```
 
 Example:
 ```
-fix(#45): correct embedding BLOB size validation
+fix: correct embedding BLOB size validation
 
 Previously accepted 1600-byte blobs. Now correctly validates 1536 bytes (384 × 4).
 ```
+
+**Do not put issue numbers in the commit scope** — never the "type(#123)" form. Issue-number scopes break changelog generation: release-plz's default commit preprocessor rewrites the scope to `fix([#123](url))`, which git-cliff drops from the changelog while still counting the commit toward the version bump (see issue [#155](https://github.com/randomm/vipune/issues/155)). Alphabetic scopes such as `fix(sqlite):` are fine. Link issues in the PR body instead — see [Pull Request Process](#pull-request-process) below.
+
+**PR titles must follow the same rule.** This repo squash-merges, so the PR title becomes the commit subject — an issue-number scope in a PR title breaks the changelog the same way.
 
 ## Branch Naming
 
@@ -115,7 +119,7 @@ Example: `feature/issue-12-add-json-output`
 
 Releases are automated via release-plz. When your PR is merged to `main`, the release process runs automatically:
 
-1. **Release-plz scans commits**: Uses conventional commits to determine version bump
+1. **Release-plz scans commits**: Uses conventional commits to determine version bump. Do not use issue numbers in the commit scope — release-plz's default preprocessor rewrites an issue-number scope into a form that git-cliff drops from the changelog, see issue [#155](https://github.com/randomm/vipune/issues/155). Alphabetic scopes like `fix(sqlite):` are safe.
 2. **Creates Git tag**: Tags the commit with new version number
 3. **Generates CHANGELOG.md**: Auto-updates from commit messages
 4. **Creates GitHub release**: Draft release with changelog
@@ -128,8 +132,8 @@ Releases are automated via release-plz. When your PR is merged to `main`, the re
 **Important:**
 - Do NOT manually edit `CHANGELOG.md` — it's auto-generated
 - Do NOT manually create Git tags — release-plz handles this
-- Ensure your commit messages follow conventional commits format
-- Include issue numbers in commits: `feat(#123): description`
+- Ensure your commit messages follow conventional commits format (issue linkage goes in the PR body, not the commit scope)
+- **Always include `Closes #NNN` (or `Fixes #NNN`) in the PR body** — this is the issue-traceability mechanism. Because the commit scope must stay scope-free, the changelog entry shows only the PR number (e.g. `Title ([#175](link))`), not the issue number; the `Closes #NNN` line in the PR body is what keeps the issue linked and closable.
 
 If you need to modify an in-progress release:
 - Contact maintainers to coordinate manual intervention
@@ -218,6 +222,8 @@ vipune add "Test"  # Use --project if wrong project detected
 5. Ensure CI passes (all checks green)
 6. Address any code review comments
 7. PR is squash-merged to main
+
+**Issue traceability:** the PR body must include `Closes #NNN` (or `Fixes #NNN`). This repo squash-merges, and commit scopes must not contain issue numbers (see [Commit Style](#commit-style)), so the changelog entry shows only the auto-appended PR number — the `Closes #NNN` line in the PR body is what preserves the issue link and auto-closes the issue on merge.
 
 ## Code of Conduct
 
