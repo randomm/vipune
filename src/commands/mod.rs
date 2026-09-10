@@ -6,6 +6,9 @@ mod merge;
 mod reindex;
 
 #[cfg(test)]
+pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search};
+
+#[cfg(test)]
 mod doctor_projects_tests;
 
 #[cfg(test)]
