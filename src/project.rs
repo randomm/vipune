@@ -185,8 +185,18 @@ fn emit_fallback_warning(project_id: &str, git_root: &Path) {
 
 /// Parse git remote URL to owner/repo format.
 ///
+/// The canonical rule is the **last two path segments** of the repository
+/// path, applied uniformly to both the SSH-shorthand form and the `://` forms.
+/// This keeps the same repository resolving to the same project_id regardless
+/// of whether it is referenced via `git@host:owner/repo` or
+/// `https://host/owner/repo` — including nested namespaces such as
+/// `git@gitlab.example.com:group/subgroup/project` and
+/// `https://gitlab.example.com/group/subgroup/project`, which both yield
+/// `subgroup/project` (issue #164).
+///
 /// Supported formats:
 /// - SSH shorthand: `git@host:owner/repo.git` → `owner/repo`
+/// - SSH shorthand, nested: `git@host:group/subgroup/project.git` → `subgroup/project`
 /// - HTTPS: `https://host/owner/repo.git` → `owner/repo`
 /// - SSH URL: `ssh://git@host/owner/repo.git` → `owner/repo`
 /// - Generic `://` URLs are handled by splitting on `://` and taking the last
@@ -200,7 +210,18 @@ fn parse_git_remote(url: &str) -> String {
     // SSH format: git@github.com:owner/repo
     if let Some(rest) = url.strip_prefix("git@") {
         if let Some(colon_pos) = rest.find(':') {
-            return rest[colon_pos + 1..].to_string();
+            let path = &rest[colon_pos + 1..];
+            let segments: Vec<&str> = path.split('/').collect();
+            // Canonical rule: last two path segments (matches the :// branch
+            // so SSH and HTTPS forms of the same repo yield the same id).
+            if segments.len() >= 2 {
+                return format!(
+                    "{}/{}",
+                    segments[segments.len() - 2],
+                    segments[segments.len() - 1]
+                );
+            }
+            return path.to_string();
         }
     }
 

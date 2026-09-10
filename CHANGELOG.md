@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### ⚠ Breaking Changes
+
+- `parse_git_remote` now derives `project_id` from the **last two path segments** of the remote URL for BOTH SSH shorthand (`git@host:owner/repo.git`) and `://` URL forms (`https://…`, `ssh://…`), so the same repository resolves to the same `project_id` regardless of how its remote is written. Previously the two rules diverged: SSH shorthand returned the **entire** path after the colon while URL forms returned only the last two segments, so a repo behind a nested namespace (GitLab subgroups, Gitea/Forgejo organisations, Azure DevOps) forked its memory when the remote form changed — e.g. `git@gitlab.example.com:group/subgroup/project.git` yielded `group/subgroup/project` while `https://gitlab.example.com/group/subgroup/project.git` yielded `subgroup/project`. Repos whose id was derived from an SSH remote under a nested namespace will see their `project_id` shortened to the last two segments on upgrade. Use `vipune doctor --projects` to detect the split, then `vipune project merge <old-id> <new-id>` to move affected memories to the corrected id (see migration guidance in `docs/cli-reference.md`).
+
 ## [0.9.1] - 2026-08-20
 
 ### Bug Fixes

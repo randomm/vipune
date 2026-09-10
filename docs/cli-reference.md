@@ -508,6 +508,61 @@ vipune add "Memory for specific project" --project "my-custom-project"
 
 ---
 
+## Migrating nested-namespace projects
+
+Repositories with a **nested namespace** in their remote URL can resolve to different `project_id`s depending on the URL form, silently fragmenting recall. This affects GitLab **subgroups**, Gitea **organisations**, self-hosted **Forgejo**, and **Azure DevOps** — any host where the path has more than two segments. Plain `github.com/owner/repo` (two segments) is unaffected because both URL forms agree.
+
+**How the split happens:** vipune derives the `project_id` from the `origin` remote. Before the canonicalisation fix (see [#164](https://github.com/randomm/vipune/issues/164)), the two URL forms used **different** truncation rules for nested paths:
+
+| Remote URL | Old project_id |
+|---|---|
+| `https://gitlab.example.com/group/subgroup/project.git` | `subgroup/project` |
+| `git@gitlab.example.com:group/subgroup/project.git` | `group/subgroup/project` |
+
+If you switched the remote between HTTPS and SSH — or cloned one way on one machine and the other way elsewhere — the same repository's memories got filed under two different ids. A search scoped to one cannot see the other, and nothing signals it.
+
+**Canonical rule going forward:** for both URL forms, vipune takes the **last two path segments** (`subgroup/project`). The SSH-shortcut and `://` forms now agree, so switching remotes no longer forks your memories. Note this is a **breaking change to existing ids** for affected users — the id for a repo that previously resolved via its remote will change (see the project [CHANGELOG](../CHANGELOG.md)).
+
+**Migration:** repair existing splits. The detect-and-repair tooling from [#158](https://github.com/randomm/vipune/issues/158) Phase 2 makes this safe rather than a silent re-fork.
+
+1. **Detect suspected splits.** `doctor --projects` scans *all* project ids in the database (it ignores `-p/--project`, because a split spans two ids by definition) and reports pairs where one bare id equals a segment of another, with row counts for each side:
+
+   ```bash
+   vipune doctor --projects
+   ```
+
+   ```
+   Suspected project splits:
+
+     'pi-an' (8 rows)  +  'randomm/pi-an' (2 rows)
+
+   These are suspected pairs — confirm they represent the same repository before merging.
+   ```
+
+   Pairs are **suspected only** — they require human confirmation before merging. Known false positives include a genuinely separate project whose directory name matches another project's repo name (`ci-runner` vs `team/ci-runner`).
+
+2. **Merge confirmed pairs.** Move all rows from one id to the other, in a single transaction:
+
+   ```bash
+   vipune project merge <from> <to>
+   ```
+
+   ```
+   vipune project merge group/subgroup/project subgroup/project
+   ```
+
+   ```
+   Merged 12 row(s) from 'group/subgroup/project' to 'subgroup/project'
+
+   Note: If a vipune MCP server is running, it holds its project_id from startup. Restart the MCP server to see rows under the new project id.
+   ```
+
+   The merge is **user-invoked, never automatic** — it moves rows from `from` into `to` (merging into a target that already holds rows is the normal case), preserves content, timestamps, counters, and embeddings byte-identically, and is idempotent (a second run moves zero rows).
+
+3. **Restart your MCP server** if one is running. It resolves `project_id` once at startup and stays scoped to the old id until restarted, so it will not see the merged rows otherwise.
+
+---
+
 ## Error Handling
 
 All commands return exit code `1` on error, with error message to stderr or JSON error response.
