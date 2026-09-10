@@ -50,7 +50,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
         run: cargo test
@@ -97,7 +97,7 @@ jobs:
           key: ${{ runner.os }}-${{ env.HF_CACHE_KEY }}
 
       - name: Clippy (no default features)
-        run: cargo clippy --no-default-features -- -D warnings
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
 
       - name: Test (no default features)
         run: cargo test --no-default-features

@@ -412,7 +412,6 @@ mod tests {
         target: usize,
         expect_success: bool,
         min_tokens: usize,
-        max_tokens: Option<usize>,
     ) {
         let text = build_text_up_to_tokens(engine, target);
         let actual_count = engine.token_count(&text).expect("count tokens");
@@ -422,14 +421,6 @@ mod tests {
             min_tokens,
             actual_count
         );
-        if let Some(max) = max_tokens {
-            assert!(
-                actual_count <= max,
-                "Expected <= {} tokens, got {}",
-                max,
-                actual_count
-            );
-        }
 
         if expect_success {
             let embedding = engine.embed(&text).expect("embed text");
@@ -456,8 +447,68 @@ mod tests {
     #[test]
     fn test_integration_boundary_512_tokens() {
         let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
-        // Build text targeting ≤512 tokens; should succeed
-        run_boundary_test(&mut engine, 512, true, 1, Some(MAX_EMBEDDING_TOKENS));
+        // Build text targeting ≤512 tokens (guaranteed by the builder); should succeed
+        run_boundary_test(&mut engine, 512, true, 1);
+    }
+
+    /// Builds text with the largest repetition count of "word " whose actual
+    /// token count is at most `limit`, using binary search over the count.
+    ///
+    /// The BGE-small tokenizer is superlinear for repeated words, so the
+    /// resulting token count is generally less than the repetition count.
+    /// Returns `(text, actual_token_count)`.
+    fn build_largest_at_most(engine: &mut EmbeddingEngine, limit: usize) -> (String, usize) {
+        let count_tokens = |n: usize| {
+            engine
+                .token_count("word ".repeat(n).trim())
+                .expect("count tokens")
+        };
+        // Binary search for the largest n such that count(n) <= limit
+        let mut lo = 0usize;
+        let mut hi = limit;
+        while lo < hi {
+            let mid = lo + (hi - lo).div_ceil(2);
+            if count_tokens(mid) <= limit {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        let text = "word ".repeat(lo).trim().to_string();
+        let actual = count_tokens(lo);
+        assert!(
+            actual <= limit,
+            "Expected <= {} tokens, got {}",
+            limit,
+            actual
+        );
+        (text, actual)
+    }
+
+    /// Boundary coverage contract, decided once in issue #160 (resolving the
+    /// round-1/round-3 lens oscillation):
+    ///
+    /// - **512** — the guard boundary. `build_text_up_to_tokens` guarantees
+    ///   `≤512` tokens; `embed()` must succeed.
+    /// - **511** — one token under the limit. `build_largest_at_most(limit=511)`
+    ///   finds the largest repetition count whose token count is `≤511`;
+    ///   `embed()` must succeed.
+    /// - **520** — over the limit. `build_text_up_to_tokens` guarantees `≤520`
+    ///   tokens; the assertion `count >= 513` confirms the overshoot, and
+    ///   `embed()` must fail with `ContentTooLong`.
+    #[ignore]
+    #[test]
+    fn test_integration_boundary_511_tokens() {
+        let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
+        let (text, count) = build_largest_at_most(&mut engine, MAX_EMBEDDING_TOKENS - 1);
+        assert!(
+            count < MAX_EMBEDDING_TOKENS,
+            "Expected < {} tokens, got {}",
+            MAX_EMBEDDING_TOKENS,
+            count
+        );
+        let embedding = engine.embed(&text).expect("embed one-token-under text");
+        assert_eq!(embedding.len(), EMBEDDING_DIMS);
     }
 
     #[ignore]
@@ -465,7 +516,7 @@ mod tests {
     fn test_integration_boundary_513_tokens() {
         let mut engine = EmbeddingEngine::new("BAAI/bge-small-en-v1.5").expect("load model");
         // Build text targeting 520 tokens; should exceed 512 and fail
-        run_boundary_test(&mut engine, 520, false, MAX_EMBEDDING_TOKENS + 1, None);
+        run_boundary_test(&mut engine, 520, false, MAX_EMBEDDING_TOKENS + 1);
     }
 
     #[ignore]

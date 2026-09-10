@@ -7,7 +7,7 @@ This document helps AI agents working on vipune understand the codebase and how 
 Before pushing any changes:
 
 ```bash
-cargo fmt --check && cargo clippy -- -D warnings && cargo test
+cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
 All three checks must pass. No exceptions, no bypasses (`--no-verify`, suppressions, etc.).
@@ -59,10 +59,10 @@ This creates persistent memory across tasks — store patterns, conventions, got
 | Task | Command |
 |------|---------|
 | Run tests | `cargo test` |
-| Lint | `cargo clippy -- -D warnings` |
+| Lint | `cargo clippy --all-targets -- -D warnings` |
 | Format check | `cargo fmt --check` |
 | Format code | `cargo fmt` |
-| All gates | `cargo fmt --check && cargo clippy -- -D warnings && cargo test` |
+| All gates | `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` |
 | Build release | `cargo build --release` |
 
 ## Key Constraints

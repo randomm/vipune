@@ -53,7 +53,7 @@ mod tests {
             "proj1",
             UpdateOptions {
                 content: Some("updated text"),
-                embedding: Some(&embedding.as_slice()),
+                embedding: Some(embedding.as_slice()),
                 metadata: None,
                 memory_type: None,
                 status: None,

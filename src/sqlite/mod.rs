@@ -268,6 +268,7 @@ impl Database {
     ///
     /// This is used in tests to control the created_at and updated_at timestamps.
     #[cfg(test)]
+    #[allow(clippy::too_many_arguments)] // signature mirrors insert(); 7/8 data fields map 1:1 to columns
     pub(crate) fn insert_with_time(
         &self,
         project_id: &str,
