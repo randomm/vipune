@@ -131,7 +131,7 @@ Replace `<you>` with your actual username. Do NOT use `~` in absolute paths — 
 
 **Environment variables** (set in the `env` block):
 - `VIPUNE_DATABASE_PATH` — SQLite database location (default: `~/.vipune/memories.db`)
-- `VIPUNE_MODEL_CACHE` — Model download cache directory (default: `~/.vipune/models`)
+- `HF_HOME` — HuggingFace cache home directory (changes the model cache location to `$HF_HOME/hub`; default: `~/.cache/huggingface/hub`)
 - `VIPUNE_PROJECT` — Project identifier override (auto-detected from git by default)
 - `VIPUNE_EMBEDDING_MODEL` — HuggingFace model ID (default: `BAAI/bge-small-en-v1.5`)
 - `VIPUNE_SIMILARITY_THRESHOLD` — Conflict detection threshold, 0.0-1.0 (default: `0.85`)

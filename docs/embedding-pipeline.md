@@ -42,7 +42,7 @@ Text input → Tokenizer → ONNX session → Mean pooling → L2 normalization 
 - **Location**: `~/.cache/huggingface/hub/`
 - **Download**: First use only via `hf_hub` crate
 - **Reuse**: All subsequent operations use cached model
-- **Size**: ~400MB (model weights + tokenizer)
+- **Size**: ~66MB (ONNX model + tokenizer)
 
 ## ONNX Integration
 
@@ -167,7 +167,7 @@ When testing a new model:
 
 ### Memory Usage
 
-- **Model loading**: ~400MB RAM (model weights)
+- **Model loading**: ~100MB RAM (model weights)
 - **Per embedding**: 1,536 bytes in database + 1,536 bytes during computation
 - **Peak**: ~500MB during embedding generation
 
@@ -189,7 +189,7 @@ When testing a new model:
 
 ```bash
 # Clear cache and retry
-rm -rf ~/.vipune/models/
+rm -rf ~/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5/
 vipune add "Test text"
 ```
 

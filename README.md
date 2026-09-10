@@ -252,13 +252,13 @@ vipune works with zero configuration. All paths use the user's home directory:
 
 **Default paths:**
 - Database: `~/.vipune/memories.db`
-- Model cache: `~/.vipune/models/`
+- Model cache: `~/.cache/huggingface/hub/` (standard HuggingFace Hub layout, created by `hf-hub` on first download)
 - Config file: `~/.config/vipune/config.toml`
 
 **Environment variables (override defaults):**
 - `VIPUNE_DATABASE_PATH` - SQLite database location
 - `VIPUNE_EMBEDDING_MODEL` - HuggingFace model ID (default: `BAAI/bge-small-en-v1.5`)
-- `VIPUNE_MODEL_CACHE` - Model download cache directory
+- `HF_HOME` - HuggingFace cache home directory (changes the model cache location to `$HF_HOME/hub`)
 - `VIPUNE_PROJECT` - Project identifier (overrides auto-detection)
 - `VIPUNE_SIMILARITY_THRESHOLD` - Conflict detection threshold, 0.0-1.0 (default: `0.85`)
 - `VIPUNE_RECENCY_WEIGHT` - Recency bias in search results, 0.0-1.0 (default: `0.3`)
@@ -268,7 +268,6 @@ vipune works with zero configuration. All paths use the user's home directory:
 ```toml
 database_path = "~/.vipune/memories.db"
 embedding_model = "BAAI/bge-small-en-v1.5"
-model_cache = "~/.vipune/models"
 similarity_threshold = 0.85
 recency_weight = 0.3
 ```

@@ -48,14 +48,6 @@ pub fn apply_embedding_model_override(embedding_model: &mut String) -> Result<()
     Ok(())
 }
 
-/// Apply VIPUNE_MODEL_CACHE environment variable override.
-pub fn apply_model_cache_override(model_cache: &mut PathBuf) -> Result<(), Error> {
-    if let Ok(val) = std::env::var("VIPUNE_MODEL_CACHE") {
-        *model_cache = parse_env_path("VIPUNE_MODEL_CACHE", &val)?;
-    }
-    Ok(())
-}
-
 /// Apply VIPUNE_SIMILARITY_THRESHOLD environment variable override.
 pub fn apply_similarity_threshold_override(similarity_threshold: &mut f64) -> Result<(), Error> {
     if let Ok(val) = std::env::var("VIPUNE_SIMILARITY_THRESHOLD") {

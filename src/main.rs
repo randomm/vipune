@@ -104,7 +104,6 @@ fn to_lib_config(config: &config::Config) -> vipune::Config {
     vipune::Config {
         database_path: config.database_path.clone(),
         embedding_model: config.embedding_model.clone(),
-        model_cache: config.model_cache.clone(),
         similarity_threshold: config.similarity_threshold,
         recency_weight: config.recency_weight,
         hybrid: config.hybrid,
@@ -350,7 +349,6 @@ mod tests {
         let local_config = config::Config {
             database_path: PathBuf::from("/nondefault/db/path.sqlite"),
             embedding_model: "nondefault/embedding-model".to_string(),
-            model_cache: PathBuf::from("/nondefault/model/cache"),
             similarity_threshold: 0.42,
             recency_weight: 0.77,
             hybrid: true,
@@ -363,10 +361,6 @@ mod tests {
             PathBuf::from("/nondefault/db/path.sqlite")
         );
         assert_eq!(lib_config.embedding_model, "nondefault/embedding-model");
-        assert_eq!(
-            lib_config.model_cache,
-            PathBuf::from("/nondefault/model/cache")
-        );
         assert_eq!(lib_config.similarity_threshold, 0.42);
         assert_eq!(lib_config.recency_weight, 0.77);
         assert!(lib_config.hybrid);

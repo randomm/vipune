@@ -153,7 +153,6 @@ Create `~/.config/vipune/config.toml`:
 ```toml
 database_path = "~/.vipune/memories.db"
 embedding_model = "BAAI/bge-small-en-v1.5"
-model_cache = "~/.vipune/models"
 similarity_threshold = 0.85
 recency_weight = 0.3
 ```
@@ -243,7 +242,7 @@ If the first run fails to download the model:
 
 ```bash
 # Clear cache and retry
-rm -rf ~/.vipune/models/
+rm -rf ~/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5/
 vipune add "Test"  # Will re-download
 ```
 

@@ -41,10 +41,6 @@ pub struct Config {
     #[serde(default)]
     pub embedding_model: String,
 
-    /// Directory for caching downloaded ONNX model files.
-    #[serde(default)]
-    pub model_cache: PathBuf,
-
     /// Minimum similarity score (0.0-1.0) required for search results to be returned.
     #[serde(default)]
     pub similarity_threshold: f64,
@@ -71,7 +67,6 @@ impl Default for Config {
         Self {
             database_path: vipune_dir.join("memories.db"),
             embedding_model: EMBED_MODEL_ID.to_string(),
-            model_cache: vipune_dir.join("models"),
             similarity_threshold: 0.85,
             recency_weight: 0.3,
             hybrid: false,
@@ -88,14 +83,12 @@ impl Config {
 
         if let Some(mut file) = file_config {
             paths::expand_tilde(&mut file.database_path);
-            paths::expand_tilde(&mut file.model_cache);
             config.merge_from_file(file);
         }
 
         overrides::apply_env_overrides(
             &mut config.database_path,
             &mut config.embedding_model,
-            &mut config.model_cache,
             &mut config.similarity_threshold,
             &mut config.recency_weight,
             &mut config.hybrid,
@@ -114,9 +107,6 @@ impl Config {
         if !file.embedding_model.is_empty() {
             self.embedding_model = file.embedding_model;
         }
-        if !file.model_cache.as_os_str().is_empty() {
-            self.model_cache = file.model_cache;
-        }
         self.similarity_threshold = file.similarity_threshold;
         self.recency_weight = file.recency_weight;
     }
@@ -133,7 +123,11 @@ impl Config {
         validator.validate()
     }
 
-    /// Ensure parent directories for database and cache paths exist.
+    /// Ensure the parent directory of the database path exists.
+    ///
+    /// Model files are cached in the HuggingFace Hub cache
+    /// (`~/.cache/huggingface/hub/` by default), which `hf-hub` creates on
+    /// demand — vipune does not pre-create any model directory.
     pub fn ensure_directories(&self) -> Result<(), Error> {
         if let Some(parent) = self.database_path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -144,15 +138,6 @@ impl Config {
                     ))
                 })?;
             }
-        }
-
-        if !self.model_cache.as_os_str().is_empty() {
-            std::fs::create_dir_all(&self.model_cache).map_err(|e| {
-                Error::Config(format!(
-                    "Failed to create model cache directory {}: {e}",
-                    self.model_cache.display()
-                ))
-            })?;
         }
 
         Ok(())
@@ -169,7 +154,6 @@ mod tests {
 
         assert!(config.database_path.ends_with(".vipune/memories.db"));
         assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
-        assert!(config.model_cache.ends_with(".vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
         assert_eq!(config.recency_weight, 0.3);
         assert!(!config.hybrid);
@@ -181,7 +165,6 @@ mod tests {
         cleanup_env_vars(&[
             "VIPUNE_DATABASE_PATH",
             "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
         ]);
@@ -199,7 +182,6 @@ mod tests {
         cleanup_env_vars(&[
             "VIPUNE_DATABASE_PATH",
             "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_MODEL_CACHE",
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
         ]);
@@ -208,7 +190,6 @@ mod tests {
 
         assert!(config.database_path.ends_with(".vipune/memories.db"));
         assert_eq!(config.embedding_model, "BAAI/bge-small-en-v1.5");
-        assert!(config.model_cache.ends_with(".vipune/models"));
         assert_eq!(config.similarity_threshold, 0.85);
     }
 
