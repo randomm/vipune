@@ -386,7 +386,10 @@ fn test_detect_project_explicit_override() {
 /// git process"). Writes a sleep script at `dir/git` and marks it executable.
 fn make_git_sleep_stub(dir: &Path) {
     let stub = dir.join("git");
-    std::fs::write(&stub, "#!/bin/sh\nsleep 5\n").expect("write sleep stub");
+    // Use /bin/sleep so the stub does not depend on `sleep` being on the CI
+    // runner's PATH (Linux CI pools have shipped minimal sh where a bare
+    // `sleep` resolves to exit 127). `/bin/sleep` exists on macOS and Linux.
+    std::fs::write(&stub, "#!/bin/sh\n/bin/sleep 5\n").expect("write sleep stub");
     use std::os::unix::fs::PermissionsExt;
     let mut perms = std::fs::metadata(&stub).expect("stat stub").permissions();
     perms.set_mode(0o755);
