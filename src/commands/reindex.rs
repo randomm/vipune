@@ -90,6 +90,10 @@ pub fn handle_reindex(
     let mut responses: Vec<ReindexResponse> = vec![];
 
     for project_id in &projects {
+        if !json {
+            println!("Project {}: reindexing...", project_id);
+        }
+
         let mut embed_callback = |content: &str| {
             engine
                 .embed(content)
@@ -110,8 +114,8 @@ pub fn handle_reindex(
 
         if !json {
             println!(
-                "Project {}: {} reindexed, {} skipped, {} failed",
-                project_id, reindexed, skipped, failed_count
+                "  Done: {} reindexed, {} skipped, {} failed",
+                reindexed, skipped, failed_count
             );
         }
     }
