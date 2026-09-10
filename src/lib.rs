@@ -154,10 +154,8 @@ mod integration_tests {
                 for entry in entries.flatten() {
                     let p = entry.path();
                     if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-                        if name.ends_with(".rs") && name != filename {
-                            if !candidates.contains(&p) {
-                                candidates.push(p);
-                            }
+                        if name.ends_with(".rs") && name != filename && !candidates.contains(&p) {
+                            candidates.push(p);
                         }
                     }
                 }

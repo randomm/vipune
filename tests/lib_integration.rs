@@ -757,7 +757,7 @@ fn test_list_since_with_timezone_offset() {
         .list_since(project_id, &one_minute_ago, 10, None, None)
         .expect("Failed to list");
     // Should only return "new memory" as it's more recent than one minute ago
-    assert!(results.len() >= 1);
+    assert!(!results.is_empty());
     assert!(results.iter().any(|m| m.content == "new memory"));
 
     std::fs::remove_file(db_path).ok();
@@ -803,7 +803,7 @@ fn test_list_since_timestamp_precision_equivalence() {
 
     // Results should be identical (same query, same results)
     assert_eq!(results1.len(), results2.len());
-    if results1.len() > 0 && results2.len() > 0 {
+    if !results1.is_empty() && !results2.is_empty() {
         assert_eq!(results1[0].id, results2[0].id);
     }
 
