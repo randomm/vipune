@@ -499,7 +499,7 @@ v0.3 includes automatic schema migrations — no manual steps required. On first
 
 `search` and `get` maintain two telemetry columns per memory: `retrieval_count` (how many times the memory has been returned by `search` or `get`) and `last_retrieved_at` (timestamp of the most recent retrieval). Both commands accept `--no-touch` to skip updating them — useful for reads that should not influence ranking or promotion signals.
 
-As of this release the CLI does not return the telemetry in any command's JSON output, so it is currently only observable by inspecting the database directly. Retrieval via `list` does not count as a retrieval and never touches telemetry.
+`search` and `get` include `retrieval_count` and `last_retrieved_at` in their JSON output (`--json`). Retrieval via `list` does not count as a retrieval and never touches telemetry.
 
 ---
 
