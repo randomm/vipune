@@ -2,7 +2,7 @@
 
 use rusqlite::Result as SqliteResult;
 
-use super::{EMBEDDING_COLUMN, Error, Result, map_row_to_memory};
+use super::{Error, Result, map_row_to_memory};
 
 impl super::Database {
     /// List memories for a project, ordered by creation time (newest first).
@@ -25,32 +25,17 @@ impl super::Database {
         statuses: Option<&[&str]>,
     ) -> Result<Vec<super::Memory>> {
         let mut where_clauses = vec!["project_id = ?1".to_string()];
-        let mut param_index = 2usize;
-
-        // Status filter (default to active if None)
-        if let Some(statuses) = statuses {
-            if !statuses.is_empty() {
-                let placeholders: Vec<String> = (0..statuses.len())
-                    .map(|i| format!("?{}", param_index + i))
-                    .collect();
-                where_clauses.push(format!("status IN ({})", placeholders.join(", ")));
-                param_index += statuses.len();
-            }
-        } else {
-            where_clauses.push(format!("status = ?{}", param_index));
-            param_index += 1;
-        }
-
-        // Type filter (only if explicitly provided)
-        if let Some(types) = memory_types {
-            if !types.is_empty() {
-                let placeholders: Vec<String> = (0..types.len())
-                    .map(|i| format!("?{}", param_index + i))
-                    .collect();
-                where_clauses.push(format!("type IN ({})", placeholders.join(", ")));
-                param_index += types.len();
-            }
-        }
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&project_id];
+        let param_index = super::build_filters(
+            &mut where_clauses,
+            &mut params,
+            2,
+            statuses,
+            memory_types,
+            "",
+        );
+        let limit_param = limit as i64;
+        params.push(&limit_param);
 
         let where_clause = where_clauses.join(" AND ");
         let query = format!(
@@ -60,26 +45,6 @@ impl super::Database {
         );
 
         let mut stmt = self.conn.prepare(&query)?;
-
-        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&project_id];
-        if let Some(statuses) = statuses {
-            if statuses.is_empty() {
-                // explicit empty = no status filter, but we didn't add a clause
-            } else {
-                for s in statuses {
-                    params.push(s);
-                }
-            }
-        } else {
-            params.push(&"active");
-        }
-        if let Some(types) = memory_types {
-            for t in types {
-                params.push(t);
-            }
-        }
-        let limit_param = limit as i64;
-        params.push(&limit_param);
 
         let memories: SqliteResult<Vec<super::Memory>> = stmt
             .query_map(params.as_slice(), map_row_to_memory)?
@@ -129,32 +94,17 @@ impl super::Database {
             .map_err(|e| Error::Sqlite(format!("Invalid RFC3339 timestamp: {}", e)))?;
 
         let mut where_clauses = vec!["project_id = ?1".to_string(), "created_at > ?2".to_string()];
-        let mut param_index = 3usize;
-
-        // Status filter (default to active if None)
-        if let Some(statuses) = statuses {
-            if !statuses.is_empty() {
-                let placeholders: Vec<String> = (0..statuses.len())
-                    .map(|i| format!("?{}", param_index + i))
-                    .collect();
-                where_clauses.push(format!("status IN ({})", placeholders.join(", ")));
-                param_index += statuses.len();
-            }
-        } else {
-            where_clauses.push(format!("status = ?{}", param_index));
-            param_index += 1;
-        }
-
-        // Type filter (only if explicitly provided)
-        if let Some(types) = memory_types {
-            if !types.is_empty() {
-                let placeholders: Vec<String> = (0..types.len())
-                    .map(|i| format!("?{}", param_index + i))
-                    .collect();
-                where_clauses.push(format!("type IN ({})", placeholders.join(", ")));
-                param_index += types.len();
-            }
-        }
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&project_id, &since_timestamp];
+        let param_index = super::build_filters(
+            &mut where_clauses,
+            &mut params,
+            3,
+            statuses,
+            memory_types,
+            "",
+        );
+        let limit_param = limit as i64;
+        params.push(&limit_param);
 
         let where_clause = where_clauses.join(" AND ");
         let query = format!(
@@ -164,26 +114,6 @@ impl super::Database {
         );
 
         let mut stmt = self.conn.prepare(&query)?;
-
-        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&project_id, &since_timestamp];
-        if let Some(statuses) = statuses {
-            if statuses.is_empty() {
-                // explicit empty = no status filter, but we didn't add a clause
-            } else {
-                for s in statuses {
-                    params.push(s);
-                }
-            }
-        } else {
-            params.push(&"active");
-        }
-        if let Some(types) = memory_types {
-            for t in types {
-                params.push(t);
-            }
-        }
-        let limit_param = limit as i64;
-        params.push(&limit_param);
 
         let memories: SqliteResult<Vec<super::Memory>> = stmt
             .query_map(params.as_slice(), map_row_to_memory)?
@@ -246,29 +176,9 @@ impl super::Database {
 
         let rows: SqliteResult<Vec<(String, super::Memory)>> = stmt
             .query_map(params.as_slice(), |row| {
-                // Positions match the SELECT above (see EMBEDDING_COLUMN).
                 let id: String = row.get(0)?;
-                let blob: Vec<u8> = row.get(EMBEDDING_COLUMN)?;
-                let embedding = super::blob_to_vec(&blob)
-                    .map_err(|e| super::query_mod::corrupt_embedding_error(id.clone(), e))?;
-                Ok((
-                    row.get::<_, String>(0)?,
-                    super::Memory {
-                        id: row.get(0)?,
-                        project_id: row.get(1)?,
-                        content: row.get(2)?,
-                        metadata: row.get(3)?,
-                        embedding,
-                        similarity: None,
-                        created_at: row.get(5)?,
-                        updated_at: row.get(6)?,
-                        memory_type: row.get(7)?,
-                        status: row.get(8)?,
-                        superseded_by: row.get(9)?,
-                        retrieval_count: row.get(10)?,
-                        last_retrieved_at: row.get(11)?,
-                    },
-                ))
+                let memory = map_row_to_memory(row)?;
+                Ok((id, memory))
             })?
             .collect();
 

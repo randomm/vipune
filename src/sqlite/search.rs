@@ -50,31 +50,15 @@ impl Database {
         validate_limit(limit)?;
 
         let mut where_clauses = vec!["project_id = ?1".to_string()];
-        let mut param_index = 2usize;
-
-        // Status filter (default to active if None)
-        if let Some(statuses) = statuses {
-            if !statuses.is_empty() {
-                let placeholders: Vec<String> = (0..statuses.len())
-                    .map(|i| format!("?{}", param_index + i))
-                    .collect();
-                where_clauses.push(format!("status IN ({})", placeholders.join(", ")));
-                param_index += statuses.len();
-            }
-        } else {
-            where_clauses.push(format!("status = ?{}", param_index));
-            param_index += 1;
-        }
-
-        // Type filter (only if explicitly provided)
-        if let Some(types) = memory_types {
-            if !types.is_empty() {
-                let placeholders: Vec<String> = (0..types.len())
-                    .map(|i| format!("?{}", param_index + i))
-                    .collect();
-                where_clauses.push(format!("type IN ({})", placeholders.join(", ")));
-            }
-        }
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&project_id];
+        super::build_filters(
+            &mut where_clauses,
+            &mut params,
+            2,
+            statuses,
+            memory_types,
+            "",
+        );
 
         let where_clause = where_clauses.join(" AND ");
         let query = format!(
@@ -84,24 +68,6 @@ impl Database {
         );
 
         let mut stmt = self.conn.prepare(&query)?;
-
-        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&project_id];
-        if let Some(statuses) = statuses {
-            if statuses.is_empty() {
-                // explicit empty = no status filter, but we didn't add a clause
-            } else {
-                for s in statuses {
-                    params.push(s);
-                }
-            }
-        } else {
-            params.push(&"active");
-        }
-        if let Some(types) = memory_types {
-            for t in types {
-                params.push(t);
-            }
-        }
 
         let mut memories: Vec<Memory> = Vec::new();
 

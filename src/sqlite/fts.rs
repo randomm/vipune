@@ -154,32 +154,15 @@ impl Database {
             "memories_fts MATCH ?1".to_string(),
             "m.project_id = ?2".to_string(),
         ];
-        let mut param_index = 3usize;
-
-        // Status filter (default to active if None)
-        if let Some(statuses) = statuses {
-            if !statuses.is_empty() {
-                let placeholders: Vec<String> = (0..statuses.len())
-                    .map(|i| format!("?{}", param_index + i))
-                    .collect();
-                where_clauses.push(format!("m.status IN ({})", placeholders.join(", ")));
-                param_index += statuses.len();
-            }
-        } else {
-            where_clauses.push(format!("m.status = ?{}", param_index));
-            param_index += 1;
-        }
-
-        // Type filter (only if explicitly provided)
-        if let Some(types) = memory_types {
-            if !types.is_empty() {
-                let placeholders: Vec<String> = (0..types.len())
-                    .map(|i| format!("?{}", param_index + i))
-                    .collect();
-                where_clauses.push(format!("m.type IN ({})", placeholders.join(", ")));
-                param_index += types.len();
-            }
-        }
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&escaped_query, &project_id];
+        let param_index = super::build_filters(
+            &mut where_clauses,
+            &mut params,
+            3,
+            statuses,
+            memory_types,
+            "m.",
+        );
 
         let where_clause = where_clauses.join(" AND ");
         let sql = format!(
@@ -195,27 +178,10 @@ impl Database {
             where_clause, param_index
         );
 
-        let mut stmt = self.conn.prepare(&sql)?;
-
-        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&escaped_query, &project_id];
-        if let Some(statuses) = statuses {
-            if statuses.is_empty() {
-                // explicit empty = no status filter, but we didn't add a clause
-            } else {
-                for s in statuses {
-                    params.push(s);
-                }
-            }
-        } else {
-            params.push(&"active");
-        }
-        if let Some(types) = memory_types {
-            for t in types {
-                params.push(t);
-            }
-        }
         let limit_i64 = limit as i64;
         params.push(&limit_i64);
+
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let memories: rusqlite::Result<Vec<Memory>> = stmt
             .query_map(params.as_slice(), |row| {
