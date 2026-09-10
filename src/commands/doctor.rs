@@ -64,10 +64,23 @@ pub fn handle_doctor(
     })?;
 
     // Determine which projects to audit
+    let all_project_ids: Vec<String> = wrap_busy(db.list_all_project_ids().map_err(Error::from))?;
+
+    // When scoped to a single project, warn about other projects in the
+    // database so the report is not misread as covering the whole store.
+    if let Some(filter) = project_filter {
+        if !json {
+            let other_count = all_project_ids.iter().filter(|pid| *pid != filter).count();
+            if let Some(hint) = scoped_project_hint(other_count) {
+                println!("{}", hint);
+            }
+        }
+    }
+
     let projects: Vec<String> = if let Some(filter) = project_filter {
         vec![filter.to_string()]
     } else {
-        wrap_busy(db.list_all_project_ids().map_err(Error::from))?
+        all_project_ids
     };
 
     if projects.is_empty() {
@@ -118,6 +131,21 @@ pub fn handle_doctor(
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Build the hint shown when the embeddings audit is scoped to a single
+/// project but other projects exist in the database, so the scoped report is
+/// not misread as covering the whole store.
+///
+/// Returns `None` when there are no other projects (nothing to hint about).
+pub(crate) fn scoped_project_hint(other_project_count: usize) -> Option<String> {
+    if other_project_count == 0 {
+        return None;
+    }
+    Some(format!(
+        "Note: {} other project(s) in this database. Run 'vipune doctor --embeddings' without -p to audit them all.",
+        other_project_count
+    ))
 }
 
 struct AuditResult {
@@ -346,6 +374,27 @@ mod tests {
         assert_eq!(result.real_count, 0);
         assert_eq!(result.mock_count, 1);
         assert_eq!(result.unknown_count, 0);
+    }
+
+    #[test]
+    fn test_scoped_project_hint_names_other_projects() {
+        let hint = scoped_project_hint(14).expect("hint for 14 other projects");
+        assert!(
+            hint.contains("14 other project(s) in this database"),
+            "hint must name the count of other projects: {hint}"
+        );
+        assert!(hint.contains("vipune doctor --embeddings"));
+    }
+
+    #[test]
+    fn test_scoped_project_hint_singular() {
+        let hint = scoped_project_hint(1).expect("hint for 1 other project");
+        assert!(hint.contains("1 other project(s)"), "got: {hint}");
+    }
+
+    #[test]
+    fn test_scoped_project_hint_none_when_no_other_projects() {
+        assert!(scoped_project_hint(0).is_none());
     }
 
     #[test]
