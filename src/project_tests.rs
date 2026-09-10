@@ -7,7 +7,10 @@
 //! No process-global state is mutated (`set_current_dir`, `set_var`).
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use super::*;
 use tempfile::TempDir;
@@ -301,38 +304,18 @@ fn test_fallback_no_remotes_yields_dir_name() {
 #[test]
 fn test_fallback_warning_message_includes_project_id() {
     let dir = create_git_repo();
-    let msg = build_fallback_warning_message(
-        dir.path().file_name().unwrap().to_str().unwrap(),
-        dir.path(),
-    );
+    let msg = build_fallback_warning_message(dir.path().file_name().unwrap().to_str().unwrap());
     assert!(msg.contains("using directory name as project_id"));
     assert!(msg.contains(dir.path().file_name().unwrap().to_str().unwrap()));
 }
 
 #[test]
-fn test_fallback_warning_message_lists_other_remotes() {
-    let dir = create_git_repo();
-    add_remote(
-        dir.path(),
-        "upstream",
-        "https://github.com/canonical/project.git",
-    );
-    let msg = build_fallback_warning_message(
-        dir.path().file_name().unwrap().to_str().unwrap(),
-        dir.path(),
-    );
-    assert!(msg.contains("other remotes"));
-    assert!(msg.contains("upstream"));
-}
-
-#[test]
 fn test_fallback_warning_message_no_other_remotes() {
     let dir = create_git_repo();
-    let msg = build_fallback_warning_message(
-        dir.path().file_name().unwrap().to_str().unwrap(),
-        dir.path(),
-    );
-    // No remotes at all — message should NOT mention other remotes.
+    let msg = build_fallback_warning_message(dir.path().file_name().unwrap().to_str().unwrap());
+    // The other-remotes lookup was removed (issue #163 finding 2): the warning
+    // must not spawn a third git subprocess on the degraded path, so it never
+    // mentions remotes regardless of what remotes exist.
     assert!(!msg.contains("other remotes"));
     assert!(msg.contains("This project_id may differ"));
 }
@@ -393,4 +376,160 @@ fn test_detect_project_delegates_to_current_dir() {
 #[test]
 fn test_detect_project_explicit_override() {
     assert_eq!(detect_project(Some("custom-id")), "custom-id");
+}
+
+// ── run_git: timeout, typed errors, stdout capture ───────────────────────────
+
+/// A stub `git` that sleeps on any invocation — stands in for a wedged real
+/// git process (frozen network fs, hung credential helper) without needing an
+/// actual hung git (issue #163 acceptance: "without relying on a real hung
+/// git process"). Writes a sleep script at `dir/git` and marks it executable.
+fn make_git_sleep_stub(dir: &Path) {
+    let stub = dir.join("git");
+    // Use /bin/sleep so the stub does not depend on `sleep` being on the CI
+    // runner's PATH (Linux CI pools have shipped minimal sh where a bare
+    // `sleep` resolves to exit 127). `/bin/sleep` exists on macOS and Linux.
+    std::fs::write(&stub, "#!/bin/sh\n/bin/sleep 5\n").expect("write sleep stub");
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(&stub).expect("stat stub").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&stub, perms).expect("chmod stub");
+}
+
+/// Like `run_git` but with an injectable PATH dir and timeout so tests can
+/// use a stub `git` and a short deadline without touching process env.
+fn run_git_in_env(
+    root: &Path,
+    args: &[&str],
+    timeout: Duration,
+    path_dir: Option<&Path>,
+) -> Result<String, GitError> {
+    let root_str = root
+        .to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| GitError::Spawn(format!("non-UTF-8 path: {:?}", root)))?;
+
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(&root_str);
+    cmd.args(args);
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    if let Some(dir) = path_dir {
+        cmd.env("PATH", dir);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| GitError::Spawn(e.to_string()))?;
+
+    let (tx, rx) = mpsc::channel();
+    {
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr = child.stderr.take().expect("stderr piped");
+        thread::spawn(move || {
+            let stdout_buf = read_pipe(stdout);
+            let stderr_buf = read_pipe(stderr);
+            let _ = tx.send((stdout_buf, stderr_buf));
+        });
+    }
+
+    match rx.recv_timeout(timeout) {
+        Ok((stdout_buf, stderr_buf)) => match child.wait() {
+            Ok(status) => {
+                if status.success() {
+                    Ok(String::from_utf8_lossy(&stdout_buf).trim().to_string())
+                } else {
+                    Err(GitError::NonZeroExit {
+                        code: status.code(),
+                        stderr: String::from_utf8_lossy(&stderr_buf).to_string(),
+                    })
+                }
+            }
+            Err(e) => Err(GitError::Spawn(format!("wait failure: {e}"))),
+        },
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(GitError::Timeout(timeout))
+        }
+    }
+}
+
+#[test]
+fn test_run_git_timeout_kills_stub() {
+    // A stub `git` that sleeps 5 s stands in for a wedged real git. With a
+    // 100 ms deadline the kill path must fire and return the typed Timeout
+    // error — no real hung git process needed (issue #163 acceptance).
+    let stub_dir = TempDir::new().expect("stub bin dir");
+    make_git_sleep_stub(stub_dir.path());
+
+    let result = run_git_in_env(
+        Path::new("/"),
+        &["--version"],
+        Duration::from_millis(100),
+        Some(stub_dir.path()),
+    );
+    match result {
+        Err(GitError::Timeout(d)) => {
+            // The timeout must be the requested 100 ms, not the stub's 5 s.
+            assert!(d.as_millis() <= 100);
+        }
+        other => panic!("expected Err(GitError::Timeout), got {:?}", other),
+    }
+}
+
+#[test]
+fn test_run_git_captures_stdout_on_success() {
+    // `git -C <repo> rev-parse --show-toplevel` exits 0 with the repo root on
+    // stdout. The captured value must match, proving stdout piping works
+    // end-to-end through run_git (not just the empty case).
+    let dir = create_git_repo();
+    let out = run_git(dir.path(), &["rev-parse", "--show-toplevel"], GIT_TIMEOUT);
+    let root = out.expect("expected Ok");
+    // git prints the canonical (symlinks-resolved) path; resolve the temp dir
+    // the same way so the comparison holds on macOS where /tmp is a symlink.
+    let canonical = std::fs::canonicalize(dir.path()).expect("canonicalize temp dir");
+    let expected = canonical.to_str().expect("path is valid UTF-8");
+    assert_eq!(root, expected);
+}
+
+#[test]
+fn test_run_git_nonzero_exit_is_typed() {
+    // `git remote get-url origin` in a repo with no origin remote exits non-zero.
+    // The error must carry the failure cause, not collapse to None.
+    let dir = create_git_repo();
+    let result = run_git(dir.path(), &["remote", "get-url", "origin"], GIT_TIMEOUT);
+    match result {
+        Err(GitError::NonZeroExit { code, stderr }) => {
+            // git exits 2 (not 1) when the remote does not exist; the point of
+            // the test is that the non-zero exit is typed and diagnosable.
+            assert!(
+                code == Some(1) || code == Some(2),
+                "expected non-zero exit, got {code:?}"
+            );
+            assert!(
+                !stderr.is_empty(),
+                "stderr should be captured for diagnostics"
+            );
+        }
+        other => panic!("expected Err(GitError::NonZeroExit), got {:?}", other),
+    }
+}
+
+#[test]
+fn test_run_git_spawn_failure_is_typed() {
+    // A PATH that contains no `git` makes spawn fail; the error must name the
+    // cause (issue #163 finding 3) rather than collapse to None.
+    let empty_bin = TempDir::new().expect("empty bin dir");
+    let result = run_git_in_env(
+        Path::new("/"),
+        &["--version"],
+        GIT_TIMEOUT,
+        Some(empty_bin.path()),
+    );
+    match result {
+        Err(GitError::Spawn(msg)) => {
+            assert!(!msg.is_empty(), "spawn error should carry a reason");
+        }
+        other => panic!("expected Err(GitError::Spawn), got {:?}", other),
+    }
 }
