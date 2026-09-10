@@ -149,7 +149,9 @@ The final score combines: `(1 - recency_weight) * similarity + recency_weight * 
       "similarity": 0.95,
       "created_at": "2024-01-15T10:30:00Z",
       "retrieval_count": 12,
-      "last_retrieved_at": "2024-01-20T09:15:00Z"
+      "last_retrieved_at": "2024-01-20T09:15:00Z",
+      "memory_type": "fact",
+      "status": "active"
     },
     {
       "id": "234e5678-e89b-12d3-a456-426614174001",
@@ -157,7 +159,9 @@ The final score combines: `(1 - recency_weight) * similarity + recency_weight * 
       "similarity": 0.87,
       "created_at": "2024-01-16T14:20:00Z",
       "retrieval_count": 0,
-      "last_retrieved_at": null
+      "last_retrieved_at": null,
+      "memory_type": "fact",
+      "status": "active"
     }
   ]
 }
@@ -215,7 +219,9 @@ Updated: 2024-01-15T10:30:00Z
   "created_at": "2024-01-15T10:30:00Z",
   "updated_at": "2024-01-15T10:30:00Z",
   "retrieval_count": 5,
-  "last_retrieved_at": "2024-01-15T10:30:00Z"
+  "last_retrieved_at": "2024-01-15T10:30:00Z",
+  "memory_type": "fact",
+  "status": "active"
 }
 ```
 
@@ -261,14 +267,18 @@ vipune list [--limit <n>] [--memory-type <types>] [--status <statuses>] [--inclu
       "content": "Alice works at Microsoft",
       "created_at": "2024-01-15T10:30:00Z",
       "retrieval_count": 3,
-      "last_retrieved_at": "2024-01-17T08:45:00Z"
+      "last_retrieved_at": "2024-01-17T08:45:00Z",
+      "memory_type": "fact",
+      "status": "active"
     },
     {
       "id": "234e5678-e89b-12d3-a456-426614174001",
       "content": "Bob is a software engineer at Google",
       "created_at": "2024-01-16T14:20:00Z",
       "retrieval_count": 0,
-      "last_retrieved_at": null
+      "last_retrieved_at": null,
+      "memory_type": "preference",
+      "status": "active"
     }
   ]
 }

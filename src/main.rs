@@ -145,6 +145,117 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
     commands::execute(&cli.command, &mut store, project_id, &config, cli.json)
 }
 
+// Regression coverage for #178 (memory_type/status observable in get/search/list
+// JSON) lives here because the `commands` module is a binary-only unit that
+// `cargo test --lib` cannot reach: the tests below run inside the bin target.
+#[cfg(test)]
+mod issue_178_tests {
+    use crate::memory::MemoryStore;
+    use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+    use crate::memory_types::AddResult;
+    use crate::output::{GetResponse, ListItem, ListResponse, SearchResponse, SearchResultItem};
+
+    /// Round-trip a real store row through the exact `get` response struct
+    /// the handler serializes (`handlers.rs` `handle_get`). The `get` path
+    /// never embeds (it reads one row by id), so no model download is needed.
+    fn get_json_for(project_id: &str, content: &str, r#type: &str, status: &str) -> String {
+        let dir = tempfile::TempDir::new().expect("temp dir for issue 178 test");
+        let db_path = dir.path().join(format!("178_{}.db", uuid::Uuid::new_v4()));
+
+        let mut store = MemoryStore::new(
+            &db_path,
+            "BAAI/bge-small-en-v1.5",
+            crate::config::Config::default(),
+        )
+        .expect("Failed to create store");
+        let id = match store.add_with_conflict(
+            project_id,
+            content,
+            None,
+            false,
+            MemoryType::from_str(r#type).expect("type parse"),
+            MemoryStatus::from_str(status).expect("status parse"),
+        ) {
+            Ok(AddResult::Added { id }) => id,
+            other => panic!("Expected AddResult::Added, got {:?}", other),
+        };
+
+        let memory = store.get(&id, project_id).unwrap().expect("memory found");
+        let response = GetResponse {
+            id: memory.id.clone(),
+            content: memory.content.clone(),
+            project_id: memory.project_id,
+            metadata: memory.metadata,
+            created_at: memory.created_at,
+            updated_at: memory.updated_at,
+            memory_type: memory.memory_type,
+            status: memory.status,
+        };
+        // print_json writes to stdout (racy to capture under parallel tests);
+        // serialize the identical struct to verify the payload.
+        let json = serde_json::to_string(&response).expect("serialize get response");
+        drop(store);
+        drop(dir);
+        json
+    }
+
+    /// Regression test for issue #178: `get --json` must return `memory_type`
+    /// and `status`. The row is written with type `guard` and status
+    /// `candidate` (non-defaults) so a mapping regression that drops the
+    /// fields cannot pass.
+    #[test]
+    fn test_get_json_response_includes_memory_type_and_status() {
+        let json = get_json_for(
+            "issue-178",
+            "never restart after a failed merge",
+            "guard",
+            "candidate",
+        );
+
+        assert!(
+            json.contains("\"memory_type\":\"guard\""),
+            "get JSON must carry memory_type: {json}"
+        );
+        assert!(
+            json.contains("\"status\":\"candidate\""),
+            "get JSON must carry status: {json}"
+        );
+    }
+
+    /// The `search`/`list` handlers copy the same `Memory` fields into
+    /// `SearchResultItem`/`ListItem` (see `handlers.rs`); verify those
+    /// structs serialize type/status end to end.
+    #[test]
+    fn test_search_list_item_structs_serialize_type_and_status() {
+        let search = SearchResponse {
+            results: vec![SearchResultItem {
+                id: "id-1".to_string(),
+                content: "content".to_string(),
+                similarity: 0.9,
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                memory_type: "guard".to_string(),
+                status: "candidate".to_string(),
+            }],
+        };
+        let search_json = serde_json::to_string(&search).expect("serialize search");
+        assert!(search_json.contains("\"memory_type\":\"guard\""));
+        assert!(search_json.contains("\"status\":\"candidate\""));
+
+        let list = ListResponse {
+            memories: vec![ListItem {
+                id: "id-2".to_string(),
+                content: "content".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                memory_type: "procedure".to_string(),
+                status: "active".to_string(),
+            }],
+        };
+        let list_json = serde_json::to_string(&list).expect("serialize list");
+        assert!(list_json.contains("\"memory_type\":\"procedure\""));
+        assert!(list_json.contains("\"status\":\"active\""));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

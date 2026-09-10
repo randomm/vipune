@@ -33,6 +33,10 @@ pub struct SearchResultItem {
     pub retrieval_count: i64,
     /// RFC3339 timestamp of last retrieval (null if never retrieved).
     pub last_retrieved_at: Option<String>,
+    /// Memory type (fact, preference, procedure, guard, observation).
+    pub memory_type: String,
+    /// Lifecycle status (active, candidate, superseded, deprecated).
+    pub status: String,
 }
 
 /// Response for retrieving a specific memory.
@@ -54,6 +58,10 @@ pub struct GetResponse {
     pub retrieval_count: i64,
     /// RFC3339 timestamp of last retrieval (null if never retrieved).
     pub last_retrieved_at: Option<String>,
+    /// Memory type (fact, preference, procedure, guard, observation).
+    pub memory_type: String,
+    /// Lifecycle status (active, candidate, superseded, deprecated).
+    pub status: String,
 }
 
 /// Response for listing memories.
@@ -76,6 +84,10 @@ pub struct ListItem {
     pub retrieval_count: i64,
     /// RFC3339 timestamp of last retrieval (null if never retrieved).
     pub last_retrieved_at: Option<String>,
+    /// Memory type (fact, preference, procedure, guard, observation).
+    pub memory_type: String,
+    /// Lifecycle status (active, candidate, superseded, deprecated).
+    pub status: String,
 }
 
 /// Response for successful memory deletion.
@@ -244,6 +256,8 @@ mod tests {
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 retrieval_count: 3,
                 last_retrieved_at: Some("2024-01-02T00:00:00Z".to_string()),
+                memory_type: "guard".to_string(),
+                status: "active".to_string(),
             }],
         };
         let json = serde_json::to_string(&response).unwrap();
@@ -251,6 +265,9 @@ mod tests {
         assert!(json.contains("\"similarity\":0.95"));
         assert!(json.contains("\"retrieval_count\":3"));
         assert!(json.contains("\"last_retrieved_at\":\"2024-01-02T00:00:00Z\""));
+        // #178: type/status must be observable in JSON, not just filterable.
+        assert!(json.contains("\"memory_type\":\"guard\""));
+        assert!(json.contains("\"status\":\"active\""));
     }
 
     #[test]
@@ -263,6 +280,8 @@ mod tests {
                 created_at: "2024-01-01T00:00:00Z".to_string(),
                 retrieval_count: 0,
                 last_retrieved_at: None,
+                memory_type: "fact".to_string(),
+                status: "active".to_string(),
             }],
         };
         let json = serde_json::to_string(&response).unwrap();
@@ -278,6 +297,8 @@ mod tests {
             created_at: "2024-01-01T00:00:00Z".to_string(),
             retrieval_count: 5,
             last_retrieved_at: Some("2024-01-02T12:00:00Z".to_string()),
+            memory_type: "fact".to_string(),
+            status: "active".to_string(),
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("\"retrieval_count\":5"));
@@ -289,9 +310,46 @@ mod tests {
             created_at: "2024-01-01T00:00:00Z".to_string(),
             retrieval_count: 0,
             last_retrieved_at: None,
+            memory_type: "fact".to_string(),
+            status: "active".to_string(),
         };
         let json_none = serde_json::to_string(&item_none).unwrap();
         assert!(json_none.contains("\"retrieval_count\":0"));
         assert!(json_none.contains("\"last_retrieved_at\":null"));
+    }
+
+    #[test]
+    fn test_serialize_get_and_list_items_carry_type_and_status() {
+        let get = GetResponse {
+            id: "test-id".to_string(),
+            content: "test content".to_string(),
+            project_id: "proj".to_string(),
+            metadata: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            retrieval_count: 2,
+            last_retrieved_at: Some("2024-01-02T00:00:00Z".to_string()),
+            memory_type: "procedure".to_string(),
+            status: "candidate".to_string(),
+        };
+        let get_json = serde_json::to_string(&get).unwrap();
+        assert!(get_json.contains("\"retrieval_count\":2"));
+        assert!(get_json.contains("\"memory_type\":\"procedure\""));
+        assert!(get_json.contains("\"status\":\"candidate\""));
+
+        let list = ListResponse {
+            memories: vec![ListItem {
+                id: "test-id".to_string(),
+                content: "test content".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                retrieval_count: 0,
+                last_retrieved_at: None,
+                memory_type: "observation".to_string(),
+                status: "deprecated".to_string(),
+            }],
+        };
+        let list_json = serde_json::to_string(&list).unwrap();
+        assert!(list_json.contains("\"memory_type\":\"observation\""));
+        assert!(list_json.contains("\"status\":\"deprecated\""));
     }
 }
