@@ -821,6 +821,39 @@ mod tests {
         );
     }
 
+    // ── backup CLI parse tests ──
+
+    #[test]
+    fn test_cli_parse_backup() {
+        let cli = Cli::parse_from(["vipune", "backup"]);
+        matches!(cli.command, Commands::Backup { output: None });
+    }
+
+    #[test]
+    fn test_cli_parse_backup_with_output() {
+        let cli = Cli::parse_from(["vipune", "backup", "--output", "/tmp/backup.db"]);
+        matches!(
+            cli.command,
+            Commands::Backup {
+                output: Some(p)
+            } if p.to_string_lossy() == "/tmp/backup.db"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_backup_with_json() {
+        let cli = Cli::parse_from(["vipune", "--json", "backup"]);
+        assert!(cli.json);
+        matches!(cli.command, Commands::Backup { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_backup_with_db_path() {
+        let cli = Cli::parse_from(["vipune", "--db-path", "/tmp/seeded.db", "backup"]);
+        assert_eq!(cli.db_path, Some("/tmp/seeded.db".to_string()));
+        matches!(cli.command, Commands::Backup { .. });
+    }
+
     #[test]
     fn test_cli_parse_doctor_projects_with_json() {
         let cli = Cli::parse_from(["vipune", "--json", "doctor", "--projects"]);

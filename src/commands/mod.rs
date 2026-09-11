@@ -1,5 +1,6 @@
 //! Command handlers for vipune CLI.
 
+mod backup;
 mod doctor;
 mod doctor_fts;
 mod export;
@@ -12,6 +13,7 @@ mod reindex;
 pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search};
 
 #[cfg(test)]
+mod backup_tests;
 mod doctor_fts_tests;
 
 #[cfg(test)]
@@ -195,6 +197,18 @@ pub enum Commands {
     Export {
         /// Destination JSONL file (use "> out.jsonl" via shell if omitting)
         output_path: String,
+    },
+
+    /// Back up the database to a consistent snapshot using SQLite's Online Backup API.
+    ///
+    /// Produces a byte-complete, queryable copy of the memories database. The
+    /// command honours `--db-path` (operates on the resolved override path)
+    /// and fast-fails if the source is locked by another process.
+    Backup {
+        /// Optional explicit output path. Defaults to `<source>-backup.<ext>`
+        /// alongside the source database.
+        #[arg(short = 'o', long)]
+        output: Option<std::path::PathBuf>,
     },
 
     /// Project management operations.
@@ -384,6 +398,9 @@ pub fn execute(
         }
         Commands::Export { output_path } => {
             export::handle_export(&config.database_path, Path::new(output_path), None, json)
+        }
+        Commands::Backup { output } => {
+            backup::handle_backup(&config.database_path, output.as_deref(), json)
         }
         Commands::Project { command } => match command {
             ProjectCommands::Merge { from, to } => {

@@ -246,6 +246,19 @@ pub struct DoctorFtsResponse {
     pub actions: usize,
 }
 
+/// Response for `backup` operation.
+#[derive(Serialize)]
+pub struct BackupResponse {
+    /// Path of the source database that was backed up.
+    pub source: String,
+    /// Path of the produced backup file.
+    pub destination: String,
+    /// Number of rows in the produced backup (matches source by construction).
+    pub rows: usize,
+    /// Size of the produced backup file in bytes.
+    pub bytes: u64,
+}
+
 /// Response for `project merge` operation.
 #[derive(Serialize)]
 pub struct MergeResponse {
@@ -355,6 +368,21 @@ mod tests {
         let json_none = serde_json::to_string(&item_none).unwrap();
         assert!(json_none.contains("\"retrieval_count\":0"));
         assert!(json_none.contains("\"last_retrieved_at\":null"));
+    }
+
+    #[test]
+    fn test_serialize_backup_response() {
+        let response = BackupResponse {
+            source: "/tmp/memories.db".to_string(),
+            destination: "/tmp/memories-backup.db".to_string(),
+            rows: 42,
+            bytes: 2048,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"source\":\"/tmp/memories.db\""));
+        assert!(json.contains("\"destination\":\"/tmp/memories-backup.db\""));
+        assert!(json.contains("\"rows\":42"));
+        assert!(json.contains("\"bytes\":2048"));
     }
 
     #[test]
