@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-11
+
+### Bug Fixes
+
+- Correct column index for corrupt embedding BLOB errors in search ([#188](https://github.com/randomm/vipune/pull/188))
+- Disambiguate exit code 2 from clap usage errors ([#197](https://github.com/randomm/vipune/pull/197))
+- Add timeout and error handling to git subprocess calls in project detection ([#196](https://github.com/randomm/vipune/pull/196))
+- Parse_git_remote yields consistent project_ids for SSH and HTTPS ([#199](https://github.com/randomm/vipune/pull/199))
+- *(reindex)* Print per-project heading before processing instead of only a trailing summary ([#200](https://github.com/randomm/vipune/pull/200))
+- Return memory_type and status in get/search/list JSON ([#202](https://github.com/randomm/vipune/pull/202))
+- Detect and surface silent FTS5 desync ([#208](https://github.com/randomm/vipune/pull/208))
+
+### Features
+
+- Surface retrieval_count and last_retrieved_at in search/get/list --json ([#201](https://github.com/randomm/vipune/pull/201))
+- Doctor + reindex hint naming other projects when scoped to one ([#206](https://github.com/randomm/vipune/pull/206))
+- Add backup, export and import commands ([#209](https://github.com/randomm/vipune/pull/209))
+
+### Miscellaneous
+
+- Stop using issue numbers in conventional-commit scope ([#198](https://github.com/randomm/vipune/pull/198))
+- *(handoff)* Consolidate parked work onto feature/issue-160 ([#203](https://github.com/randomm/vipune/pull/203))
+- *(handoff)* Consolidate parked work onto feature/issue-191 ([#210](https://github.com/randomm/vipune/pull/210))
+
+### Research
+
+- Retrieval-quality evaluation harness scope doc ([#207](https://github.com/randomm/vipune/pull/207))
+
+
 ### ⚠ Breaking Changes
 
 - `parse_git_remote` now derives `project_id` from the **last two path segments** of the remote URL for BOTH SSH shorthand (`git@host:owner/repo.git`) and `://` URL forms (`https://…`, `ssh://…`), so the same repository resolves to the same `project_id` regardless of how its remote is written. Previously the two rules diverged: SSH shorthand returned the **entire** path after the colon while URL forms returned only the last two segments, so a repo behind a nested namespace (GitLab subgroups, Gitea/Forgejo organisations, Azure DevOps) forked its memory when the remote form changed — e.g. `git@gitlab.example.com:group/subgroup/project.git` yielded `group/subgroup/project` while `https://gitlab.example.com/group/subgroup/project.git` yielded `subgroup/project`. Repos whose id was derived from an SSH remote under a nested namespace will see their `project_id` shortened to the last two segments on upgrade. Use `vipune doctor --projects` to detect the split, then `vipune project merge <old-id> <new-id>` to move affected memories to the corrected id (see migration guidance in `docs/cli-reference.md`).
