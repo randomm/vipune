@@ -9,24 +9,6 @@
 //! 2. Run migrations from (current_version + 1) to LATEST
 //! 3. Each migration runs in its own transaction (BEGIN → migrate → COMMIT/ROLLBACK)
 //! 4. Update `user_version` only after successful migration
-//!
-//! # Adding a New Migration
-//!
-//! Add a migration function to the `migrations()` vector:
-//!
-//! ```ignore
-//! fn migrate_v2(conn: &Connection) -> SqliteResult<()> {
-//!     conn.execute("ALTER TABLE memories ADD COLUMN type TEXT", [])?;
-//!     Ok(())
-//! }
-//!
-//! fn migrations() -> Vec<MigrationFn> {
-//!     vec![
-//!         migrate_v1,  // Migration 1 (baseline)
-//!         migrate_v2,  // Migration 2 (add type column)
-//!     ]
-//! }
-//! ```
 
 use rusqlite::{Connection, Error as RusqliteError, Result as SqliteResult};
 use std::fmt;
@@ -42,6 +24,10 @@ pub enum MigrationError {
         current_version: i32,
         max_supported: i32,
     },
+    /// Pre-existing rows have duplicate normalised content that violates the
+    /// new unique constraint. The migration was rolled back; the operator must
+    /// dedupe manually and re-open the database.
+    DedupCollision { count: usize },
 }
 
 impl fmt::Display for MigrationError {
@@ -55,6 +41,12 @@ impl fmt::Display for MigrationError {
                 "Database schema version {} is newer than this vipune binary supports (max: {}). Upgrade vipune.",
                 current_version, max_supported
             ),
+            MigrationError::DedupCollision { count } => write!(
+                f,
+                "Cannot create dedup index: {count} pre-existing row(s) have duplicate \
+                 normalised content. Deduplicate manually (delete or merge the extra rows), \
+                 then re-open the database. Migration was rolled back; no data was changed.",
+            ),
         }
     }
 }
@@ -67,26 +59,10 @@ impl From<MigrationError> for RusqliteError {
     }
 }
 
-/// Migration 1: Baseline schema version.
-///
-/// This is a no-op migration that establishes the schema versioning system.
-/// Fresh databases created with the current schema are marked as version 1.
-/// Existing v0.2.x databases (user_version=0) will upgrade to version 1 here.
-///
-/// Future migrations (v0.3 type/status columns) will be migration 2, 3, etc.
 fn migrate_v1(_conn: &Connection) -> SqliteResult<()> {
-    // No-op: current schema is already v1
     Ok(())
 }
 
-/// Migration 2: Add memory type, lifecycle status, and supersession tracking.
-///
-/// Adds three columns to the memories table:
-/// - `type`: Memory type (fact/preference/procedure/guard/observation), defaults to 'fact'
-/// - `status`: Lifecycle status (active/candidate/superseded/deprecated), defaults to 'active'
-/// - `superseded_by`: ID of the memory that superseded this one (nullable)
-///
-/// Also creates indexes for efficient filtering by type and status.
 fn migrate_v2(conn: &Connection) -> SqliteResult<()> {
     conn.execute_batch(
         "ALTER TABLE memories ADD COLUMN type TEXT NOT NULL DEFAULT 'fact';
@@ -99,11 +75,6 @@ fn migrate_v2(conn: &Connection) -> SqliteResult<()> {
     Ok(())
 }
 
-/// Migration 3: Add retrieval telemetry columns.
-///
-/// Adds two columns for tracking memory access:
-/// - `retrieval_count`: Number of times this memory was retrieved (search/get)
-/// - `last_retrieved_at`: RFC3339 timestamp of last retrieval
 fn migrate_v3(conn: &Connection) -> SqliteResult<()> {
     conn.execute_batch(
         "ALTER TABLE memories ADD COLUMN retrieval_count INTEGER NOT NULL DEFAULT 0;
@@ -112,44 +83,148 @@ fn migrate_v3(conn: &Connection) -> SqliteResult<()> {
     Ok(())
 }
 
-/// Returns all migrations in order. Index 0 = migration 1, etc.
-fn migrations() -> Vec<MigrationFn> {
-    vec![migrate_v1, migrate_v2, migrate_v3]
+/// Name of the unique dedup index created by migration 4. Shared with the hook
+/// insert path so it can distinguish a dedup violation from other constraint
+/// failures when mapping a `SqliteError` to a silent skip.
+pub const DEDUP_INDEX_NAME: &str = "idx_memories_dedup";
+
+/// Compute the content dedup hash for a memory row.
+///
+/// This is the **single shared function** used by both the migration backfill
+/// (inside `migrate_v4`) and the hook insert path. The hash is **FNV-1a
+/// 64-bit** over the **normalised** form of the content (lowercased, internal
+/// whitespace collapsed to single spaces, leading/trailing whitespace
+/// trimmed), returned as lowercase hex (16 chars).
+///
+/// Normalisation makes case and whitespace variants of the same text produce
+/// identical hashes ("Hello   World" and "hello world" → same hash), which is
+/// the dedup guarantee: same project + same normalised content → one row.
+///
+/// FNV-1a was chosen because it is std-only (no new dependency), deterministic
+/// across all platforms and Rust versions, and its ~1-in-2^64 collision
+/// probability is acceptable for dedup purposes (not security).
+pub fn content_hash_for(content: &str) -> String {
+    let normalised = normalise_content(content);
+    format!("{:016x}", fnv1a_64(normalised.as_bytes()))
 }
 
-/// Returns the total number of migrations available (i.e., the max supported schema version).
+/// Lowercase, collapse internal whitespace to single space, trim leading and trailing.
+fn normalise_content(content: &str) -> String {
+    let lower: String = content.to_lowercase();
+    let mut result = String::with_capacity(lower.len());
+    let mut in_whitespace = false;
+    for ch in lower.chars() {
+        if ch.is_whitespace() {
+            if !in_whitespace && !result.is_empty() {
+                result.push(' ');
+            }
+            in_whitespace = true;
+        } else {
+            result.push(ch);
+            in_whitespace = false;
+        }
+    }
+    // Trim any trailing space that was pushed by the whitespace-collapsing logic.
+    // The loop pushes a space before a run of whitespace chars; if the string
+    // ends in whitespace, that last space stays. We need to strip it.
+    result.trim_end().to_string()
+}
+
+/// FNV-1a 64-bit: offset-basis 0xcbf29ce484222325, prime 0x00000100000001b3.
+fn fnv1a_64(data: &[u8]) -> u64 {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h = OFFSET_BASIS;
+    for b in data {
+        h ^= *b as u64;
+        h = h.wrapping_mul(PRIME);
+    }
+    h
+}
+
+/// Migration 4: add `content_hash` column + `idx_memories_dedup` unique index.
+///
+/// All steps run inside the migration transaction (rolled back on failure):
+/// 1. `ALTER TABLE memories ADD COLUMN content_hash TEXT`
+/// 2. Backfill `content_hash` for all existing rows using `content_hash_for`
+/// 3. Check for pre-existing duplicate `(project_id, content_hash)` pairs:
+///    - If any exist, return `MigrationError::DedupCollision` so the
+///      transaction is rolled back (no schema change, no data loss).
+///    - The operator must dedupe manually before re-opening the DB.
+/// 4. `CREATE UNIQUE INDEX idx_memories_dedup ON memories(project_id, content_hash)`
+///
+/// The unique index enforces at the database level that no two rows in the same
+/// project have identical normalised content — the dedup guarantee for hooks.
+fn migrate_v4(conn: &Connection) -> SqliteResult<()> {
+    conn.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT", [])?;
+    backfill_content_hash(conn)?;
+    let dup_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM (SELECT project_id, content_hash, COUNT(*) AS cnt \
+         FROM memories WHERE content_hash IS NOT NULL \
+         GROUP BY project_id, content_hash HAVING cnt > 1)",
+        [],
+        |r| r.get(0),
+    )?;
+    if dup_count > 0 {
+        return Err(MigrationError::DedupCollision {
+            count: dup_count as usize,
+        }
+        .into());
+    }
+    conn.execute(
+        &format!("CREATE UNIQUE INDEX {DEDUP_INDEX_NAME} ON memories(project_id, content_hash)"),
+        [],
+    )?;
+    Ok(())
+}
+
+/// Backfill `content_hash` for all rows that currently have `NULL`.
+///
+/// The hash is computed in Rust via the shared `content_hash_for` function so
+/// the migration and the hook path always produce identical values.
+fn backfill_content_hash(conn: &Connection) -> SqliteResult<()> {
+    let rows: Vec<(String, String)> = {
+        let mut stmt =
+            conn.prepare("SELECT id, content FROM memories WHERE content_hash IS NULL")?;
+        let mut out = Vec::new();
+        for row_result in
+            stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        {
+            out.push(row_result?);
+        }
+        out
+    };
+    let mut upd = conn.prepare("UPDATE memories SET content_hash = ?1 WHERE id = ?2")?;
+    for (id, content) in rows {
+        let hash = content_hash_for(&content);
+        upd.execute((hash, id))?;
+    }
+    Ok(())
+}
+
+fn migrations() -> Vec<MigrationFn> {
+    vec![migrate_v1, migrate_v2, migrate_v3, migrate_v4]
+}
+
 fn total_migrations() -> i32 {
     migrations().len() as i32
 }
 
-/// Run pending migrations. Call this on every database open.
+/// Run pending migrations on every database open.
 ///
 /// # Migration Process
 ///
 /// 1. Read current schema version from `PRAGMA user_version`
 /// 2. Check if version is supported (not newer than this build)
 /// 3. For each migration with version > current:
-///    - Begin EXCLUSIVE transaction (locks DB for concurrent safety)
+///    - BEGIN EXCLUSIVE transaction (locks DB for concurrent safety)
 ///    - Run migration function
-///    - Commit (on success) or rollback (on failure)
+///    - COMMIT (on success) or ROLLBACK (on failure)
 ///    - Update `user_version` only after commit succeeds (pragma is NOT transactional!)
 /// 4. Returns error if any migration fails or version is unsupported
-///
-/// # Errors
-///
-/// Returns SQLite error if migration fails or database version is unsupported.
-/// Failed migrations roll back, leaving the database in its previous state.
-///
-/// # Example
-///
-/// ```ignore
-/// let conn = Connection::open(&path)?;
-/// run_migrations(&conn)?;  // Runs all pending migrations
-/// ```
 pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     let current: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
 
-    // Check: database has newer schema than this binary supports
     if current > total_migrations() {
         return Err(MigrationError::UnsupportedVersion {
             current_version: current,
@@ -163,18 +238,13 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
     for (i, migration) in all.iter().enumerate() {
         let version = (i + 1) as i32;
         if version > current {
-            // Begin EXCLUSIVE transaction (prevents concurrent writers during migration)
             conn.execute_batch("BEGIN EXCLUSIVE;")?;
-
             match migration(conn) {
                 Ok(()) => {
-                    // Success: commit first, then update version
-                    // PRAGMA user_version is NOT transactional, so must happen after commit
                     conn.execute_batch("COMMIT;")?;
                     conn.pragma_update(None, "user_version", version)?;
                 }
                 Err(e) => {
-                    // Failure: rollback and propagate error
                     conn.execute_batch("ROLLBACK;")?;
                     return Err(e);
                 }
@@ -189,172 +259,227 @@ pub fn run_migrations(conn: &Connection) -> SqliteResult<()> {
 mod tests {
     use super::*;
 
-    /// Helper: create a fresh in-memory database for testing.
     fn create_test_db() -> Connection {
         Connection::open_in_memory().unwrap()
     }
 
-    /// Helper: initialize the current vipune schema (without migrations).
     fn init_schema(conn: &Connection) -> SqliteResult<()> {
         conn.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS memories (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
-                content TEXT NOT NULL,
-                embedding BLOB NOT NULL,
-                metadata TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            "#,
+            "CREATE TABLE IF NOT EXISTS memories (
+                id TEXT PRIMARY KEY, project_id TEXT NOT NULL, content TEXT NOT NULL,
+                embedding BLOB NOT NULL, metadata TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);",
         )?;
         Ok(())
     }
 
+    fn version_of(conn: &Connection) -> i32 {
+        conn.pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap()
+    }
+
+    /// Insert a bare row (pre-migration shape) for testing backfill.
+    fn insert_row(conn: &Connection, id: &str, project_id: &str, content: &str) {
+        conn.execute(
+            "INSERT INTO memories (id, project_id, content, embedding, created_at, updated_at)
+             VALUES (?1, ?2, ?3, X'00', 't', 't')",
+            (id, project_id, content),
+        )
+        .unwrap();
+    }
+
+    // --- Version tests (parameterised via total_migrations()) ---
+
     #[test]
-    fn test_fresh_db_version_becomes_3() {
+    fn test_fresh_db_version_reaches_latest() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
-
-        // Initial user_version is 0
-        let initial: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(initial, 0);
-
-        // Run migrations
         run_migrations(&conn).unwrap();
-
-        // Version should now be 3
-        let final_version: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(final_version, 3);
+        assert_eq!(version_of(&conn), total_migrations());
     }
 
     #[test]
-    fn test_already_at_version_3_is_noop() {
+    fn test_already_at_latest_is_noop() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
-
-        // Run migrations first time: 0 → 3
         run_migrations(&conn).unwrap();
-
-        let version: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(version, 3);
-
-        // Run again: should be no-op (already at version 3)
-        run_migrations(&conn).unwrap();
-
-        let version_after: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(version_after, 3);
+        run_migrations(&conn).unwrap(); // second run: no-op
+        assert_eq!(version_of(&conn), total_migrations());
     }
 
     #[test]
-    fn test_upgrade_from_v0_to_v3() {
+    fn test_upgrade_from_v0_reaches_latest() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
-
-        // Explicitly set user_version to 0 (simulating v0.2.x database)
         conn.pragma_update(None, "user_version", 0).unwrap();
-        let initial: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(initial, 0);
-
-        // Run migrations
         run_migrations(&conn).unwrap();
-
-        // Should upgrade from 0 to 3
-        let final_version: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(final_version, 3);
+        assert_eq!(version_of(&conn), total_migrations());
     }
 
     #[test]
     fn test_migration_framework_idempotent() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
-
-        // Run migrations multiple times
         for _ in 0..5 {
             run_migrations(&conn).unwrap();
         }
-
-        // Version should be 3 (not incrementing on re-run)
-        let version: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version_of(&conn), total_migrations());
     }
 
     #[test]
     fn test_migration_transaction_rollback_on_error() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
-
-        // Create a migration function that intentionally fails
+        conn.pragma_update(None, "user_version", 0).unwrap();
+        conn.execute_batch("BEGIN EXCLUSIVE;").unwrap();
         fn failing_migration(_conn: &Connection) -> SqliteResult<()> {
             Err(RusqliteError::InvalidQuery)
         }
-
-        // Set user_version to 0 so failing_migration would run
-        conn.pragma_update(None, "user_version", 0).unwrap();
-
-        // Verify initial state
-        let initial_version: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(initial_version, 0);
-
-        // Manually run the failing migration logic
-        conn.execute_batch("BEGIN EXCLUSIVE;").unwrap();
-        let result = failing_migration(&conn);
-        assert!(result.is_err()); // Should fail
+        assert!(failing_migration(&conn).is_err());
         conn.execute_batch("ROLLBACK;").unwrap();
-
-        // Verify user_version was NOT incremented after the failure
-        let version_after: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(version_after, 0);
-
-        // Verify database is still usable by running a successful migration
-        run_migrations(&conn).unwrap();
-        let final_version: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap();
-        assert_eq!(final_version, 3);
+        assert_eq!(version_of(&conn), 0); // version unchanged after rollback
+        run_migrations(&conn).unwrap(); // db still usable
+        assert_eq!(version_of(&conn), total_migrations());
     }
 
     #[test]
     fn test_future_version_database_error() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
-
-        // Set user_version to a value higher than total_migrations (simulating a newer database)
         conn.pragma_update(None, "user_version", 999).unwrap();
+        let err = run_migrations(&conn).unwrap_err().to_string();
+        assert!(err.contains("schema version"));
+        assert!(err.contains("999"));
+        assert!(err.contains("Upgrade vipune"));
+        assert_eq!(version_of(&conn), 999);
+    }
 
-        // Running migrations should fail because the database version is too new
-        let result = run_migrations(&conn);
-        assert!(result.is_err());
+    // --- content_hash_for tests ---
 
-        // Error message should mention database version and upgrade
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("schema version"));
-        assert!(err_msg.contains("999"));
-        assert!(err_msg.contains("Upgrade vipune"));
+    #[test]
+    fn test_content_hash_normalises_case_and_whitespace() {
+        assert_eq!(
+            content_hash_for("Hello   World"),
+            content_hash_for("hello world"),
+            "case + whitespace must be normalised"
+        );
+        assert_eq!(
+            content_hash_for("  Leading and  trailing  "),
+            content_hash_for("leading and trailing")
+        );
+    }
 
-        // Verify version is still 999 (unchanged)
-        let version: i32 = conn
-            .pragma_query_value(None, "user_version", |r| r.get(0))
+    #[test]
+    fn test_content_hash_different_content_different_hash() {
+        assert_ne!(content_hash_for("foo"), content_hash_for("bar"));
+    }
+
+    #[test]
+    fn test_content_hash_is_lowercase_hex_16_chars() {
+        let h = content_hash_for("test content");
+        assert_eq!(h.len(), 16, "expected 16 hex chars, got {:?}", h);
+        assert!(
+            h.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "expected lowercase hex, got {:?}",
+            h
+        );
+    }
+
+    #[test]
+    fn test_content_hash_deterministic() {
+        assert_eq!(
+            content_hash_for("same input"),
+            content_hash_for("same input")
+        );
+    }
+
+    // --- Migration 4: dedup behaviour tests ---
+
+    fn setup_v3_with_row(conn: &Connection, project_id: &str, content: &str) {
+        init_schema(conn).unwrap();
+        insert_row(conn, "r1", project_id, content);
+        conn.pragma_update(None, "user_version", 3).unwrap();
+    }
+
+    #[test]
+    fn test_migration_4_backfills_content_hash_for_existing_rows() {
+        let conn = create_test_db();
+        setup_v3_with_row(&conn, "proj-a", "Some memory content");
+        insert_row(&conn, "r2", "proj-a", "Other memory content");
+        migrate_v4(&conn).unwrap();
+        let null_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE content_hash IS NULL",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(version, 999);
+        assert_eq!(null_count, 0, "all rows should be backfilled");
+    }
+
+    #[test]
+    fn test_migration_4_creates_unique_dedup_index() {
+        let conn = create_test_db();
+        setup_v3_with_row(&conn, "proj-a", "unique content here");
+        migrate_v4(&conn).unwrap();
+        let idx: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_memories_dedup'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 1, "idx_memories_dedup should exist after migration");
+    }
+
+    #[test]
+    fn test_migration_4_dedup_blocks_duplicate_normalized_content() {
+        let conn = create_test_db();
+        setup_v3_with_row(&conn, "proj-a", "Hello World");
+        migrate_v4(&conn).unwrap();
+        let hash = content_hash_for("hello world");
+        let result = conn.execute(
+            "INSERT INTO memories (id, project_id, content, embedding, created_at, updated_at, content_hash)
+             VALUES ('r2', 'proj-a', 'hello world', X'00', 't', 't', ?1)",
+            [hash],
+        );
+        assert!(
+            result.is_err(),
+            "duplicate normalised content must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_migration_4_same_content_different_project_is_allowed() {
+        let conn = create_test_db();
+        setup_v3_with_row(&conn, "proj-a", "shared content");
+        migrate_v4(&conn).unwrap();
+        let hash = content_hash_for("shared content");
+        let result = conn.execute(
+            "INSERT INTO memories (id, project_id, content, embedding, created_at, updated_at, content_hash)
+             VALUES ('r2', 'proj-b', 'shared content', X'00', 't', 't', ?1)",
+            [hash],
+        );
+        assert!(
+            result.is_ok(),
+            "same content in different project must be allowed"
+        );
+    }
+
+    #[test]
+    fn test_migration_4_existing_duplicates_causes_error() {
+        let conn = create_test_db();
+        init_schema(&conn).unwrap();
+        insert_row(&conn, "r1", "proj-a", "duplicate content here");
+        insert_row(&conn, "r2", "proj-a", "Duplicate   Content Here");
+        conn.pragma_update(None, "user_version", 3).unwrap();
+        let result = migrate_v4(&conn);
+        assert!(result.is_err(), "expected DedupCollision error");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("duplicate"),
+            "error message should mention duplicates, got: {err_msg}"
+        );
     }
 }

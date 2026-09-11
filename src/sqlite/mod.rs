@@ -1,15 +1,11 @@
 //! SQLite backend for vipune memory storage.
 //!
-//! This module provides:
-//! - `Database`: Core SQLite connection and schema management
-//! - `Memory`: Data structure for stored memories
-//! - `embedding`: BLOB conversion and cosine similarity
-//! - `search`: Semantic search operations
-//! - `fts`: FTS5 full-text search (Issue #40)
+//! Provides: `Database`, `Memory`, `embedding`, `search`, `fts`, `hash` modules.
 
 pub mod embedding;
 pub mod export_scan;
 pub mod fts;
+pub mod hash;
 pub mod import;
 pub mod list;
 pub mod migrations;
@@ -147,21 +143,8 @@ impl From<rusqlite::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// 0-indexed column position of `embedding` in the canonical 12-column memory
-/// row shape
-/// `SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status,
-/// superseded_by, retrieval_count, last_retrieved_at [ , bm25(memories_fts) as bm25_score]`.
-///
-/// Applies to the SELECTs that read memory rows in that shape: get/list/
-/// list_since/get_many via `map_row_to_memory`, FTS search, and semantic
-/// search. Shared by both the `row.get(EMBEDDING_COLUMN)` reads and the
-/// `FromSqlConversionFailure` wrappers in `query_mod::corrupt_embedding_error`
-/// so the read position and the diagnostic index cannot drift from the column
-/// list (issue #186).
-///
-/// NOT applicable to projections that omit leading columns — e.g.
-/// `list_all_rows_for_project` selects `id, content, embedding`, where
-/// `embedding` is column 2, not 4.
+/// 0-indexed column position of `embedding` in the canonical 12-column memory row shape
+/// (see issue #186). NOT applicable to projections that omit leading columns.
 pub(crate) const EMBEDDING_COLUMN: usize = 4;
 
 /// SQLite database backend for vipune.
@@ -218,13 +201,7 @@ CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories BEGIN
 impl Database {
     /// Open or create a SQLite database at the given path.
     ///
-    /// Initializes the schema if the database is new, then runs any pending migrations.
-    ///
-    /// **Schema creation vs. migrations**:
-    /// - Schema creation handles the initial table setup (CREATE TABLE IF NOT EXISTS).
-    /// - Migrations handle incremental changes from version to version.
-    /// - For fresh DBs, both run: `create_schema` sets up tables, migration 1 is a no-op baseline.
-    /// - For existing DBs: `create_schema` is a no-op (IF NOT EXISTS), migrations apply incrementally.
+    /// Initializes the schema if new, then runs any pending migrations.
     ///
     /// # Errors
     ///
@@ -267,8 +244,6 @@ impl Database {
     }
 
     /// Insert a memory with explicit timestamps (for testing).
-    ///
-    /// This is used in tests to control the created_at and updated_at timestamps.
     #[cfg(test)]
     #[allow(clippy::too_many_arguments)] // signature mirrors insert(); 7/8 data fields map 1:1 to columns
     pub(crate) fn insert_with_time(
@@ -291,6 +266,54 @@ impl Database {
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#,
             params![&id, project_id, content, &blob, metadata, created_at, updated_at, memory_type, status],
+        )?;
+
+        Ok(id)
+    }
+
+    /// Insert a new memory with embedding and a precomputed dedup hash (issue #191).
+    ///
+    /// Used by the agent-lifecycle hook path so `content_hash` is populated at
+    /// insert time and the `idx_memories_dedup` unique index enforces dedup.
+    ///
+    /// # Errors
+    ///
+    /// Returns error on invalid embedding dimensions, write failure, or unique
+    /// index rejection of the `(project_id, content_hash)` pair.
+    #[allow(clippy::too_many_arguments)] // mirrors insert(); 7/8 data fields map 1:1 to columns
+    #[allow(dead_code)] // used by hook insert path (task-b) once src/hook/ lands
+    pub fn insert_with_hash(
+        &self,
+        project_id: &str,
+        content: &str,
+        embedding: &[f32],
+        metadata: Option<&str>,
+        memory_type: &str,
+        status: &str,
+        content_hash: &str,
+    ) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let blob = vec_to_blob(embedding)?;
+
+        self.conn.execute(
+            r#"
+            INSERT INTO memories (id, project_id, content, embedding, metadata,
+                created_at, updated_at, type, status, content_hash)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#,
+            params![
+                &id,
+                project_id,
+                content,
+                &blob,
+                metadata,
+                &now,
+                &now,
+                memory_type,
+                status,
+                content_hash
+            ],
         )?;
 
         Ok(id)
@@ -334,15 +357,8 @@ impl Database {
     }
 
     /// Construct a `Database` from an already-opened `Connection`.
-    ///
-    /// Used when the caller wants full control over how the connection is
-    /// opened (e.g. read-only mode for diagnostic commands).
-    ///
-    /// # Warning
-    ///
-    /// This bypasses schema creation and migration. The connection must already
-    /// point to a fully initialised database, otherwise queries will fail with
-    /// raw SQLite errors (e.g. "no such table: memories").
+    /// Bypasses schema creation and migration; the connection must point
+    /// to a fully initialised database.
     #[allow(dead_code)] // lib target compiles src/sqlite/ but not src/commands/; only caller is in binary target
     pub(crate) fn from_conn(conn: Connection) -> Self {
         Self { conn }
@@ -360,9 +376,7 @@ impl Database {
         &self.conn
     }
 
-    /// Set the SQLite busy timeout.
-    ///
-    /// Used by the reindex command to enforce fast-fail behavior on database locks.
+    /// Set the SQLite busy timeout. Used by reindex for fast-fail on locks.
     ///
     /// # Errors
     ///
@@ -372,10 +386,7 @@ impl Database {
         Ok(())
     }
 
-    /// List ALL rows for a project, including superseded and deprecated.
-    ///
-    /// Unlike `list()`, this does not filter by status and has no limit.
-    /// Returns id, content, and embedding for each row.
+    /// List ALL rows for a project (no status filter, no limit).
     ///
     /// # Errors
     ///
@@ -406,10 +417,8 @@ impl Database {
         Ok(results)
     }
 
-    /// Update only the embedding BLOB for a memory, leaving all other fields intact.
-    ///
-    /// This does NOT touch `updated_at`, `retrieval_count`, or `last_retrieved_at`.
-    /// Required for reindex operations where only the vector changes.
+    /// Update only the embedding BLOB for a memory (used by reindex).
+    /// Does NOT touch `updated_at`, `retrieval_count`, or `last_retrieved_at`.
     ///
     /// # Errors
     ///
@@ -458,24 +467,11 @@ impl Database {
     }
 
     /// Merge all rows from one project_id into another within a single transaction.
-    ///
-    /// - `from == to` short-circuits: returns 0 and performs **no** database writes.
-    /// - Wraps the row-count query and the `UPDATE` in one explicit transaction,
-    ///   committing only if both succeed.
-    /// - Only `project_id` changes; all other columns are preserved byte-identically.
-    /// - The FTS5 UPDATE trigger fires automatically, keeping the FTS index in sync.
-    ///
-    /// # Arguments
-    ///
-    /// * `from_project_id` - Source project id to move rows from
-    /// * `to_project_id` - Target project id to move rows to
+    /// `from == to` short-circuits (returns 0, no writes). Only `project_id` changes.
     ///
     /// # Returns
     ///
-    /// Number of rows that were moved. Uses the UPDATE's `rows_affected` count,
-    /// which is guaranteed identical to a prior SELECT COUNT(*) within the same
-    /// single-writer transaction, but strictly more truthful if the WHERE clauses
-    /// ever diverge in the future.
+    /// Number of rows moved.
     ///
     /// # Errors
     ///
