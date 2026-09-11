@@ -9,6 +9,7 @@ mod hook_install;
 mod hook_run;
 mod import;
 mod merge;
+mod promote;
 mod reindex;
 
 #[cfg(test)]
@@ -28,6 +29,9 @@ mod export_tests;
 
 #[cfg(test)]
 mod import_tests;
+
+#[cfg(test)]
+mod promote_tests;
 
 #[cfg(test)]
 mod merge_tests;
@@ -204,6 +208,14 @@ pub enum Commands {
         /// Destination JSONL file (use "> out.jsonl" via shell if omitting)
         output_path: String,
     },
+
+    /// Promote candidates that have been retrieved enough times to active.
+    ///
+    /// A candidate promotes when `status='candidate'` AND `retrieval_count >=
+    /// threshold` (default 5, overridable via `VIPUNE_PROMOTION_THRESHOLD`).
+    /// Superseded and deprecated rows are never promoted. The promotion issues
+    /// `UPDATE status='active'` via the existing update path.
+    Promote,
 
     /// Back up the database to a consistent snapshot using SQLite's Online Backup API.
     ///
@@ -435,6 +447,7 @@ pub fn execute(
         Commands::Export { output_path } => {
             export::handle_export(&config.database_path, Path::new(output_path), None, json)
         }
+        Commands::Promote => promote::handle_promote(&config.database_path, &project_id, json),
         Commands::Backup { output } => {
             backup::handle_backup(&config.database_path, output.as_deref(), json)
         }
