@@ -107,6 +107,10 @@ fn to_lib_config(config: &config::Config) -> vipune::Config {
         similarity_threshold: config.similarity_threshold,
         recency_weight: config.recency_weight,
         hybrid: config.hybrid,
+        decay_refresh_days: config.decay_refresh_days,
+        promotion_threshold: config.promotion_threshold,
+        prune_retrieval_limit: config.prune_retrieval_limit,
+        prune_min_age_days: config.prune_min_age_days,
     }
 }
 
@@ -355,6 +359,10 @@ mod tests {
             similarity_threshold: 0.42,
             recency_weight: 0.77,
             hybrid: true,
+            decay_refresh_days: 14.0,
+            promotion_threshold: 7,
+            prune_retrieval_limit: 3,
+            prune_min_age_days: 9.5,
         };
 
         let lib_config = to_lib_config(&local_config);
@@ -367,6 +375,10 @@ mod tests {
         assert_eq!(lib_config.similarity_threshold, 0.42);
         assert_eq!(lib_config.recency_weight, 0.77);
         assert!(lib_config.hybrid);
+        assert_eq!(lib_config.decay_refresh_days, 14.0);
+        assert_eq!(lib_config.promotion_threshold, 7);
+        assert_eq!(lib_config.prune_retrieval_limit, 3);
+        assert_eq!(lib_config.prune_min_age_days, 9.5);
     }
 
     #[test]

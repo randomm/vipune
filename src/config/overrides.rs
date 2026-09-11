@@ -1,48 +1,32 @@
 //! Environment variable overrides for configuration.
 
+use crate::config::Config;
 use crate::errors::Error;
+
+#[cfg(test)]
+use crate::config::tests_utils::{ENV_MUTEX, cleanup_env_vars};
+#[cfg(test)]
 use std::path::PathBuf;
 
 use super::env_parser;
 
-#[cfg(test)]
-use super::tests_utils::{ENV_MUTEX, cleanup_env_vars};
-
 /// Apply environment variable overrides to configuration.
-pub fn apply_env_overrides(
-    database_path: &mut PathBuf,
-    embedding_model: &mut String,
-    similarity_threshold: &mut f64,
-    recency_weight: &mut f64,
-    hybrid: &mut bool,
-) -> Result<(), Error> {
-    env_parser::apply_database_path_override(database_path)?;
-    env_parser::apply_embedding_model_override(embedding_model)?;
-    env_parser::apply_similarity_threshold_override(similarity_threshold)?;
-    env_parser::apply_recency_weight_override(recency_weight)?;
-    env_parser::apply_hybrid_override(hybrid)?;
+pub fn apply_env_overrides(config: &mut Config) -> Result<(), Error> {
+    env_parser::apply_database_path_override(&mut config.database_path)?;
+    env_parser::apply_embedding_model_override(&mut config.embedding_model)?;
+    env_parser::apply_similarity_threshold_override(&mut config.similarity_threshold)?;
+    env_parser::apply_recency_weight_override(&mut config.recency_weight)?;
+    env_parser::apply_hybrid_override(&mut config.hybrid)?;
+    env_parser::apply_decay_refresh_days_override(&mut config.decay_refresh_days)?;
+    env_parser::apply_promotion_threshold_override(&mut config.promotion_threshold)?;
+    env_parser::apply_prune_retrieval_limit_override(&mut config.prune_retrieval_limit)?;
+    env_parser::apply_prune_min_age_days_override(&mut config.prune_min_age_days)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn overrides(
-        database_path: &mut PathBuf,
-        embedding_model: &mut String,
-        similarity_threshold: &mut f64,
-        recency_weight: &mut f64,
-        hybrid: &mut bool,
-    ) -> Result<(), Error> {
-        apply_env_overrides(
-            database_path,
-            embedding_model,
-            similarity_threshold,
-            recency_weight,
-            hybrid,
-        )
-    }
 
     fn clean_env() {
         cleanup_env_vars(&[
@@ -51,6 +35,10 @@ mod tests {
             "VIPUNE_SIMILARITY_THRESHOLD",
             "VIPUNE_RECENCY_WEIGHT",
             "VIPUNE_HYBRID",
+            "VIPUNE_DECAY_REFRESH_DAYS",
+            "VIPUNE_PROMOTION_THRESHOLD",
+            "VIPUNE_PRUNE_RETRIEVAL_LIMIT",
+            "VIPUNE_PRUNE_MIN_AGE_DAYS",
         ]);
     }
 
@@ -65,24 +53,23 @@ mod tests {
             std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "0.95");
         }
 
-        let mut database_path = PathBuf::from("/default");
-        let mut embedding_model = "default/model".to_string();
-        let mut similarity_threshold = 0.85;
-        let mut recency_weight = 0.3;
-        let mut hybrid = false;
+        let mut config = Config {
+            database_path: PathBuf::from("/default"),
+            embedding_model: "default/model".to_string(),
+            similarity_threshold: 0.85,
+            recency_weight: 0.3,
+            hybrid: false,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
+        };
 
-        overrides(
-            &mut database_path,
-            &mut embedding_model,
-            &mut similarity_threshold,
-            &mut recency_weight,
-            &mut hybrid,
-        )
-        .unwrap();
+        apply_env_overrides(&mut config).unwrap();
 
-        assert_eq!(database_path, PathBuf::from("/custom/path/db.db"));
-        assert_eq!(embedding_model, "env/model");
-        assert_eq!(similarity_threshold, 0.95);
+        assert_eq!(config.database_path, PathBuf::from("/custom/path/db.db"));
+        assert_eq!(config.embedding_model, "env/model");
+        assert_eq!(config.similarity_threshold, 0.95);
 
         clean_env();
     }
@@ -96,19 +83,19 @@ mod tests {
             std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "invalid");
         }
 
-        let mut database_path = PathBuf::from("/default");
-        let mut embedding_model = "default/model".to_string();
-        let mut similarity_threshold = 0.85;
-        let mut recency_weight = 0.3;
-        let mut hybrid = false;
+        let mut config = Config {
+            database_path: PathBuf::from("/default"),
+            embedding_model: "default/model".to_string(),
+            similarity_threshold: 0.85,
+            recency_weight: 0.3,
+            hybrid: false,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
+        };
 
-        let result = overrides(
-            &mut database_path,
-            &mut embedding_model,
-            &mut similarity_threshold,
-            &mut recency_weight,
-            &mut hybrid,
-        );
+        let result = apply_env_overrides(&mut config);
 
         assert!(matches!(result, Err(Error::Config(_))));
 
@@ -124,19 +111,19 @@ mod tests {
             std::env::set_var("VIPUNE_DATABASE_PATH", "");
         }
 
-        let mut database_path = PathBuf::from("/default");
-        let mut embedding_model = "default/model".to_string();
-        let mut similarity_threshold = 0.85;
-        let mut recency_weight = 0.3;
-        let mut hybrid = false;
+        let mut config = Config {
+            database_path: PathBuf::from("/default"),
+            embedding_model: "default/model".to_string(),
+            similarity_threshold: 0.85,
+            recency_weight: 0.3,
+            hybrid: false,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
+        };
 
-        let result = overrides(
-            &mut database_path,
-            &mut embedding_model,
-            &mut similarity_threshold,
-            &mut recency_weight,
-            &mut hybrid,
-        );
+        let result = apply_env_overrides(&mut config);
 
         assert!(matches!(result, Err(Error::Config(_))));
 
@@ -152,19 +139,19 @@ mod tests {
             std::env::set_var("VIPUNE_EMBEDDING_MODEL", "   ");
         }
 
-        let mut database_path = PathBuf::from("/default");
-        let mut embedding_model = "default/model".to_string();
-        let mut similarity_threshold = 0.85;
-        let mut recency_weight = 0.3;
-        let mut hybrid = false;
+        let mut config = Config {
+            database_path: PathBuf::from("/default"),
+            embedding_model: "default/model".to_string(),
+            similarity_threshold: 0.85,
+            recency_weight: 0.3,
+            hybrid: false,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
+        };
 
-        let result = overrides(
-            &mut database_path,
-            &mut embedding_model,
-            &mut similarity_threshold,
-            &mut recency_weight,
-            &mut hybrid,
-        );
+        let result = apply_env_overrides(&mut config);
 
         assert!(matches!(result, Err(Error::Config(_))));
 
@@ -180,22 +167,21 @@ mod tests {
             std::env::set_var("VIPUNE_RECENCY_WEIGHT", "0.5");
         }
 
-        let mut database_path = PathBuf::from("/default");
-        let mut embedding_model = "default/model".to_string();
-        let mut similarity_threshold = 0.85;
-        let mut recency_weight = 0.3;
-        let mut hybrid = false;
+        let mut config = Config {
+            database_path: PathBuf::from("/default"),
+            embedding_model: "default/model".to_string(),
+            similarity_threshold: 0.85,
+            recency_weight: 0.3,
+            hybrid: false,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
+        };
 
-        overrides(
-            &mut database_path,
-            &mut embedding_model,
-            &mut similarity_threshold,
-            &mut recency_weight,
-            &mut hybrid,
-        )
-        .unwrap();
+        apply_env_overrides(&mut config).unwrap();
 
-        assert_eq!(recency_weight, 0.5);
+        assert_eq!(config.recency_weight, 0.5);
 
         clean_env();
     }
@@ -209,22 +195,21 @@ mod tests {
             std::env::set_var("VIPUNE_HYBRID", "true");
         }
 
-        let mut database_path = PathBuf::from("/default");
-        let mut embedding_model = "default/model".to_string();
-        let mut similarity_threshold = 0.85;
-        let mut recency_weight = 0.3;
-        let mut hybrid = false;
+        let mut config = Config {
+            database_path: PathBuf::from("/default"),
+            embedding_model: "default/model".to_string(),
+            similarity_threshold: 0.85,
+            recency_weight: 0.3,
+            hybrid: false,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
+        };
 
-        overrides(
-            &mut database_path,
-            &mut embedding_model,
-            &mut similarity_threshold,
-            &mut recency_weight,
-            &mut hybrid,
-        )
-        .unwrap();
+        apply_env_overrides(&mut config).unwrap();
 
-        assert!(hybrid);
+        assert!(config.hybrid);
 
         clean_env();
     }
@@ -238,22 +223,21 @@ mod tests {
             std::env::set_var("VIPUNE_HYBRID", "false");
         }
 
-        let mut database_path = PathBuf::from("/default");
-        let mut embedding_model = "default/model".to_string();
-        let mut similarity_threshold = 0.85;
-        let mut recency_weight = 0.3;
-        let mut hybrid = true;
+        let mut config = Config {
+            database_path: PathBuf::from("/default"),
+            embedding_model: "default/model".to_string(),
+            similarity_threshold: 0.85,
+            recency_weight: 0.3,
+            hybrid: true,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
+        };
 
-        overrides(
-            &mut database_path,
-            &mut embedding_model,
-            &mut similarity_threshold,
-            &mut recency_weight,
-            &mut hybrid,
-        )
-        .unwrap();
+        apply_env_overrides(&mut config).unwrap();
 
-        assert!(!hybrid);
+        assert!(!config.hybrid);
 
         clean_env();
     }
@@ -267,19 +251,82 @@ mod tests {
             std::env::set_var("VIPUNE_RECENCY_WEIGHT", "invalid");
         }
 
-        let mut database_path = PathBuf::from("/default");
-        let mut embedding_model = "default/model".to_string();
-        let mut similarity_threshold = 0.85;
-        let mut recency_weight = 0.3;
-        let mut hybrid = false;
+        let mut config = Config {
+            database_path: PathBuf::from("/default"),
+            embedding_model: "default/model".to_string(),
+            similarity_threshold: 0.85,
+            recency_weight: 0.3,
+            hybrid: false,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
+        };
 
-        let result = overrides(
-            &mut database_path,
-            &mut embedding_model,
-            &mut similarity_threshold,
-            &mut recency_weight,
-            &mut hybrid,
-        );
+        let result = apply_env_overrides(&mut config);
+
+        assert!(matches!(result, Err(Error::Config(_))));
+
+        clean_env();
+    }
+
+    #[test]
+    fn test_lifecycle_knob_env_overrides() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        clean_env();
+
+        unsafe {
+            std::env::set_var("VIPUNE_DECAY_REFRESH_DAYS", "14.0");
+            std::env::set_var("VIPUNE_PROMOTION_THRESHOLD", "10");
+            std::env::set_var("VIPUNE_PRUNE_RETRIEVAL_LIMIT", "3");
+            std::env::set_var("VIPUNE_PRUNE_MIN_AGE_DAYS", "7");
+        }
+
+        let mut config = Config {
+            database_path: PathBuf::from("/default"),
+            embedding_model: "default/model".to_string(),
+            similarity_threshold: 0.85,
+            recency_weight: 0.3,
+            hybrid: false,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
+        };
+
+        apply_env_overrides(&mut config).unwrap();
+
+        assert_eq!(config.decay_refresh_days, 14.0);
+        assert_eq!(config.promotion_threshold, 10);
+        assert_eq!(config.prune_retrieval_limit, 3);
+        assert_eq!(config.prune_min_age_days, 7.0);
+
+        clean_env();
+    }
+
+    #[test]
+    fn test_invalid_lifecycle_knob_values() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        clean_env();
+
+        unsafe {
+            std::env::set_var("VIPUNE_PROMOTION_THRESHOLD", "-1");
+            std::env::set_var("VIPUNE_PRUNE_MIN_AGE_DAYS", "invalid");
+        }
+
+        let mut config = Config {
+            database_path: PathBuf::from("/default"),
+            embedding_model: "default/model".to_string(),
+            similarity_threshold: 0.85,
+            recency_weight: 0.3,
+            hybrid: false,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
+        };
+
+        let result = apply_env_overrides(&mut config);
 
         assert!(matches!(result, Err(Error::Config(_))));
 

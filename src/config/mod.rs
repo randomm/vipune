@@ -52,6 +52,38 @@ pub struct Config {
     /// Whether to use hybrid search (semantic + BM25) by default.
     #[serde(default)]
     pub hybrid: bool,
+
+    /// Cap (in days) on the recency refresh used in decay scoring.
+    #[serde(default = "default_decay_refresh_days")]
+    pub decay_refresh_days: f64,
+
+    /// Retrieval-count threshold (>=) for promoting a candidate to active.
+    #[serde(default = "default_promotion_threshold")]
+    pub promotion_threshold: i64,
+
+    /// Prune eligibility: a candidate with retrieval_count < N is prunable.
+    #[serde(default = "default_prune_retrieval_limit")]
+    pub prune_retrieval_limit: i64,
+
+    /// Prune eligibility: a candidate older than T days is prunable.
+    #[serde(default = "default_prune_min_age_days")]
+    pub prune_min_age_days: f64,
+}
+
+fn default_decay_refresh_days() -> f64 {
+    30.0
+}
+
+fn default_promotion_threshold() -> i64 {
+    5
+}
+
+fn default_prune_retrieval_limit() -> i64 {
+    5
+}
+
+fn default_prune_min_age_days() -> f64 {
+    30.0
 }
 
 impl Default for Config {
@@ -70,6 +102,10 @@ impl Default for Config {
             similarity_threshold: 0.85,
             recency_weight: 0.3,
             hybrid: false,
+            decay_refresh_days: 30.0,
+            promotion_threshold: 5,
+            prune_retrieval_limit: 5,
+            prune_min_age_days: 30.0,
         }
     }
 }
@@ -86,13 +122,7 @@ impl Config {
             config.merge_from_file(file);
         }
 
-        overrides::apply_env_overrides(
-            &mut config.database_path,
-            &mut config.embedding_model,
-            &mut config.similarity_threshold,
-            &mut config.recency_weight,
-            &mut config.hybrid,
-        )?;
+        overrides::apply_env_overrides(&mut config)?;
 
         config.validate()?;
 
@@ -109,6 +139,10 @@ impl Config {
         }
         self.similarity_threshold = file.similarity_threshold;
         self.recency_weight = file.recency_weight;
+        self.decay_refresh_days = file.decay_refresh_days;
+        self.promotion_threshold = file.promotion_threshold;
+        self.prune_retrieval_limit = file.prune_retrieval_limit;
+        self.prune_min_age_days = file.prune_min_age_days;
     }
 
     /// Validate configuration values.
@@ -118,6 +152,10 @@ impl Config {
             embedding_model: self.embedding_model.clone(),
             similarity_threshold: self.similarity_threshold,
             recency_weight: self.recency_weight,
+            decay_refresh_days: self.decay_refresh_days,
+            promotion_threshold: self.promotion_threshold,
+            prune_retrieval_limit: self.prune_retrieval_limit,
+            prune_min_age_days: self.prune_min_age_days,
         };
 
         validator.validate()
@@ -157,6 +195,10 @@ mod tests {
         assert_eq!(config.similarity_threshold, 0.85);
         assert_eq!(config.recency_weight, 0.3);
         assert!(!config.hybrid);
+        assert_eq!(config.decay_refresh_days, 30.0);
+        assert_eq!(config.promotion_threshold, 5);
+        assert_eq!(config.prune_retrieval_limit, 5);
+        assert_eq!(config.prune_min_age_days, 30.0);
     }
 
     #[test]
