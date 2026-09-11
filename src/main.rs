@@ -963,4 +963,92 @@ mod tests {
         assert_eq!(cli.project, Some("my-proj".to_string()));
         matches!(cli.command, Commands::Import { .. });
     }
+
+    // ── hook CLI parse tests (issue #191) ──
+
+    #[test]
+    fn test_cli_parse_hook_install() {
+        let cli = Cli::parse_from(["vipune", "hook", "install"]);
+        if let Commands::Hook { command } = cli.command {
+            matches!(command, commands::HookCommands::Install);
+        } else {
+            panic!("Expected Hook subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_hook_uninstall() {
+        let cli = Cli::parse_from(["vipune", "hook", "uninstall"]);
+        if let Commands::Hook { command } = cli.command {
+            matches!(command, commands::HookCommands::Uninstall);
+        } else {
+            panic!("Expected Hook subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_hook_session_start() {
+        let cli = Cli::parse_from(["vipune", "hook", "session-start"]);
+        if let Commands::Hook { command } = cli.command {
+            matches!(command, commands::HookCommands::SessionStart);
+        } else {
+            panic!("Expected Hook subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_hook_user_prompt_submit() {
+        let cli = Cli::parse_from(["vipune", "hook", "user-prompt-submit"]);
+        if let Commands::Hook { command } = cli.command {
+            matches!(command, commands::HookCommands::UserPromptSubmit);
+        } else {
+            panic!("Expected Hook subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_hook_pre_tool_use() {
+        let cli = Cli::parse_from(["vipune", "hook", "pre-tool-use"]);
+        if let Commands::Hook { command } = cli.command {
+            matches!(command, commands::HookCommands::PreToolUse);
+        } else {
+            panic!("Expected Hook subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_hook_post_tool_use() {
+        let cli = Cli::parse_from(["vipune", "hook", "post-tool-use"]);
+        if let Commands::Hook { command } = cli.command {
+            matches!(command, commands::HookCommands::PostToolUse);
+        } else {
+            panic!("Expected Hook subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_hook_pre_compact() {
+        let cli = Cli::parse_from(["vipune", "hook", "pre-compact"]);
+        if let Commands::Hook { command } = cli.command {
+            matches!(command, commands::HookCommands::PreCompact);
+        } else {
+            panic!("Expected Hook subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_hook_missing_subcommand_fails() {
+        let result = Cli::try_parse_from(["vipune", "hook"]);
+        assert!(
+            result.is_err(),
+            "hook without subcommand should fail at parse time"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_hook_with_db_path() {
+        let cli = Cli::parse_from(["vipune", "--db-path", "/tmp/test.db", "hook", "install"]);
+        assert_eq!(cli.db_path, Some("/tmp/test.db".to_string()));
+        matches!(cli.command, Commands::Hook { .. });
+    }
 }

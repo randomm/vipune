@@ -5,6 +5,8 @@ mod doctor;
 mod doctor_fts;
 mod export;
 mod handlers;
+mod hook_install;
+mod hook_run;
 mod import;
 mod merge;
 mod reindex;
@@ -221,6 +223,17 @@ pub enum Commands {
         command: ProjectCommands,
     },
 
+    /// Agent lifecycle hook handling (issue #191).
+    ///
+    /// Each event subcommand reads a Claude Code JSON payload on stdin,
+    /// extracts candidate memories, and inserts them (deduped) with
+    /// placeholder embeddings. `install` / `uninstall` manage the
+    /// `~/.claude/settings.json` hook wiring.
+    Hook {
+        #[command(subcommand)]
+        command: HookCommands,
+    },
+
     Version,
 
     #[cfg(feature = "mcp")]
@@ -253,6 +266,25 @@ pub enum ProjectCommands {
         /// Target project id (rows moved to this)
         to: String,
     },
+}
+
+/// Subcommands under `vipune hook`.
+#[derive(clap::Subcommand)]
+pub enum HookCommands {
+    /// Handle a Claude Code SessionStart hook event (payload on stdin).
+    SessionStart,
+    /// Handle a Claude Code UserPromptSubmit hook event (payload on stdin).
+    UserPromptSubmit,
+    /// Handle a Claude Code PreToolUse hook event (payload on stdin).
+    PreToolUse,
+    /// Handle a Claude Code PostToolUse hook event (payload on stdin).
+    PostToolUse,
+    /// Handle a Claude Code PreCompact hook event (payload on stdin).
+    PreCompact,
+    /// Install vipune hook entries into ~/.claude/settings.json.
+    Install,
+    /// Remove vipune hook entries from ~/.claude/settings.json.
+    Uninstall,
 }
 
 /// Execute a CLI command.
@@ -410,6 +442,17 @@ pub fn execute(
             ProjectCommands::Merge { from, to } => {
                 merge::handle_merge(&config.database_path, from, to, json)
             }
+        },
+        Commands::Hook { command } => match command {
+            HookCommands::Install => hook_install::handle_hook_install(json),
+            HookCommands::Uninstall => hook_install::handle_hook_uninstall(json),
+            // Event subcommands read stdin, call the hook run path, and
+            // always exit 0 (the hook must never surface an error mid-session).
+            HookCommands::SessionStart => hook_run::handle_hook_event(config, json),
+            HookCommands::UserPromptSubmit => hook_run::handle_hook_event(config, json),
+            HookCommands::PreToolUse => hook_run::handle_hook_event(config, json),
+            HookCommands::PostToolUse => hook_run::handle_hook_event(config, json),
+            HookCommands::PreCompact => hook_run::handle_hook_event(config, json),
         },
         Commands::Version => handlers::handle_version(json),
         #[cfg(feature = "mcp")]
