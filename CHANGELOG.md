@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-11
+
+### Features
+
+- Implement memory importance and lifecycle management ([#211](https://github.com/randomm/vipune/pull/211))
+
+
 ## [0.10.0] - 2026-09-11
 
 ### Bug Fixes
