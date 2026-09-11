@@ -821,10 +821,146 @@ mod tests {
         );
     }
 
+    // ── backup CLI parse tests ──
+
+    #[test]
+    fn test_cli_parse_backup() {
+        let cli = Cli::parse_from(["vipune", "backup"]);
+        matches!(cli.command, Commands::Backup { output: None });
+    }
+
+    #[test]
+    fn test_cli_parse_backup_with_output() {
+        let cli = Cli::parse_from(["vipune", "backup", "--output", "/tmp/backup.db"]);
+        matches!(
+            cli.command,
+            Commands::Backup {
+                output: Some(p)
+            } if p.to_string_lossy() == "/tmp/backup.db"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_backup_with_json() {
+        let cli = Cli::parse_from(["vipune", "--json", "backup"]);
+        assert!(cli.json);
+        matches!(cli.command, Commands::Backup { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_backup_with_db_path() {
+        let cli = Cli::parse_from(["vipune", "--db-path", "/tmp/seeded.db", "backup"]);
+        assert_eq!(cli.db_path, Some("/tmp/seeded.db".to_string()));
+        matches!(cli.command, Commands::Backup { .. });
+    }
+
     #[test]
     fn test_cli_parse_doctor_projects_with_json() {
         let cli = Cli::parse_from(["vipune", "--json", "doctor", "--projects"]);
         assert!(cli.json);
         matches!(cli.command, Commands::Doctor { .. });
+    }
+
+    // ── export CLI parse tests ──
+
+    #[test]
+    fn test_cli_parse_export() {
+        let cli = Cli::parse_from(["vipune", "export", "/tmp/out.jsonl"]);
+        matches!(
+            cli.command,
+            Commands::Export {
+                ref output_path
+            } if output_path == "/tmp/out.jsonl"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_export_with_json() {
+        let cli = Cli::parse_from(["vipune", "--json", "export", "out.jsonl"]);
+        assert!(cli.json);
+        matches!(cli.command, Commands::Export { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_export_with_db_path() {
+        let cli = Cli::parse_from([
+            "vipune",
+            "--db-path",
+            "/tmp/seeded.db",
+            "export",
+            "out.jsonl",
+        ]);
+        assert_eq!(cli.db_path, Some("/tmp/seeded.db".to_string()));
+        matches!(cli.command, Commands::Export { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_export_with_stray_project_parses_but_is_ignored() {
+        // The global --project flag parses; the handler ignores it (with a
+        // stderr warning) because export is cross-project by contract.
+        let cli = Cli::parse_from(["vipune", "-p", "my-proj", "export", "out.jsonl"]);
+        assert_eq!(cli.project, Some("my-proj".to_string()));
+        matches!(cli.command, Commands::Export { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_export_missing_output_path_fails() {
+        let result = Cli::try_parse_from(["vipune", "export"]);
+        assert!(result.is_err());
+    }
+
+    // ── import CLI parse tests (issue #195) ──
+
+    #[test]
+    fn test_cli_parse_import_with_source() {
+        let cli = Cli::parse_from(["vipune", "import", "/tmp/export.jsonl"]);
+        if let Commands::Import { source } = cli.command {
+            assert_eq!(source, Some("/tmp/export.jsonl".to_string()));
+        } else {
+            panic!("Expected Import subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_import_stdin() {
+        let cli = Cli::parse_from(["vipune", "import", "-"]);
+        if let Commands::Import { source } = cli.command {
+            assert_eq!(source, Some("-".to_string()));
+        } else {
+            panic!("Expected Import subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_import_no_source_defaults_to_stdin() {
+        let cli = Cli::parse_from(["vipune", "import"]);
+        if let Commands::Import { source } = cli.command {
+            assert!(source.is_none(), "no source should default to stdin");
+        } else {
+            panic!("Expected Import subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_import_with_json() {
+        let cli = Cli::parse_from(["vipune", "--json", "import", "-"]);
+        assert!(cli.json);
+        matches!(cli.command, Commands::Import { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_import_with_db_path() {
+        let cli = Cli::parse_from(["vipune", "--db-path", "/tmp/test.db", "import", "-"]);
+        assert_eq!(cli.db_path, Some("/tmp/test.db".to_string()));
+        matches!(cli.command, Commands::Import { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_import_with_project_flag_parses_but_is_ignored() {
+        // --project is a global flag that parses, but import ignores it (with a
+        // stderr warning at execute time). Parse must succeed.
+        let cli = Cli::parse_from(["vipune", "--project", "my-proj", "import", "-"]);
+        assert_eq!(cli.project, Some("my-proj".to_string()));
+        matches!(cli.command, Commands::Import { .. });
     }
 }

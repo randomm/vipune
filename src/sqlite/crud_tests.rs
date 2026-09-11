@@ -278,6 +278,199 @@ mod crud_tests {
         }
     }
 
+    /// `insert_with_id` must restore all 12 columns verbatim under the
+    /// caller-supplied id, including the three columns the regular `insert()`
+    /// does not accept (`superseded_by`, `retrieval_count`, `last_retrieved_at`),
+    /// and must return `true` on a fresh insert.
+    #[test]
+    fn test_insert_with_id_restores_all_columns() {
+        let db = create_test_db();
+        let blob: Vec<u8> = (0..384)
+            .flat_map(|i| (i as f32 * 0.001f32).to_le_bytes())
+            .collect();
+        let inserted = db
+            .insert_with_id(
+                "fixed-id-1",
+                "proj",
+                "restored content",
+                &blob,
+                Some(r#"{"k":"v"}"#),
+                "2024-01-01T00:00:00Z",
+                "2024-01-02T00:00:00Z",
+                "guard",
+                "superseded",
+                Some("superseding-id"),
+                42,
+                Some("2024-01-03T00:00:00Z"),
+            )
+            .unwrap();
+        assert!(inserted, "fresh id must insert and return true");
+
+        // Raw BLOB byte-identity (compared as raw bytes, not decoded).
+        let conn = db.conn();
+        let stored_blob: Vec<u8> = conn
+            .query_row(
+                "SELECT embedding FROM memories WHERE id = ?",
+                ["fixed-id-1"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_blob, blob);
+
+        // All other columns verbatim.
+        let row = conn
+            .query_row(
+                "SELECT project_id, content, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at FROM memories WHERE id = 'fixed-id-1'",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, String>(6)?,
+                        r.get::<_, Option<String>>(7)?,
+                        r.get::<_, i64>(8)?,
+                        r.get::<_, Option<String>>(9)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0, "proj");
+        assert_eq!(row.1, "restored content");
+        assert_eq!(row.2, Some(r#"{"k":"v"}"#.to_string()));
+        assert_eq!(row.3, "2024-01-01T00:00:00Z");
+        assert_eq!(row.4, "2024-01-02T00:00:00Z");
+        assert_eq!(row.5, "guard");
+        assert_eq!(row.6, "superseded");
+        assert_eq!(row.7, Some("superseding-id".to_string()));
+        assert_eq!(row.8, 42);
+        assert_eq!(row.9, Some("2024-01-03T00:00:00Z".to_string()));
+    }
+
+    /// `insert_with_id` with an id that already exists must NOT upsert:
+    /// it surfaces as a PK-constraint error, and the original row (including
+    /// its raw blob and counters) is left byte-for-byte untouched. The import
+    /// handler pre-filters against `existing_ids()`, so this error is the
+    /// defensive guard for a duplicate that slips through the skip set.
+    #[test]
+    fn test_insert_with_id_existing_id_is_not_upserted() {
+        let db = create_test_db();
+        let blob: Vec<u8> = vec![1u8; 1536];
+        let inserted = db
+            .insert_with_id(
+                "dup-id",
+                "proj",
+                "original content",
+                &blob,
+                None,
+                "2024-01-01T00:00:00Z",
+                "2024-01-01T00:00:00Z",
+                "fact",
+                "active",
+                None,
+                7,
+                None,
+            )
+            .unwrap();
+        assert!(inserted);
+
+        // Second call with the same id but different data: must fail with a
+        // PK-constraint error (not a silent `false`, not an upsert).
+        let other_blob: Vec<u8> = vec![2u8; 1536];
+        let result = db.insert_with_id(
+            "dup-id",
+            "other-proj",
+            "replaced content",
+            &other_blob,
+            None,
+            "2024-02-01T00:00:00Z",
+            "2024-02-01T00:00:00Z",
+            "fact",
+            "active",
+            None,
+            99,
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "duplicate id must error (PK constraint), not upsert"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("UNIQUE constraint") || err_msg.contains("constraint"),
+            "expected a PK-constraint error, got: {}",
+            err_msg
+        );
+
+        let conn = db.conn();
+        let (content, stored_blob, retrieval_count) = conn
+            .query_row(
+                "SELECT content, embedding, retrieval_count FROM memories WHERE id = 'dup-id'",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Vec<u8>>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            content, "original content",
+            "original row must be untouched"
+        );
+        assert_eq!(stored_blob, blob, "original blob must be byte-identical");
+        assert_eq!(retrieval_count, 7);
+    }
+
+    /// `existing_ids` returns the set of all ids present across all projects,
+    /// and is empty for a fresh database.
+    #[test]
+    fn test_existing_ids() {
+        let db = create_test_db();
+        assert!(db.existing_ids().unwrap().is_empty(), "fresh DB has no ids");
+
+        let blob: Vec<u8> = vec![0u8; 1536];
+        db.insert_with_id(
+            "a",
+            "proj-a",
+            "x",
+            &blob,
+            None,
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+            "fact",
+            "active",
+            None,
+            0,
+            None,
+        )
+        .unwrap();
+        db.insert_with_id(
+            "b",
+            "proj-b",
+            "y",
+            &blob,
+            None,
+            "2024-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z",
+            "fact",
+            "active",
+            None,
+            0,
+            None,
+        )
+        .unwrap();
+
+        let mut ids = db.existing_ids().unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["a", "b"], "skip set spans all projects");
+    }
+
     #[test]
     fn test_embedding_roundtrip() {
         let db = create_test_db();

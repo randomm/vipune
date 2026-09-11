@@ -246,6 +246,19 @@ pub struct DoctorFtsResponse {
     pub actions: usize,
 }
 
+/// Response for `backup` operation.
+#[derive(Serialize)]
+pub struct BackupResponse {
+    /// Path of the source database that was backed up.
+    pub source: String,
+    /// Path of the produced backup file.
+    pub destination: String,
+    /// Number of rows in the produced backup (matches source by construction).
+    pub rows: usize,
+    /// Size of the produced backup file in bytes.
+    pub bytes: u64,
+}
+
 /// Response for `project merge` operation.
 #[derive(Serialize)]
 pub struct MergeResponse {
@@ -255,6 +268,59 @@ pub struct MergeResponse {
     pub to: String,
     /// Number of rows that were moved.
     pub rows_moved: usize,
+}
+
+/// Response for `export` operation (see `ExportRowLine` for the 12-field JSONL row format).
+#[derive(Serialize)]
+#[allow(dead_code)] // Consumed by task-a (export handler) in the consolidated tree
+pub struct ExportResponse {
+    /// Number of data rows exported (excluding the header line).
+    pub rows: usize,
+    /// Path the JSONL file was written to.
+    pub path: String,
+}
+
+/// One 12-field JSONL export row. DB `type` is renamed to `memory_type`; `embedding` is
+/// base64 of the stored BLOB (`""` for empty); `superseded_by`/`last_retrieved_at` nullable.
+#[derive(Serialize, Clone, Debug)]
+#[allow(dead_code)] // Consumed by task-a (export handler) in the consolidated tree
+pub struct ExportRowLine {
+    /// Memory id.
+    pub id: String,
+    /// Project identifier that owns this memory.
+    pub project_id: String,
+    /// Memory content.
+    pub content: String,
+    /// Optional user-provided metadata (JSON string), null if absent.
+    pub metadata: Option<String>,
+    /// Base64 of the exact 384xf32-LE embedding BLOB, or `""` for NULL/empty.
+    pub embedding: String,
+    /// Creation timestamp in RFC3339 format.
+    pub created_at: String,
+    /// Last update timestamp in RFC3339 format.
+    pub updated_at: String,
+    /// Memory type (fact, preference, procedure, guard, observation). Renamed from DB `type`.
+    pub memory_type: String,
+    /// Lifecycle status (active, candidate, superseded, deprecated).
+    pub status: String,
+    /// ID of the memory that superseded this one (null if none).
+    pub superseded_by: Option<String>,
+    /// Number of times this memory was retrieved.
+    pub retrieval_count: i64,
+    /// RFC3339 timestamp of last retrieval (null if never retrieved).
+    pub last_retrieved_at: Option<String>,
+}
+
+/// Response for `import` operation (all-or-nothing; `skipped` = existing-id rows, not errors).
+#[derive(Serialize)]
+#[allow(dead_code)] // Consumed by task-b (import handler) in the consolidated tree
+pub struct ImportResponse {
+    /// Number of rows newly inserted into the destination DB.
+    pub inserted: usize,
+    /// Number of rows skipped because their id already existed in the destination.
+    pub skipped: usize,
+    /// Total data rows read from the JSONL (inserted + skipped). Excludes the header line.
+    pub rows_total: usize,
 }
 
 /// Serialize a value as formatted JSON and print to stdout.
@@ -355,6 +421,92 @@ mod tests {
         let json_none = serde_json::to_string(&item_none).unwrap();
         assert!(json_none.contains("\"retrieval_count\":0"));
         assert!(json_none.contains("\"last_retrieved_at\":null"));
+    }
+
+    #[test]
+    fn test_serialize_backup_response() {
+        let response = BackupResponse {
+            source: "/tmp/memories.db".to_string(),
+            destination: "/tmp/memories-backup.db".to_string(),
+            rows: 42,
+            bytes: 2048,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"source\":\"/tmp/memories.db\""));
+        assert!(json.contains("\"destination\":\"/tmp/memories-backup.db\""));
+        assert!(json.contains("\"rows\":42"));
+        assert!(json.contains("\"bytes\":2048"));
+    }
+
+    #[test]
+    fn test_serialize_export_row_line_pins_memory_type_not_type() {
+        // Gate resolution: DB `type` column is renamed to `memory_type` in the JSONL
+        // row; `type` must NOT appear as a key. Nullable fields serialize as null.
+        let row = ExportRowLine {
+            id: "id-1".to_string(),
+            project_id: "proj".to_string(),
+            content: "c".to_string(),
+            metadata: None,
+            embedding: "AA==".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            memory_type: "guard".to_string(),
+            status: "active".to_string(),
+            superseded_by: None,
+            retrieval_count: 3,
+            last_retrieved_at: Some("2024-01-02T00:00:00Z".to_string()),
+        };
+        let json = serde_json::to_string(&row).unwrap();
+        assert!(json.contains("\"memory_type\":\"guard\""));
+        assert!(json.contains("\"id\":\"id-1\""));
+        assert!(json.contains("\"project_id\":\"proj\""));
+        assert!(json.contains("\"embedding\":\"AA==\""));
+        assert!(json.contains("\"retrieval_count\":3"));
+        assert!(json.contains("\"superseded_by\":null"));
+        assert!(json.contains("\"last_retrieved_at\":\"2024-01-02T00:00:00Z\""));
+        assert!(
+            !json.contains("\"type\":"),
+            "must not have bare \"type\" key, got: {}",
+            json
+        );
+        // With superseded_by set, it serializes to the string value.
+        let row2 = ExportRowLine {
+            superseded_by: Some("x".to_string()),
+            ..row
+        };
+        let j2 = serde_json::to_string(&row2).unwrap();
+        assert!(j2.contains("\"superseded_by\":\"x\""));
+    }
+
+    #[test]
+    fn test_serialize_export_import_backup_responses() {
+        let e = ExportResponse {
+            rows: 42,
+            path: "p.jsonl".to_string(),
+        };
+        let ej = serde_json::to_string(&e).unwrap();
+        assert!(ej.contains("\"rows\":42"));
+        assert!(ej.contains("\"path\":\"p.jsonl\""));
+
+        let i = ImportResponse {
+            inserted: 10,
+            skipped: 5,
+            rows_total: 15,
+        };
+        let ij = serde_json::to_string(&i).unwrap();
+        assert!(ij.contains("\"inserted\":10"));
+        assert!(ij.contains("\"skipped\":5"));
+        assert!(ij.contains("\"rows_total\":15"));
+
+        let b = BackupResponse {
+            source: "b.db".to_string(),
+            destination: "b-backup.db".to_string(),
+            rows: 0,
+            bytes: 2048,
+        };
+        let bj = serde_json::to_string(&b).unwrap();
+        assert!(bj.contains("\"bytes\":2048"));
+        assert!(bj.contains("\"source\":\"b.db\""));
     }
 
     #[test]

@@ -21,7 +21,7 @@ mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
 clap = { version = "4.5", features = ["derive"] }
 
 # Database
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.38", features = ["bundled", "backup"] }
 
 # ONNX Runtime for embeddings (CPU-only, auto-downloads shared library).
 # Using RC 9 for compatibility with gline-rs (see issue #53).
@@ -38,6 +38,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Utilities
+base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
@@ -70,6 +71,10 @@ test = false
 criterion = "0.5"
 tempfile = "3.13"
 tokio = { version = "1", features = ["macros", "rt"] }
+# Needed by tests/backup_roundtrip_integration.rs (issue #195) to open the
+# SQLite DB with raw SQL (bypassing the crate's pub(crate) conn() accessor)
+# and to verify raw embedding BLOB byte-identity at the SQL level.
+rusqlite = { version = "0.38", features = ["bundled"] }
 
 [profile.release]
 strip = true

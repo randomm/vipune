@@ -8,7 +8,9 @@
 //! - `fts`: FTS5 full-text search (Issue #40)
 
 pub mod embedding;
+pub mod export_scan;
 pub mod fts;
+pub mod import;
 pub mod list;
 pub mod migrations;
 pub mod query_mod;
@@ -346,9 +348,15 @@ impl Database {
         Self { conn }
     }
 
-    /// Get internal connection (for test use only).
-    #[cfg(test)]
-    pub(crate) fn conn(&self) -> &Connection {
+    /// Get a reference to the internal connection (read-only access, for the
+    /// Online Backup API and other read-only consumer commands).
+    ///
+    /// The connection is exposed read-only (no mutation through this handle)
+    /// so callers can build `rusqlite::backup::Backup` or run `PRAGMA` reads
+    /// without being able to corrupt the underlying state. Commands that
+    /// need to mutate state (e.g. `insert_with_id`, `merge_project_ids`) use
+    /// their own `&mut self` methods instead.
+    pub fn conn(&self) -> &Connection {
         &self.conn
     }
 

@@ -1,8 +1,11 @@
 //! Command handlers for vipune CLI.
 
+mod backup;
 mod doctor;
 mod doctor_fts;
+mod export;
 mod handlers;
+mod import;
 mod merge;
 mod reindex;
 
@@ -10,10 +13,19 @@ mod reindex;
 pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search};
 
 #[cfg(test)]
+mod backup_tests;
+
+#[cfg(test)]
 mod doctor_fts_tests;
 
 #[cfg(test)]
 mod doctor_projects_tests;
+
+#[cfg(test)]
+mod export_tests;
+
+#[cfg(test)]
+mod import_tests;
 
 #[cfg(test)]
 mod merge_tests;
@@ -25,6 +37,8 @@ use crate::config;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
+use serde::Serialize;
+use std::path::Path;
 use std::process::ExitCode;
 
 /// Commands supported by vipune CLI.
@@ -167,11 +181,38 @@ pub enum Commands {
         repair: bool,
     },
 
+    /// Import memories from a JSONL export file (or `-` for stdin).
+    ///
+    /// All-or-nothing: the file is restored in a single transaction, so a
+    /// malformed line or wrong-dimension embedding aborts the whole import.
+    Import {
+        /// Path to the JSONL export file, or `-` for stdin
+        source: Option<String>,
+    },
+
     /// Re-embed rows with mock embeddings using the real model.
     Reindex {
         /// Reindex all projects in the database instead of only the current one
         #[arg(long)]
         all_projects: bool,
+    },
+
+    /// Export all rows (all projects, uncapped) to a JSONL file.
+    Export {
+        /// Destination JSONL file (use "> out.jsonl" via shell if omitting)
+        output_path: String,
+    },
+
+    /// Back up the database to a consistent snapshot using SQLite's Online Backup API.
+    ///
+    /// Produces a byte-complete, queryable copy of the memories database. The
+    /// command honours `--db-path` (operates on the resolved override path)
+    /// and fast-fails if the source is locked by another process.
+    Backup {
+        /// Optional explicit output path. Defaults to `<source>-backup.<ext>`
+        /// alongside the source database.
+        #[arg(short = 'o', long)]
+        output: Option<std::path::PathBuf>,
     },
 
     /// Project management operations.
@@ -185,6 +226,16 @@ pub enum Commands {
     #[cfg(feature = "mcp")]
     /// Start MCP server over stdio
     Mcp,
+}
+
+/// Response for `vipune import`: how many rows were inserted and how many
+/// were skipped because their id already existed in the destination.
+#[derive(Debug, Serialize)]
+pub struct ImportResponse {
+    /// Number of rows inserted by this import.
+    pub inserted: usize,
+    /// Number of rows skipped because their id already existed (normal path).
+    pub skipped: usize,
 }
 
 /// Subcommands under `vipune project`.
@@ -327,6 +378,15 @@ pub fn execute(
                 doctor::handle_doctor(&config.database_path, project_filter, json)
             }
         }
+        Commands::Import { source } => {
+            let source = source.as_ref().map(|s| s.as_str());
+            import::handle_import(
+                &config.database_path,
+                source,
+                Some(project_id.as_str()),
+                json,
+            )
+        }
         Commands::Reindex { all_projects } => {
             let project_filter = if !*all_projects {
                 Some(project_id.as_str())
@@ -339,6 +399,12 @@ pub fn execute(
                 project_filter,
                 json,
             )
+        }
+        Commands::Export { output_path } => {
+            export::handle_export(&config.database_path, Path::new(output_path), None, json)
+        }
+        Commands::Backup { output } => {
+            backup::handle_backup(&config.database_path, output.as_deref(), json)
         }
         Commands::Project { command } => match command {
             ProjectCommands::Merge { from, to } => {
