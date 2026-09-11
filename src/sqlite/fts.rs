@@ -206,7 +206,7 @@ impl Database {
         let where_clause = where_clauses.join(" AND ");
         let sql = format!(
             r#"
-            SELECT m.id, m.project_id, m.content, m.metadata, m.embedding, m.created_at, m.updated_at, m.type, m.status, m.superseded_by, m.retrieval_count, m.last_retrieved_at,
+            SELECT m.id, m.project_id, m.content, m.metadata, m.embedding, m.created_at, m.updated_at, m.type, m.status, m.superseded_by, m.retrieval_count, m.last_retrieved_at, m.importance,
                    bm25(memories_fts) as bm25_score
             FROM memories_fts
             JOIN memories m ON m.rowid = memories_fts.rowid
@@ -242,7 +242,8 @@ impl Database {
                     superseded_by: row.get(9)?,
                     retrieval_count: row.get(10)?,
                     last_retrieved_at: row.get(11)?,
-                    similarity: Some(row.get::<_, f64>(12)?),
+                    importance: row.get(12)?,
+                    similarity: Some(row.get::<_, f64>(13)?),
                 })
             })?
             .collect();

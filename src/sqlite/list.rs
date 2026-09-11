@@ -39,7 +39,7 @@ impl super::Database {
 
         let where_clause = where_clauses.join(" AND ");
         let query = format!(
-            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
+            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance
              FROM memories WHERE {} ORDER BY created_at DESC LIMIT ?{}",
             where_clause, param_index
         );
@@ -108,7 +108,7 @@ impl super::Database {
 
         let where_clause = where_clauses.join(" AND ");
         let query = format!(
-            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
+            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance
              FROM memories WHERE {} ORDER BY created_at DESC LIMIT ?{}",
             where_clause, param_index
         );
@@ -162,7 +162,7 @@ impl super::Database {
             .join(", ");
         let query = format!(
             r#"
-            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
+            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance
             FROM memories
             WHERE id IN ({})
             "#,

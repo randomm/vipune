@@ -358,6 +358,7 @@ fn test_update_with_empty_input_returns_error() {
             metadata: None,
             memory_type: None,
             status: None,
+            importance: None,
         },
     );
     assert!(result.is_err());
@@ -403,6 +404,7 @@ fn test_update_with_oversized_input_returns_error() {
             metadata: None,
             memory_type: None,
             status: None,
+            importance: None,
         },
     );
     assert!(result.is_err());
@@ -1244,6 +1246,7 @@ fn test_update_text_only_preserves_metadata() {
                 metadata: None,
                 memory_type: None,
                 status: None,
+                importance: None,
             },
         )
         .expect("Failed to update");
@@ -1296,6 +1299,7 @@ fn test_update_with_invalid_json_metadata_returns_error() {
             metadata: Some(r#"{this is not valid json"#),
             memory_type: None,
             status: None,
+            importance: None,
         },
     );
     assert!(result.is_err());
@@ -1354,6 +1358,7 @@ fn test_update_with_empty_metadata_returns_error() {
             metadata: Some(""),
             memory_type: None,
             status: None,
+            importance: None,
         },
     );
     assert!(result.is_err());
@@ -1412,6 +1417,7 @@ fn test_update_with_whitespace_only_metadata_returns_error() {
             metadata: Some("   "),
             memory_type: None,
             status: None,
+            importance: None,
         },
     );
     assert!(result.is_err());
@@ -1471,6 +1477,7 @@ fn test_update_metadata_only() {
                 metadata: Some(r#"{"tag": "new"}"#),
                 memory_type: None,
                 status: None,
+                importance: None,
             },
         )
         .expect("Failed to update");
@@ -1524,6 +1531,7 @@ fn test_update_both_text_and_metadata() {
                 metadata: Some(r#"{"new": "value"}"#),
                 memory_type: None,
                 status: None,
+                importance: None,
             },
         )
         .expect("Failed to update");

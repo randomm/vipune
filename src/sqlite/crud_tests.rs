@@ -79,6 +79,7 @@ mod crud_tests {
                 metadata: None,
                 memory_type: None,
                 status: None,
+                importance: None,
             },
         )
         .unwrap();
@@ -100,6 +101,7 @@ mod crud_tests {
                 metadata: None,
                 memory_type: None,
                 status: None,
+                importance: None,
             },
         );
         assert!(result.is_err());
@@ -260,6 +262,7 @@ mod crud_tests {
                 metadata: None,
                 memory_type: None,
                 status: None,
+                importance: None,
             },
         );
         assert!(

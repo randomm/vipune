@@ -32,6 +32,34 @@ fn parse_env_float(name: &str, value: &str) -> Result<f64, Error> {
         .map_err(|e| Error::Config(format!("Invalid {name} value: {e}")))
 }
 
+/// Parse an environment variable as a non-negative f64.
+fn parse_env_non_negative_float(name: &str, value: &str) -> Result<f64, Error> {
+    let parsed = parse_env_float(name, value)?;
+    if parsed < 0.0 {
+        return Err(Error::Config(format!(
+            "Invalid {name} value: {parsed} (must be >= 0)"
+        )));
+    }
+    Ok(parsed)
+}
+
+/// Parse an environment variable as a positive integer (>= 1).
+fn parse_env_positive_int(name: &str, value: &str) -> Result<i64, Error> {
+    if value.trim().is_empty() {
+        return Err(Error::Config(format!("{name} cannot be empty")));
+    }
+    let parsed = value
+        .trim()
+        .parse()
+        .map_err(|e| Error::Config(format!("Invalid {name} value: {e}")))?;
+    if parsed < 1 {
+        return Err(Error::Config(format!(
+            "Invalid {name} value: {parsed} (must be >= 1)"
+        )));
+    }
+    Ok(parsed)
+}
+
 /// Apply VIPUNE_DATABASE_PATH environment variable override.
 pub fn apply_database_path_override(database_path: &mut PathBuf) -> Result<(), Error> {
     if let Ok(val) = std::env::var("VIPUNE_DATABASE_PATH") {
@@ -81,6 +109,38 @@ pub fn apply_hybrid_override(hybrid: &mut bool) -> Result<(), Error> {
     Ok(())
 }
 
+/// Apply VIPUNE_DECAY_REFRESH_DAYS environment variable override.
+pub fn apply_decay_refresh_days_override(decay_refresh_days: &mut f64) -> Result<(), Error> {
+    if let Ok(val) = std::env::var("VIPUNE_DECAY_REFRESH_DAYS") {
+        *decay_refresh_days = parse_env_non_negative_float("VIPUNE_DECAY_REFRESH_DAYS", &val)?;
+    }
+    Ok(())
+}
+
+/// Apply VIPUNE_PROMOTION_THRESHOLD environment variable override.
+pub fn apply_promotion_threshold_override(promotion_threshold: &mut i64) -> Result<(), Error> {
+    if let Ok(val) = std::env::var("VIPUNE_PROMOTION_THRESHOLD") {
+        *promotion_threshold = parse_env_positive_int("VIPUNE_PROMOTION_THRESHOLD", &val)?;
+    }
+    Ok(())
+}
+
+/// Apply VIPUNE_PRUNE_RETRIEVAL_LIMIT environment variable override.
+pub fn apply_prune_retrieval_limit_override(prune_retrieval_limit: &mut i64) -> Result<(), Error> {
+    if let Ok(val) = std::env::var("VIPUNE_PRUNE_RETRIEVAL_LIMIT") {
+        *prune_retrieval_limit = parse_env_positive_int("VIPUNE_PRUNE_RETRIEVAL_LIMIT", &val)?;
+    }
+    Ok(())
+}
+
+/// Apply VIPUNE_PRUNE_MIN_AGE_DAYS environment variable override.
+pub fn apply_prune_min_age_days_override(prune_min_age_days: &mut f64) -> Result<(), Error> {
+    if let Ok(val) = std::env::var("VIPUNE_PRUNE_MIN_AGE_DAYS") {
+        *prune_min_age_days = parse_env_non_negative_float("VIPUNE_PRUNE_MIN_AGE_DAYS", &val)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +173,35 @@ mod tests {
     fn test_parse_env_float_valid() {
         let result = parse_env_float("TEST_FLOAT", "0.5");
         assert_eq!(result.unwrap(), 0.5);
+    }
+
+    #[test]
+    fn test_parse_env_non_negative_float_negative_rejected() {
+        let result = parse_env_non_negative_float("TEST_VAR", "-1.5");
+        assert!(matches!(result, Err(Error::Config(_))));
+    }
+
+    #[test]
+    fn test_parse_env_non_negative_float_valid() {
+        let result = parse_env_non_negative_float("TEST_VAR", "14");
+        assert_eq!(result.unwrap(), 14.0);
+    }
+
+    #[test]
+    fn test_parse_env_positive_int_zero_rejected() {
+        let result = parse_env_positive_int("TEST_VAR", "0");
+        assert!(matches!(result, Err(Error::Config(_))));
+    }
+
+    #[test]
+    fn test_parse_env_positive_int_negative_rejected() {
+        let result = parse_env_positive_int("TEST_VAR", "-1");
+        assert!(matches!(result, Err(Error::Config(_))));
+    }
+
+    #[test]
+    fn test_parse_env_positive_int_valid() {
+        let result = parse_env_positive_int("TEST_VAR", "10");
+        assert_eq!(result.unwrap(), 10);
     }
 }

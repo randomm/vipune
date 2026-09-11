@@ -107,6 +107,10 @@ fn to_lib_config(config: &config::Config) -> vipune::Config {
         similarity_threshold: config.similarity_threshold,
         recency_weight: config.recency_weight,
         hybrid: config.hybrid,
+        decay_refresh_days: config.decay_refresh_days,
+        promotion_threshold: config.promotion_threshold,
+        prune_retrieval_limit: config.prune_retrieval_limit,
+        prune_min_age_days: config.prune_min_age_days,
     }
 }
 
@@ -195,6 +199,7 @@ mod issue_178_tests {
             last_retrieved_at: memory.last_retrieved_at,
             memory_type: memory.memory_type.clone(),
             status: memory.status.clone(),
+            importance: memory.importance.clone(),
         };
         // `handle_get` returned SUCCESS for this row and `store.get` reads back
         // the exact type/status the row was written with; the handler's mapping
@@ -280,6 +285,7 @@ mod issue_178_tests {
                 last_retrieved_at: m.last_retrieved_at,
                 memory_type: m.memory_type,
                 status: m.status,
+                importance: m.importance,
             })
             .collect::<Vec<_>>();
         let list_json =
@@ -315,6 +321,7 @@ mod issue_178_tests {
                 last_retrieved_at: m.last_retrieved_at,
                 memory_type: m.memory_type,
                 status: m.status,
+                importance: m.importance,
             })
             .collect::<Vec<_>>();
         let search_json =
@@ -352,6 +359,10 @@ mod tests {
             similarity_threshold: 0.42,
             recency_weight: 0.77,
             hybrid: true,
+            decay_refresh_days: 14.0,
+            promotion_threshold: 7,
+            prune_retrieval_limit: 3,
+            prune_min_age_days: 9.5,
         };
 
         let lib_config = to_lib_config(&local_config);
@@ -364,6 +375,10 @@ mod tests {
         assert_eq!(lib_config.similarity_threshold, 0.42);
         assert_eq!(lib_config.recency_weight, 0.77);
         assert!(lib_config.hybrid);
+        assert_eq!(lib_config.decay_refresh_days, 14.0);
+        assert_eq!(lib_config.promotion_threshold, 7);
+        assert_eq!(lib_config.prune_retrieval_limit, 3);
+        assert_eq!(lib_config.prune_min_age_days, 9.5);
     }
 
     #[test]
@@ -449,16 +464,16 @@ mod tests {
         let cli = Cli::parse_from(["vipune", "update", "memory-id", "--text", "new content"]);
         matches!(
             cli.command,
-            Commands::Update { id, text, metadata, memory_type, status }
-            if id == "memory-id" && text == Some("new content".to_string()) && metadata.is_none() && memory_type.is_none() && status.is_none()
+            Commands::Update { id, text, metadata, memory_type, status, importance }
+            if id == "memory-id" && text == Some("new content".to_string()) && metadata.is_none() && memory_type.is_none() && status.is_none() && importance.is_none()
         );
 
         // Update with metadata only
         let cli = Cli::parse_from(["vipune", "update", "memory-id", "-m", r#"{"tag": "new"}"#]);
         matches!(
             cli.command,
-            Commands::Update { id, text, metadata, memory_type, status }
-            if id == "memory-id" && text.is_none() && metadata == Some(r#"{"tag": "new"}"#.to_string()) && memory_type.is_none() && status.is_none()
+            Commands::Update { id, text, metadata, memory_type, status, importance }
+            if id == "memory-id" && text.is_none() && metadata == Some(r#"{"tag": "new"}"#.to_string()) && memory_type.is_none() && status.is_none() && importance.is_none()
         );
 
         // Update with both
@@ -473,8 +488,8 @@ mod tests {
         ]);
         matches!(
             cli.command,
-            Commands::Update { id, text, metadata, memory_type, status }
-            if id == "memory-id" && text == Some("new".to_string()) && metadata == Some(r#"{"key":"val"}"#.to_string()) && memory_type.is_none() && status.is_none()
+            Commands::Update { id, text, metadata, memory_type, status, importance }
+            if id == "memory-id" && text == Some("new".to_string()) && metadata == Some(r#"{"key":"val"}"#.to_string()) && memory_type.is_none() && status.is_none() && importance.is_none()
         );
     }
 

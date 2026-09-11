@@ -22,6 +22,22 @@ pub struct ConfigFile {
     /// Recency weight for search ranking.
     #[serde(default = "default_recency_weight")]
     pub recency_weight: f64,
+
+    /// Cap (in days) on the recency refresh used in decay scoring.
+    #[serde(default = "default_decay_refresh_days")]
+    pub decay_refresh_days: f64,
+
+    /// Retrieval-count threshold (>=) for promoting a candidate to active.
+    #[serde(default = "default_promotion_threshold")]
+    pub promotion_threshold: i64,
+
+    /// Prune eligibility: a candidate with retrieval_count < N is prunable.
+    #[serde(default = "default_prune_retrieval_limit")]
+    pub prune_retrieval_limit: i64,
+
+    /// Prune eligibility: a candidate older than T days is prunable.
+    #[serde(default = "default_prune_min_age_days")]
+    pub prune_min_age_days: f64,
     // Note: `hybrid` is intentionally NOT in ConfigFile.
     // Hybrid search default is controlled via VIPUNE_HYBRID env var or --hybrid CLI flag only.
 }
@@ -32,6 +48,22 @@ fn default_threshold() -> f64 {
 
 fn default_recency_weight() -> f64 {
     0.3
+}
+
+fn default_decay_refresh_days() -> f64 {
+    30.0
+}
+
+fn default_promotion_threshold() -> i64 {
+    5
+}
+
+fn default_prune_retrieval_limit() -> i64 {
+    5
+}
+
+fn default_prune_min_age_days() -> f64 {
+    30.0
 }
 
 /// Load configuration from TOML file.
@@ -114,5 +146,38 @@ This is not valid TOML
         assert_eq!(config.database_path, PathBuf::from("/test/db.db"));
         assert_eq!(config.recency_weight, 0.3); // Missing field uses default 0.3
         assert_eq!(config.similarity_threshold, 0.85); // Missing field uses default 0.85
+    }
+
+    #[test]
+    fn test_config_file_lifecycle_defaults() {
+        let content = "";
+
+        let result: Result<ConfigFile, _> = toml::from_str(content);
+        assert!(result.is_ok());
+
+        let config = result.unwrap();
+        assert_eq!(config.decay_refresh_days, 30.0);
+        assert_eq!(config.promotion_threshold, 5);
+        assert_eq!(config.prune_retrieval_limit, 5);
+        assert_eq!(config.prune_min_age_days, 30.0);
+    }
+
+    #[test]
+    fn test_config_file_lifecycle_values() {
+        let content = r#"
+            decay_refresh_days = 14.0
+            promotion_threshold = 10
+            prune_retrieval_limit = 3
+            prune_min_age_days = 7.0
+        "#;
+
+        let result: Result<ConfigFile, _> = toml::from_str(content);
+        assert!(result.is_ok());
+
+        let config = result.unwrap();
+        assert_eq!(config.decay_refresh_days, 14.0);
+        assert_eq!(config.promotion_threshold, 10);
+        assert_eq!(config.prune_retrieval_limit, 3);
+        assert_eq!(config.prune_min_age_days, 7.0);
     }
 }

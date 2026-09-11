@@ -1,7 +1,7 @@
 //! Command handlers for vipune CLI.
 
 use crate::errors::Error;
-use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
@@ -57,11 +57,13 @@ pub(crate) fn handle_add(
     force: bool,
     memory_type: &str,
     status: &str,
+    importance: &str,
     supersedes: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
     let memory_type_val = MemoryType::from_str(memory_type)?;
     let status_val = MemoryStatus::from_str(status)?;
+    let importance_val = MemoryImportance::from_str(importance)?;
     if !status_val.is_valid_for_insert() {
         return Err(Error::InvalidInput(format!(
             "Status '{}' is not valid for new memory insertion. Must be 'active' or 'candidate'.",
@@ -94,6 +96,8 @@ pub(crate) fn handle_add(
     } else {
         IngestPolicy::ConflictAware
     };
+
+    let _ = importance_val; // validated; persistence lands with the importance column (sub-issue 2)
 
     match store.ingest_with_type_status(
         project_id,
@@ -222,6 +226,7 @@ pub(crate) fn handle_search(
                 last_retrieved_at: m.last_retrieved_at,
                 memory_type: m.memory_type,
                 status: m.status,
+                importance: m.importance,
             })
             .collect();
         print_json(&SearchResponse { results });
@@ -266,6 +271,7 @@ pub(crate) fn handle_get(
             last_retrieved_at: memory.last_retrieved_at.clone(),
             memory_type: memory.memory_type,
             status: memory.status,
+            importance: memory.importance,
         });
     } else {
         println!("ID: {}", memory.id);
@@ -318,6 +324,7 @@ pub(crate) fn handle_list(
                 last_retrieved_at: m.last_retrieved_at,
                 memory_type: m.memory_type,
                 status: m.status,
+                importance: m.importance,
             })
             .collect();
         print_json(&ListResponse { memories: items });
@@ -401,10 +408,12 @@ mod tests {
             last_retrieved_at: Some("2024-01-15T10:30:00Z".to_string()),
             memory_type: "fact".to_string(),
             status: "active".to_string(),
+            importance: "medium".to_string(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"retrieval_count\":5"));
         assert!(json.contains("\"last_retrieved_at\":\"2024-01-15T10:30:00Z\""));
+        assert!(json.contains("\"importance\":\"medium\""));
 
         // Null case: never-retrieved memory.
         let response = GetResponse {
@@ -445,6 +454,7 @@ mod tests {
             last_retrieved_at: memory.last_retrieved_at,
             memory_type: memory.memory_type,
             status: memory.status,
+            importance: memory.importance,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"retrieval_count\":1"));

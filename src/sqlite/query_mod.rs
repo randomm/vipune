@@ -67,6 +67,7 @@ pub fn map_row_to_memory(row: &Row) -> SqliteResult<Memory> {
         superseded_by: row.get(9)?,
         retrieval_count: row.get(10)?,
         last_retrieved_at: row.get(11)?,
+        importance: row.get(12)?,
     })
 }
 
@@ -180,7 +181,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
+                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance
                 FROM memories
                 WHERE id = ?1
                 "#,
@@ -189,6 +190,7 @@ mod tests {
 
         let memory = stmt.query_row([id.clone()], map_row_to_memory).unwrap();
         assert_eq!(memory.id, id);
+        assert_eq!(memory.importance, "medium");
         assert_eq!(memory.content, "test content");
         assert_eq!(memory.project_id, "proj1");
         assert_eq!(memory.metadata, Some(r#"{"key":"value"}"#.to_string()));
@@ -210,7 +212,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
+                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance
                 FROM memories
                 WHERE id = ?1
                 "#,
@@ -240,7 +242,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
+                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance
                 FROM memories
                 WHERE id = ?1
                 "#,

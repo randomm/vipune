@@ -57,6 +57,7 @@ mod tests {
                 metadata: None,
                 memory_type: None,
                 status: None,
+                importance: None,
             },
         )
         .unwrap();
