@@ -14,6 +14,8 @@ pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search}
 
 #[cfg(test)]
 mod backup_tests;
+
+#[cfg(test)]
 mod doctor_fts_tests;
 
 #[cfg(test)]
@@ -21,6 +23,8 @@ mod doctor_projects_tests;
 
 #[cfg(test)]
 mod export_tests;
+
+#[cfg(test)]
 mod import_tests;
 
 #[cfg(test)]

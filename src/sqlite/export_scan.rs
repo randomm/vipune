@@ -7,12 +7,6 @@
 //! so a corrupt, short, or empty embedding BLOB exports faithfully and no
 //! row-count cap can truncate a backup.
 //!
-//! `insert_with_id` is the sibling of `Database::insert` that takes a
-//! caller-supplied id and writes all 12 columns — including `superseded_by`,
-//! `retrieval_count`, and `last_retrieved_at`, which `insert()` does not set.
-
-use rusqlite::params;
-
 use super::{Database, Result};
 
 /// One row of the memories table, with the embedding kept as the raw
@@ -91,67 +85,6 @@ impl Database {
         }
         Ok(results)
     }
-
-    /// Insert a row under an explicit caller-supplied id, writing all 12
-    /// columns of the memories table.
-    ///
-    /// Sibling of `insert()`, which always generates a fresh UUID and leaves
-    /// `superseded_by`, `retrieval_count`, and `last_retrieved_at` at their
-    /// schema defaults. This method exists so a restore (import) can place a
-    /// row under the exact id it carried in the export, with every column
-    /// restored verbatim.
-    ///
-    /// `embedding_blob` is written as-is — the caller is responsible for
-    /// validating its shape (the import path enforces the 1536-byte
-    /// 384xf32-LE contract before calling this method).
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Sqlite` (wrapping the UNIQUE constraint violation) if
-    /// a row with the same id already exists — this method is INSERT, not
-    /// upsert, so the existing row is left untouched.
-    ///
-    /// The import handler (task-b of issue #195) is the production caller;
-    /// the `#[allow(dead_code)]` is removed when that workstream lands.
-    #[allow(dead_code)] // production caller (import) lands in task-b
-    #[allow(clippy::too_many_arguments)] // 12 columns map 1:1 to 11 data fields + self
-    pub fn insert_with_id(
-        &self,
-        id: &str,
-        project_id: &str,
-        content: &str,
-        metadata: Option<&str>,
-        embedding_blob: &[u8],
-        created_at: &str,
-        updated_at: &str,
-        memory_type: &str,
-        status: &str,
-        superseded_by: Option<&str>,
-        retrieval_count: i64,
-        last_retrieved_at: Option<&str>,
-    ) -> Result<()> {
-        self.conn.execute(
-            r#"
-            INSERT INTO memories (id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-            "#,
-            params![
-                id,
-                project_id,
-                content,
-                metadata,
-                &embedding_blob,
-                created_at,
-                updated_at,
-                memory_type,
-                status,
-                superseded_by,
-                retrieval_count,
-                last_retrieved_at,
-            ],
-        )?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -159,7 +92,7 @@ mod tests {
     use super::*;
     use crate::sqlite::embedding::{blob_to_vec, vec_to_blob};
     use crate::sqlite::query_mod::map_row_to_memory;
-    use rusqlite::Connection;
+    use rusqlite::{Connection, params};
     use tempfile::TempDir;
 
     fn create_test_db() -> (TempDir, Database) {
@@ -311,8 +244,8 @@ mod tests {
             "fixed-id-1",
             "projX",
             "restored content",
-            Some(r#"{"k":"v"}"#),
             &blob,
+            Some(r#"{"k":"v"}"#),
             "2023-05-05T05:05:05Z",
             "2023-06-06T06:06:06Z",
             "guard",
@@ -370,8 +303,8 @@ mod tests {
             "dup-id",
             "p",
             "original",
-            None,
             &blob,
+            None,
             "2023-01-01T00:00:00Z",
             "2023-01-01T00:00:00Z",
             "fact",
@@ -386,8 +319,8 @@ mod tests {
             "dup-id",
             "p",
             "replacement",
-            None,
             &blob,
+            None,
             "2024-01-01T00:00:00Z",
             "2024-01-01T00:00:00Z",
             "guard",
@@ -421,8 +354,8 @@ mod tests {
             "raw-1",
             "p",
             "c",
-            None,
             &weird,
+            None,
             "2023-01-01T00:00:00Z",
             "2023-01-01T00:00:00Z",
             "fact",
