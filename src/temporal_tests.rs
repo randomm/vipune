@@ -1,9 +1,11 @@
 //! Temporal decay tests.
 #[cfg(test)]
 mod tests {
-    use super::super::{DecayConfig, DecayFunction, apply_recency_weight, validate_recency_weight};
-    use chrono::Duration;
-    use chrono::Utc;
+    use super::super::{
+        DecayConfig, DecayFunction, ImportanceLevel, RetrievalTelemetry, apply_recency_weight,
+        recency_refresh, validate_recency_weight,
+    };
+    use chrono::{DateTime, Duration, Utc};
 
     #[test]
     fn test_exponential_decay_brand_new() {
@@ -49,6 +51,7 @@ mod tests {
             function: DecayFunction::Exponential,
             lambda: 1e-6,
             offset_days: 7.0,
+            refresh_cap_days: 30.0,
         };
         let created_at = Utc::now() - Duration::days(3);
         let decay = config.calculate_decay(&created_at);
@@ -65,6 +68,7 @@ mod tests {
             function: DecayFunction::Exponential,
             lambda: 1e-6,
             offset_days: 7.0,
+            refresh_cap_days: 30.0,
         };
         let created_at = Utc::now() - Duration::days(15);
         let decay = config.calculate_decay(&created_at);
@@ -81,7 +85,15 @@ mod tests {
     fn test_apply_recency_weight_zero() {
         let config = DecayConfig::default();
         let now = Utc::now();
-        let result = apply_recency_weight(0.9, &now, 0.0, &config);
+        let telemetry = RetrievalTelemetry::default();
+        let result = apply_recency_weight(
+            0.9,
+            &now,
+            0.0,
+            &config,
+            ImportanceLevel::Medium,
+            &telemetry,
+        );
         assert!(
             (result - 0.9).abs() < 1e-10,
             "α=0 should return pure similarity"
@@ -92,7 +104,15 @@ mod tests {
     fn test_apply_recency_weight_one() {
         let config = DecayConfig::default();
         let now = Utc::now();
-        let result = apply_recency_weight(0.9, &now, 1.0, &config);
+        let telemetry = RetrievalTelemetry::default();
+        let result = apply_recency_weight(
+            0.9,
+            &now,
+            1.0,
+            &config,
+            ImportanceLevel::Medium,
+            &telemetry,
+        );
         assert!(
             (result - 1.0).abs() < 1e-10,
             "α=1 with brand new should return decay=1.0"
@@ -103,9 +123,17 @@ mod tests {
     fn test_apply_recency_weight_half() {
         let config = DecayConfig::default();
         let now = Utc::now();
+        let telemetry = RetrievalTelemetry::default();
         let similarity = 0.8;
-        let result = apply_recency_weight(similarity, &now, 0.5, &config);
-        // 0.5 * 0.8 + 0.5 * 1.0 = 0.9
+        let result = apply_recency_weight(
+            similarity,
+            &now,
+            0.5,
+            &config,
+            ImportanceLevel::Medium,
+            &telemetry,
+        );
+        // 0.5 * 0.8 + 0.5 * 1.0 = 0.9 (brand new → decay = 1.0 for any importance)
         assert!(
             (result - 0.9).abs() < 1e-10,
             "α=0.5 should average similarity and decay"
@@ -116,7 +144,15 @@ mod tests {
     fn test_recency_weight_negative_clamped() {
         let config = DecayConfig::default();
         let now = Utc::now();
-        let result = apply_recency_weight(0.9, &now, -0.5, &config);
+        let telemetry = RetrievalTelemetry::default();
+        let result = apply_recency_weight(
+            0.9,
+            &now,
+            -0.5,
+            &config,
+            ImportanceLevel::Medium,
+            &telemetry,
+        );
         assert!(
             (result - 0.9).abs() < 1e-10,
             "Negative recency weight should behave like 0.0"
@@ -150,12 +186,14 @@ mod tests {
         assert!(matches!(config.function, DecayFunction::Exponential));
         assert_eq!(config.lambda, 1e-6);
         assert_eq!(config.offset_days, 0.0);
+        assert_eq!(config.refresh_cap_days, 30.0);
 
         // Also verify Linear variant exists
         let linear_config = DecayConfig {
             function: DecayFunction::Linear,
             lambda: 1.0 / 86400.0,
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         assert!(matches!(linear_config.function, DecayFunction::Linear));
     }
@@ -174,6 +212,7 @@ mod tests {
             function: DecayFunction::Exponential,
             lambda: -1e-6,
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let result = config.validate();
         assert!(result.is_err());
@@ -186,6 +225,7 @@ mod tests {
             function: DecayFunction::Exponential,
             lambda: 0.0,
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let result = config.validate();
         assert!(result.is_err());
@@ -198,6 +238,7 @@ mod tests {
             function: DecayFunction::Exponential,
             lambda: 1e-2,
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let result = config.validate();
         assert!(result.is_err());
@@ -210,6 +251,7 @@ mod tests {
             function: DecayFunction::Exponential,
             lambda: 1e-6,
             offset_days: -7.0,
+            refresh_cap_days: 30.0,
         };
         let result = config.validate();
         assert!(result.is_err());
@@ -222,6 +264,7 @@ mod tests {
             function: DecayFunction::Exponential,
             lambda: 1e-6,
             offset_days: 7.0,
+            refresh_cap_days: 30.0,
         };
         let result = config.validate();
         assert!(result.is_ok());
@@ -231,8 +274,16 @@ mod tests {
     fn test_apply_recency_weight_with_old_memory() {
         let config = DecayConfig::default();
         let old_date = Utc::now() - Duration::days(365);
+        let telemetry = RetrievalTelemetry::default();
         let similarity = 0.9;
-        let result = apply_recency_weight(similarity, &old_date, 0.5, &config);
+        let result = apply_recency_weight(
+            similarity,
+            &old_date,
+            0.5,
+            &config,
+            ImportanceLevel::Medium,
+            &telemetry,
+        );
         // Old memory has decay close to 0, so result should be ~0.45
         assert!(
             result < 0.6,
@@ -248,6 +299,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 1.0 / 86400.0, //decay 1 per day
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let now = Utc::now();
         let decay = config.calculate_decay(&now);
@@ -263,6 +315,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 1.0, // decay 1 per day
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let created_at = Utc::now() - Duration::seconds(43200); // 12 hours
         let decay = config.calculate_decay(&created_at);
@@ -280,6 +333,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 1.0, // decay 1 per day
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let created_at = Utc::now() - Duration::days(1);
         let decay = config.calculate_decay(&created_at);
@@ -297,6 +351,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 1.0, // decay 1 per day
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let created_at = Utc::now() - Duration::days(5);
         let decay = config.calculate_decay(&created_at);
@@ -314,6 +369,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 1.0,      // decay 1 per day
             offset_days: 7.0, // no decay for 7 days
+            refresh_cap_days: 30.0,
         };
         let created_at = Utc::now() - Duration::days(3);
         let decay = config.calculate_decay(&created_at);
@@ -330,6 +386,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 1.0, // decay 1 per day
             offset_days: 7.0,
+            refresh_cap_days: 30.0,
         };
         let created_at = Utc::now() - Duration::days(10); // 10 days total
         let decay = config.calculate_decay(&created_at);
