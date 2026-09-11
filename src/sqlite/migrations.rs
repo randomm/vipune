@@ -24,10 +24,6 @@ pub enum MigrationError {
         current_version: i32,
         max_supported: i32,
     },
-    /// Pre-existing rows have duplicate normalised content that violates the
-    /// new unique constraint. The migration was rolled back; the operator must
-    /// dedupe manually and re-open the database.
-    DedupCollision { count: usize },
 }
 
 impl fmt::Display for MigrationError {
@@ -40,12 +36,6 @@ impl fmt::Display for MigrationError {
                 f,
                 "Database schema version {} is newer than this vipune binary supports (max: {}). Upgrade vipune.",
                 current_version, max_supported
-            ),
-            MigrationError::DedupCollision { count } => write!(
-                f,
-                "Cannot create dedup index: {count} pre-existing row(s) have duplicate \
-                 normalised content. Deduplicate manually (delete or merge the extra rows), \
-                 then re-open the database. Migration was rolled back; no data was changed.",
             ),
         }
     }
@@ -95,10 +85,10 @@ use super::hash::content_hash;
 /// All steps run inside the migration transaction (rolled back on failure):
 /// 1. `ALTER TABLE memories ADD COLUMN content_hash TEXT`
 /// 2. Backfill `content_hash` for all existing rows using the shared `content_hash`
-/// 3. Check for pre-existing duplicate `(project_id, content_hash)` pairs:
-///    - If any exist, return `MigrationError::DedupCollision` so the
-///      transaction is rolled back (no schema change, no data loss).
-///    - The operator must dedupe manually before re-opening the DB.
+/// 3. Deduplicate pre-existing duplicate `(project_id, content_hash)` rows:
+///    keep the newest row (by `created_at`) per group, delete the older rows.
+///    This handles real-world DBs that accumulated duplicate content before
+///    the unique constraint existed.
 /// 4. `CREATE UNIQUE INDEX idx_memories_dedup ON memories(project_id, content_hash)`
 ///
 /// The unique index enforces at the database level that no two rows in the same
@@ -106,19 +96,26 @@ use super::hash::content_hash;
 fn migrate_v4(conn: &Connection) -> SqliteResult<()> {
     conn.execute("ALTER TABLE memories ADD COLUMN content_hash TEXT", [])?;
     backfill_content_hash(conn)?;
-    let dup_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM (SELECT project_id, content_hash, COUNT(*) AS cnt \
-         FROM memories WHERE content_hash IS NOT NULL \
-         GROUP BY project_id, content_hash HAVING cnt > 1)",
+    // Deduplicate: keep, per (project_id, content_hash) group, the newest row
+    // by created_at (rowid breaks ties); delete every other row in the group.
+    // Rows whose group has no duplicates keep their own rowid and are untouched.
+    // This handles real-world DBs with pre-existing duplicate content.
+    conn.execute(
+        "DELETE FROM memories WHERE content_hash IS NOT NULL
+         AND rowid NOT IN (
+            SELECT rowid FROM (
+                SELECT rowid,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY project_id, content_hash
+                           ORDER BY created_at DESC, rowid DESC
+                       ) AS rn
+                FROM memories
+                WHERE content_hash IS NOT NULL
+            )
+            WHERE rn = 1
+         )",
         [],
-        |r| r.get(0),
     )?;
-    if dup_count > 0 {
-        return Err(MigrationError::DedupCollision {
-            count: dup_count as usize,
-        }
-        .into());
-    }
     conn.execute(
         &format!("CREATE UNIQUE INDEX {DEDUP_INDEX_NAME} ON memories(project_id, content_hash)"),
         [],
@@ -467,18 +464,97 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_4_existing_duplicates_causes_error() {
+    fn test_migration_4_existing_duplicates_are_deduplicated() {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
         insert_row(&conn, "r1", "proj-a", "duplicate content here");
         insert_row(&conn, "r2", "proj-a", "Duplicate   Content Here");
         conn.pragma_update(None, "user_version", 3).unwrap();
-        let result = migrate_v4(&conn);
-        assert!(result.is_err(), "expected DedupCollision error");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("duplicate"),
-            "error message should mention duplicates, got: {err_msg}"
+        migrate_v4(&conn).expect("migration must succeed despite duplicates");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE project_id = 'proj-a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "only one row should remain after dedup");
+        let idx: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_memories_dedup'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 1, "dedup index should exist after migration");
+    }
+
+    #[test]
+    fn test_migration_4_dedup_keeps_one_row_per_group_only() {
+        let conn = create_test_db();
+        init_schema(&conn).unwrap();
+        // Two duplicate pairs + one unique row.
+        insert_row(&conn, "r1", "proj-a", "dup one");
+        insert_row(&conn, "r2", "proj-a", "Dup   One");
+        insert_row(&conn, "r3", "proj-a", "dup two");
+        insert_row(&conn, "r4", "proj-a", "dup   TWO");
+        insert_row(&conn, "r5", "proj-a", "unique row");
+        conn.pragma_update(None, "user_version", 3).unwrap();
+        migrate_v4(&conn).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 3, "3 unique contents should remain, got {count}");
+        let unique_gone: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE content = 'unique row'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(unique_gone, 1, "non-duplicate rows must not be deleted");
+    }
+
+    #[test]
+    fn test_migration_4_dedup_does_not_cross_project_boundary() {
+        let conn = create_test_db();
+        init_schema(&conn).unwrap();
+        insert_row(&conn, "r1", "proj-a", "shared content");
+        insert_row(&conn, "r2", "proj-b", "shared content");
+        conn.pragma_update(None, "user_version", 3).unwrap();
+        migrate_v4(&conn).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 2,
+            "same content in different projects must both survive"
         );
+    }
+
+    #[test]
+    fn test_migration_4_dedup_keeps_newest_by_created_at() {
+        let conn = create_test_db();
+        init_schema(&conn).unwrap();
+        // Insert duplicate rows with different created_at timestamps; the
+        // row with the latest created_at must survive.
+        conn.execute(
+            "INSERT INTO memories (id, project_id, content, embedding, created_at, updated_at)
+             VALUES ('r1', 'proj-a', 'old dup', X'00', '2024-01-01T00:00:00Z', 't')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (id, project_id, content, embedding, created_at, updated_at)
+             VALUES ('r2', 'proj-a', 'old dup', X'00', '2025-06-15T12:30:00Z', 't')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 3).unwrap();
+        migrate_v4(&conn).unwrap();
+        let survivor: String = conn
+            .query_row("SELECT id FROM memories", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(survivor, "r2", "the newest row by created_at must survive");
     }
 }
