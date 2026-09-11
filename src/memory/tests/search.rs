@@ -374,6 +374,7 @@ fn test_integration_update_changes_embedding() {
                 metadata: None,
                 memory_type: None,
                 status: None,
+                importance: None,
             },
         )
         .unwrap();

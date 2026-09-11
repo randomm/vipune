@@ -45,7 +45,7 @@ mod reindex_tests;
 
 use crate::config;
 use crate::errors::Error;
-use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
 use serde::Serialize;
 use std::path::Path;
@@ -77,6 +77,10 @@ pub enum Commands {
         /// Memory status (active, candidate)
         #[arg(long, default_value = "active")]
         status: String,
+
+        /// Operator-assigned importance (low, medium, high, critical)
+        #[arg(long, default_value = "medium")]
+        importance: String,
 
         /// Supersede an existing memory (atomic replacement)
         #[arg(long)]
@@ -166,6 +170,10 @@ pub enum Commands {
         /// Update memory status
         #[arg(long)]
         status: Option<String>,
+
+        /// Update operator-assigned importance (low, medium, high, critical)
+        #[arg(long)]
+        importance: Option<String>,
     },
     /// Diagnose database health.
     #[command(group = clap::ArgGroup::new("doctor-mode").args(["embeddings", "projects", "fts"]).required(true).multiple(false))]
@@ -347,6 +355,7 @@ pub fn execute(
             force,
             memory_type,
             status,
+            importance,
             supersedes,
         } => handlers::handle_add(
             store,
@@ -356,6 +365,7 @@ pub fn execute(
             *force,
             memory_type,
             status,
+            importance,
             supersedes.as_deref(),
             json,
         ),
@@ -410,12 +420,17 @@ pub fn execute(
             metadata,
             memory_type,
             status,
+            importance,
         } => {
             let memory_type_val = memory_type
                 .as_deref()
                 .map(MemoryType::from_str)
                 .transpose()?;
             let status_val = status.as_deref().map(MemoryStatus::from_str).transpose()?;
+            let importance_val = importance
+                .as_deref()
+                .map(MemoryImportance::from_str)
+                .transpose()?;
             handlers::handle_update(
                 store,
                 id,
@@ -425,6 +440,7 @@ pub fn execute(
                     metadata: metadata.as_deref(),
                     memory_type: memory_type_val,
                     status: status_val,
+                    importance: importance_val,
                 },
                 json,
             )

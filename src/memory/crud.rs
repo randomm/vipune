@@ -3,7 +3,7 @@
 #[cfg(test)]
 use crate::embedding::l2_normalize; // test-only; pure function, pragmatic coupling
 use crate::errors::Error;
-use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, ConflictMemory, IngestPolicy};
 use crate::sqlite::Memory;
 
@@ -23,6 +23,8 @@ pub struct UpdateParams<'a> {
     pub memory_type: Option<MemoryType>,
     /// New lifecycle status.
     pub status: Option<MemoryStatus>,
+    /// New operator-assigned importance.
+    pub importance: Option<MemoryImportance>,
 }
 
 /// Generate a deterministic mock embedding for specific content.
@@ -305,11 +307,17 @@ impl MemoryStore {
             metadata,
             memory_type,
             status,
+            importance,
         } = params;
 
-        if content.is_none() && metadata.is_none() && memory_type.is_none() && status.is_none() {
+        if content.is_none()
+            && metadata.is_none()
+            && memory_type.is_none()
+            && status.is_none()
+            && importance.is_none()
+        {
             return Err(Error::InvalidInput(
-                "At least one of content, metadata, memory_type, or status must be provided"
+                "At least one of content, metadata, memory_type, status, or importance must be provided"
                     .to_string(),
             ));
         }
@@ -350,6 +358,7 @@ impl MemoryStore {
                 metadata,
                 memory_type: memory_type.map(|t| t.as_str()),
                 status: status.map(|s| s.as_str()),
+                importance: importance.map(|i| i.as_str()),
             },
         )?)
     }

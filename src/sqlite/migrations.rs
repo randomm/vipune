@@ -202,8 +202,20 @@ fn backfill_content_hash(conn: &Connection) -> SqliteResult<()> {
     Ok(())
 }
 
+/// Migration 5: add `importance` column (low/medium/high/critical, default medium).
+///
+/// The operator-assigned importance level is a HARD exclusion in the prune
+/// command (high/critical rows are never demoted) and scales the temporal
+/// decay rate (issue #194, sub-issue 2).
+fn migrate_v5(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        "ALTER TABLE memories ADD COLUMN importance TEXT NOT NULL DEFAULT 'medium';",
+    )?;
+    Ok(())
+}
+
 fn migrations() -> Vec<MigrationFn> {
-    vec![migrate_v1, migrate_v2, migrate_v3, migrate_v4]
+    vec![migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5]
 }
 
 fn total_migrations() -> i32 {
@@ -352,6 +364,47 @@ mod tests {
         assert!(err.contains("999"));
         assert!(err.contains("Upgrade vipune"));
         assert_eq!(version_of(&conn), 999);
+    }
+
+    // --- Migration 5: importance column ---
+
+    fn setup_v4_with_row(conn: &Connection, project_id: &str, content: &str) {
+        init_schema(conn).unwrap();
+        insert_row(conn, "r1", project_id, content);
+        migrate_v2(conn).unwrap();
+        migrate_v3(conn).unwrap();
+        migrate_v4(conn).unwrap();
+        conn.pragma_update(None, "user_version", 4).unwrap();
+    }
+
+    #[test]
+    fn test_migration_5_adds_importance_column_default_medium() {
+        let conn = create_test_db();
+        setup_v4_with_row(&conn, "proj-a", "Some memory content");
+        migrate_v5(&conn).unwrap();
+        let importance: String = conn
+            .query_row("SELECT importance FROM memories WHERE id = 'r1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(importance, "medium", "new column must default to 'medium'");
+    }
+
+    #[test]
+    fn test_migration_5_bumps_user_version_to_5() {
+        let conn = create_test_db();
+        setup_v4_with_row(&conn, "proj-a", "content");
+        run_migrations(&conn).unwrap();
+        assert_eq!(version_of(&conn), 5);
+    }
+
+    #[test]
+    fn test_migration_5_idempotent_via_run_migrations() {
+        let conn = create_test_db();
+        init_schema(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+        assert_eq!(version_of(&conn), 5);
     }
 
     // --- content_hash_for tests ---

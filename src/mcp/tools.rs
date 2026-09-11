@@ -445,6 +445,7 @@ impl ToolHandler {
                 metadata: metadata_str.as_deref(),
                 memory_type: memory_type_val,
                 status: status_val,
+                importance: None,
             },
         )?;
 

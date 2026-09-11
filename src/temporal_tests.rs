@@ -3,9 +3,9 @@
 mod tests {
     use super::super::{
         DecayConfig, DecayFunction, ImportanceLevel, RetrievalTelemetry, apply_recency_weight,
-        recency_refresh, validate_recency_weight,
+        validate_recency_weight,
     };
-    use chrono::{DateTime, Duration, Utc};
+    use chrono::{Duration, Utc};
 
     #[test]
     fn test_exponential_decay_brand_new() {
@@ -86,14 +86,8 @@ mod tests {
         let config = DecayConfig::default();
         let now = Utc::now();
         let telemetry = RetrievalTelemetry::default();
-        let result = apply_recency_weight(
-            0.9,
-            &now,
-            0.0,
-            &config,
-            ImportanceLevel::Medium,
-            &telemetry,
-        );
+        let result =
+            apply_recency_weight(0.9, &now, 0.0, &config, ImportanceLevel::Medium, &telemetry);
         assert!(
             (result - 0.9).abs() < 1e-10,
             "α=0 should return pure similarity"
@@ -105,14 +99,8 @@ mod tests {
         let config = DecayConfig::default();
         let now = Utc::now();
         let telemetry = RetrievalTelemetry::default();
-        let result = apply_recency_weight(
-            0.9,
-            &now,
-            1.0,
-            &config,
-            ImportanceLevel::Medium,
-            &telemetry,
-        );
+        let result =
+            apply_recency_weight(0.9, &now, 1.0, &config, ImportanceLevel::Medium, &telemetry);
         assert!(
             (result - 1.0).abs() < 1e-10,
             "α=1 with brand new should return decay=1.0"
@@ -412,6 +400,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 1e-7, // Too small for Linear
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let result = config.validate();
         assert!(result.is_err());
@@ -424,6 +413,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 200.0, // Too large for Linear
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let result = config.validate();
         assert!(result.is_err());
@@ -436,6 +426,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 1e-6, // Valid minimum
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let result = config.validate();
         assert!(result.is_ok(), "Linear lambda 1e-6 should be valid");
@@ -447,6 +438,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 100.0, // Valid maximum
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let result = config.validate();
         assert!(result.is_ok(), "Linear lambda 100.0 should be valid");
@@ -458,6 +450,7 @@ mod tests {
             function: DecayFunction::Linear,
             lambda: 1.0, // 1 per day (reasonable value)
             offset_days: 0.0,
+            refresh_cap_days: 30.0,
         };
         let now = Utc::now();
         let decay_now = config.calculate_decay(&now);

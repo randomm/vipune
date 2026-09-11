@@ -70,6 +70,7 @@ fn test_update_memory() {
             metadata: None,
             memory_type: None,
             status: None,
+            importance: None,
         },
     )
     .unwrap();
@@ -98,6 +99,7 @@ fn test_update_nonexistent() {
             metadata: None,
             memory_type: None,
             status: None,
+            importance: None,
         },
     );
     assert!(result.is_err());
@@ -134,6 +136,7 @@ fn test_update_cross_project_isolation() {
             metadata: None,
             memory_type: None,
             status: None,
+            importance: None,
         },
     );
     assert!(result.is_err(), "update with wrong project_id must fail");

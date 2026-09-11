@@ -56,7 +56,7 @@ impl Database {
     pub fn scan_all_rows(&self) -> Result<Vec<ExportRow>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
+            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance
             FROM memories
             ORDER BY rowid
             "#,
@@ -262,7 +262,7 @@ mod tests {
         let memory: crate::sqlite::Memory = conn
             .query_row(
                 r#"
-                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
+                SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance
                 FROM memories WHERE id = 'fixed-id-1'
                 "#,
                 [],

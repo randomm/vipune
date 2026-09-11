@@ -219,22 +219,10 @@ fn test_prune_response_serializes_correctly() {
     assert!(json.contains("id-2"));
 }
 
-#[cfg(any())] // Skipped: requires the importance column from sub-issue 2's migration
 #[test]
 fn test_prune_importance_high_never_demoted_integration() {
     let (_dir, db_path) = create_test_db();
     let mut db = Database::open(&db_path).unwrap();
-    let _ = &db; // keep db alive; importance column check removed (see note above)
-    let importance_ok = db
-        .conn()
-        .prepare("SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'importance'")
-        .ok()
-        .and_then(|mut stmt| stmt.query_row([], |r| r.get::<_, i64>(0)).ok())
-        .map(|c| c > 0)
-        .unwrap_or(false);
-    if !importance_ok {
-        return;
-    }
     let id = seed(&db, "p", "high importance", OLD, "fact", "candidate");
     set_retrieval(&db, &id, 0);
     db.conn()
@@ -254,21 +242,10 @@ fn test_prune_importance_high_never_demoted_integration() {
     assert_eq!(status_of(&db, &id), "candidate");
 }
 
-#[cfg(any())] // Skipped: requires the importance column from sub-issue 2's migration
 #[test]
 fn test_prune_importance_critical_never_demoted_integration() {
     let (_dir, db_path) = create_test_db();
     let mut db = Database::open(&db_path).unwrap();
-    let importance_ok = db
-        .conn()
-        .prepare("SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'importance'")
-        .ok()
-        .and_then(|mut stmt| stmt.query_row([], |r| r.get::<_, i64>(0)).ok())
-        .map(|c| c > 0)
-        .unwrap_or(false);
-    if !importance_ok {
-        return;
-    }
     let id = seed(&db, "p", "critical importance", OLD, "fact", "candidate");
     set_retrieval(&db, &id, 0);
     db.conn()
@@ -288,21 +265,10 @@ fn test_prune_importance_critical_never_demoted_integration() {
     assert_eq!(status_of(&db, &id), "candidate");
 }
 
-#[cfg(any())] // Skipped: requires the importance column from sub-issue 2's migration
 #[test]
 fn test_prune_importance_medium_low_still_eligible_integration() {
     let (_dir, db_path) = create_test_db();
     let mut db = Database::open(&db_path).unwrap();
-    let importance_ok = db
-        .conn()
-        .prepare("SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'importance'")
-        .ok()
-        .and_then(|mut stmt| stmt.query_row([], |r| r.get::<_, i64>(0)).ok())
-        .map(|c| c > 0)
-        .unwrap_or(false);
-    if !importance_ok {
-        return;
-    }
     let med = seed(&db, "p", "medium", OLD, "fact", "candidate");
     set_retrieval(&db, &med, 0);
     db.conn()

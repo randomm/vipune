@@ -19,6 +19,8 @@ pub struct UpdateOptions<'a> {
     pub memory_type: Option<&'a str>,
     /// New lifecycle status.
     pub status: Option<&'a str>,
+    /// New operator-assigned importance (low, medium, high, critical).
+    pub importance: Option<&'a str>,
 }
 
 impl super::Database {
@@ -67,6 +69,11 @@ impl super::Database {
         if let Some(s) = options.status {
             set_clauses.push("status = ?");
             params.push(Box::new(s.to_string()));
+        }
+
+        if let Some(imp) = options.importance {
+            set_clauses.push("importance = ?");
+            params.push(Box::new(imp.to_string()));
         }
 
         set_clauses.push("updated_at = ?");

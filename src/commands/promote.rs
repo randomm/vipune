@@ -155,6 +155,7 @@ pub(crate) fn run_promotion(db: &Database, project_id: &str) -> Result<usize, Er
                     metadata: None,
                     memory_type: None,
                     status: Some("active"),
+                    importance: None,
                 },
             )
             .map_err(Error::from)?;

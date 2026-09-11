@@ -140,6 +140,7 @@ impl DecayConfig {
     /// `DecayConfig::new()` which validates all parameters at construction time.
     /// Direct struct construction (only used in tests) bypassing validation may
     /// produce mathematically incorrect results.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn calculate_decay(&self, created_at: &DateTime<Utc>) -> f64 {
         let now = Utc::now();
         let age = now.signed_duration_since(*created_at);
@@ -199,6 +200,7 @@ impl DecayConfig {
     }
 
     /// Apply the decay function to an already-computed effective age (no offset/refresh).
+    #[cfg_attr(not(test), allow(dead_code))]
     fn apply_function(&self, effective_age: f64) -> f64 {
         self.apply_function_scaled(effective_age, 1.0)
     }
@@ -262,16 +264,6 @@ impl ImportanceLevel {
         }
     }
 
-    /// Get the string representation of the importance level.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Critical => "critical",
-        }
-    }
-
     /// Decay scale factor: 0.0 for critical, 0.25 high, 0.5 medium, 1.0 low.
     ///
     /// Multiplied against λ in the decay exponent: `exp(-λ × scale × effective_age)`,
@@ -306,12 +298,8 @@ impl RetrievalTelemetry {
     /// Callers that want strict parsing should parse the timestamp separately
     /// (as the search path already does for `created_at`).
     #[must_use]
-    pub fn from_stored(
-        retrieval_count: i64,
-        last_retrieved_at: Option<&str>,
-    ) -> Self {
-        let last_retrieved_at = last_retrieved_at
-            .and_then(|ts| ts.parse::<DateTime<Utc>>().ok());
+    pub fn from_stored(retrieval_count: i64, last_retrieved_at: Option<&str>) -> Self {
+        let last_retrieved_at = last_retrieved_at.and_then(|ts| ts.parse::<DateTime<Utc>>().ok());
         Self {
             retrieval_count,
             last_retrieved_at,
@@ -351,7 +339,7 @@ pub fn recency_refresh(
     let now = Utc::now();
     let age_seconds = now.signed_duration_since(*created_at).num_seconds().max(0) as f64;
     let since_last = now.signed_duration_since(last).num_seconds().max(0) as f64;
-    let cap_seconds = (k_days.max(0.0) * 86400.0);
+    let cap_seconds = k_days.max(0.0) * 86400.0;
     since_last.min(cap_seconds).min(age_seconds)
 }
 

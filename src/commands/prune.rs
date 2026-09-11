@@ -108,45 +108,21 @@ impl PruneEvaluator {
         db: &mut Database,
         project_id: &str,
     ) -> Result<Vec<Memory>, Error> {
-        // The importance column is added by a sibling epic sub-issue migration
-        // (importance as a stored TEXT column defaulting to 'medium'). If the
-        // schema does not have the column yet (this binary running against a
-        // pre-migration database before that migration lands), importance is
-        // effectively 'medium' for every row — the same value the migration
-        // backfills — so the exclusion clause becomes a no-op and eligibility
-        // reduces to status/count/age/type only. This keeps prune usable in
-        // either schema state without changing the semantics of the final
-        // schema (where the clause is exactly `importance <> 'high' AND
-        // importance <> 'critical'`).
-        let has_importance = db
-            .conn()
-            .prepare("SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'importance'")
-            .and_then(|mut stmt| stmt.query_row([], |r| r.get::<_, i64>(0)))
-            .map(|c| c > 0)
-            .unwrap_or(false);
-        let importance_clause = if has_importance {
-            " AND NOT (importance = 'high' OR importance = 'critical')"
-        } else {
-            ""
-        };
-
         let cutoff_delta = chrono::Duration::from_std(self.age_threshold)
             .unwrap_or_else(|_| chrono::Duration::days(i64::MAX / 2));
         let cutoff = Utc::now() - cutoff_delta;
         let cutoff_rfc3339 = cutoff.to_rfc3339();
 
-        let sql = format!(
-            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
+        let sql = "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance
              FROM memories
              WHERE project_id = ?1
                AND status = 'candidate'
                AND type <> 'guard'
-               {importance_clause}
+               AND NOT (importance = 'high' OR importance = 'critical')
                AND retrieval_count < ?2
-               AND created_at < ?3"
-        );
+               AND created_at < ?3";
 
-        let mut stmt = db.conn().prepare(&sql)?;
+        let mut stmt = db.conn().prepare(sql)?;
         let mut results: Vec<Memory> = Vec::new();
         for row_result in stmt.query_map(
             rusqlite::params![project_id, self.count_threshold, &cutoff_rfc3339],
@@ -182,6 +158,7 @@ impl PruneEvaluator {
                     metadata: None,
                     memory_type: None,
                     status: Some(MemoryStatus::Deprecated.as_str()),
+                    importance: None,
                 },
             )?;
             demoted.push(candidate.id.clone());

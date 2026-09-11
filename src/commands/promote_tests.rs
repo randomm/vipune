@@ -209,6 +209,11 @@ fn test_run_promotion_promotes_eligible_only() {
 
 #[test]
 fn test_run_promotion_zero_when_none_eligible() {
+    // Guard against env pollution from sibling tests that mutate the
+    // shared VIPUNE_PROMOTION_THRESHOLD process env var (e.g.
+    // test_run_promotion_respects_env_threshold which doesn't hold the mutex).
+    let _guard = ENV_MUTEX.lock().unwrap();
+    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
     let (_dir, path) = create_test_db();
     let db = Database::open(path.as_path()).unwrap();
 

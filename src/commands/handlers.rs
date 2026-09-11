@@ -1,7 +1,7 @@
 //! Command handlers for vipune CLI.
 
 use crate::errors::Error;
-use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
@@ -57,11 +57,13 @@ pub(crate) fn handle_add(
     force: bool,
     memory_type: &str,
     status: &str,
+    importance: &str,
     supersedes: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
     let memory_type_val = MemoryType::from_str(memory_type)?;
     let status_val = MemoryStatus::from_str(status)?;
+    let importance_val = MemoryImportance::from_str(importance)?;
     if !status_val.is_valid_for_insert() {
         return Err(Error::InvalidInput(format!(
             "Status '{}' is not valid for new memory insertion. Must be 'active' or 'candidate'.",
@@ -94,6 +96,8 @@ pub(crate) fn handle_add(
     } else {
         IngestPolicy::ConflictAware
     };
+
+    let _ = importance_val; // validated; persistence lands with the importance column (sub-issue 2)
 
     match store.ingest_with_type_status(
         project_id,

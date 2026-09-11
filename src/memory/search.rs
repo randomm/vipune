@@ -3,7 +3,9 @@
 use crate::errors::Error;
 use crate::rrf;
 use crate::sqlite::Memory;
-use crate::temporal::{DecayConfig, apply_recency_weight, validate_recency_weight};
+use crate::temporal::{
+    DecayConfig, ImportanceLevel, RetrievalTelemetry, apply_recency_weight, validate_recency_weight,
+};
 
 use super::store::{MemoryStore, validate_limit};
 
@@ -89,6 +91,11 @@ impl MemoryStore {
                     &created_at,
                     recency_weight,
                     &decay_config,
+                    ImportanceLevel::parse(&memory.importance).map_err(Error::InvalidInput)?,
+                    &RetrievalTelemetry::from_stored(
+                        memory.retrieval_count,
+                        memory.last_retrieved_at.as_deref(),
+                    ),
                 ));
             }
             // Re-sort by recency-adjusted scores
@@ -193,6 +200,11 @@ impl MemoryStore {
                     &created_at,
                     recency_weight,
                     &decay_config,
+                    ImportanceLevel::parse(&memory.importance).map_err(Error::InvalidInput)?,
+                    &RetrievalTelemetry::from_stored(
+                        memory.retrieval_count,
+                        memory.last_retrieved_at.as_deref(),
+                    ),
                 ));
             }
             // Re-sort by recency-adjusted scores

@@ -64,9 +64,6 @@ pub struct Memory {
     /// RFC3339 timestamp of last retrieval (None if never retrieved).
     pub last_retrieved_at: Option<String>,
     /// Operator-assigned importance (low, medium, high, critical; default medium).
-    /// Populated by task-a's read fan-in once the importance column lands (issue #194 sub-issue 1
-    /// depends on sub-issue 2); surfaced by the CLI JSON structs in src/output.rs.
-    #[allow(dead_code)]
     pub importance: String,
 }
 
@@ -239,10 +236,21 @@ impl Database {
 
         self.conn.execute(
             r#"
-            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, importance)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             "#,
-            params![&id, project_id, content, &blob, metadata, &now, &now, memory_type, status],
+            params![
+                &id,
+                project_id,
+                content,
+                &blob,
+                metadata,
+                &now,
+                &now,
+                memory_type,
+                status,
+                "medium",
+            ],
         )?;
 
         Ok(id)
@@ -271,10 +279,21 @@ impl Database {
 
         self.conn.execute(
             r#"
-            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, importance)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             "#,
-            params![&id, project_id, content, &blob, metadata, created_at, updated_at, memory_type, status],
+            params![
+                &id,
+                project_id,
+                content,
+                &blob,
+                metadata,
+                created_at,
+                updated_at,
+                memory_type,
+                status,
+                "medium",
+            ],
         )?;
 
         Ok(id)
@@ -338,7 +357,7 @@ impl Database {
     pub fn get(&self, id: &str, project_id: &str) -> Result<Option<Memory>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at
+            SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance
             FROM memories
             WHERE id = ?1 AND project_id = ?2
             "#,
