@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod embedding;
 mod errors;
+mod hook;
 mod memory;
 pub mod memory_types; // Re-export for library consumers: IngestPolicy, BatchIngestItemResult, BatchIngestResult
 mod output;
@@ -114,6 +115,31 @@ fn to_lib_config(config: &config::Config) -> vipune::Config {
     }
 }
 
+/// Map a `Commands::Hook` subcommand to its `HookEvent` counterpart, if it is
+/// one of the five event subcommands. Returns `None` for `Install` and
+/// `Uninstall` (those go through the normal command path) and for non-hook
+/// commands.
+fn hook_event_from_command(command: &Commands) -> Option<crate::hook::HookEvent> {
+    match command {
+        Commands::Hook {
+            command: commands::HookCommands::SessionStart,
+        } => Some(crate::hook::HookEvent::SessionStart),
+        Commands::Hook {
+            command: commands::HookCommands::UserPromptSubmit,
+        } => Some(crate::hook::HookEvent::UserPromptSubmit),
+        Commands::Hook {
+            command: commands::HookCommands::PreToolUse,
+        } => Some(crate::hook::HookEvent::PreToolUse),
+        Commands::Hook {
+            command: commands::HookCommands::PostToolUse,
+        } => Some(crate::hook::HookEvent::PostToolUse),
+        Commands::Hook {
+            command: commands::HookCommands::PreCompact,
+        } => Some(crate::hook::HookEvent::PreCompact),
+        _ => None,
+    }
+}
+
 fn run(cli: &Cli) -> Result<ExitCode, Error> {
     let mut config = config::Config::load()?;
     config.ensure_directories()?;
@@ -123,6 +149,16 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
     }
 
     let project_id = detect_project(cli.project.as_deref());
+
+    // Handle hook event subcommands separately — the hook path must NEVER
+    // load the ONNX model. The MCP early-return above is the existing
+    // precedent for this pattern. We intercept all five event subcommands
+    // (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PreCompact)
+    // but NOT Install/Uninstall (those run via the normal path and don't
+    // touch the DB or the embedder).
+    if let Some(event) = hook_event_from_command(&cli.command) {
+        return commands::hook_run::handle_hook_event(&config, cli.json, event);
+    }
 
     // Handle MCP command separately (doesn't use MemoryStore directly)
     #[cfg(feature = "mcp")]
