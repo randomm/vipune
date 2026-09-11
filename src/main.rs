@@ -875,4 +875,59 @@ mod tests {
         let result = Cli::try_parse_from(["vipune", "export"]);
         assert!(result.is_err());
     }
+
+    // ── import CLI parse tests (issue #195) ──
+
+    #[test]
+    fn test_cli_parse_import_with_source() {
+        let cli = Cli::parse_from(["vipune", "import", "/tmp/export.jsonl"]);
+        if let Commands::Import { source } = cli.command {
+            assert_eq!(source, Some("/tmp/export.jsonl".to_string()));
+        } else {
+            panic!("Expected Import subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_import_stdin() {
+        let cli = Cli::parse_from(["vipune", "import", "-"]);
+        if let Commands::Import { source } = cli.command {
+            assert_eq!(source, Some("-".to_string()));
+        } else {
+            panic!("Expected Import subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_import_no_source_defaults_to_stdin() {
+        let cli = Cli::parse_from(["vipune", "import"]);
+        if let Commands::Import { source } = cli.command {
+            assert!(source.is_none(), "no source should default to stdin");
+        } else {
+            panic!("Expected Import subcommand");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_import_with_json() {
+        let cli = Cli::parse_from(["vipune", "--json", "import", "-"]);
+        assert!(cli.json);
+        matches!(cli.command, Commands::Import { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_import_with_db_path() {
+        let cli = Cli::parse_from(["vipune", "--db-path", "/tmp/test.db", "import", "-"]);
+        assert_eq!(cli.db_path, Some("/tmp/test.db".to_string()));
+        matches!(cli.command, Commands::Import { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_import_with_project_flag_parses_but_is_ignored() {
+        // --project is a global flag that parses, but import ignores it (with a
+        // stderr warning at execute time). Parse must succeed.
+        let cli = Cli::parse_from(["vipune", "--project", "my-proj", "import", "-"]);
+        assert_eq!(cli.project, Some("my-proj".to_string()));
+        matches!(cli.command, Commands::Import { .. });
+    }
 }

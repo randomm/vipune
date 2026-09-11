@@ -10,6 +10,7 @@
 pub mod embedding;
 pub mod export_scan;
 pub mod fts;
+pub mod import;
 pub mod list;
 pub mod migrations;
 pub mod query_mod;

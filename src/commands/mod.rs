@@ -4,6 +4,7 @@ mod doctor;
 mod doctor_fts;
 mod export;
 mod handlers;
+mod import;
 mod merge;
 mod reindex;
 
@@ -18,6 +19,7 @@ mod doctor_projects_tests;
 
 #[cfg(test)]
 mod export_tests;
+mod import_tests;
 
 #[cfg(test)]
 mod merge_tests;
@@ -29,6 +31,7 @@ use crate::config;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
+use serde::Serialize;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -172,6 +175,15 @@ pub enum Commands {
         repair: bool,
     },
 
+    /// Import memories from a JSONL export file (or `-` for stdin).
+    ///
+    /// All-or-nothing: the file is restored in a single transaction, so a
+    /// malformed line or wrong-dimension embedding aborts the whole import.
+    Import {
+        /// Path to the JSONL export file, or `-` for stdin
+        source: Option<String>,
+    },
+
     /// Re-embed rows with mock embeddings using the real model.
     Reindex {
         /// Reindex all projects in the database instead of only the current one
@@ -196,6 +208,16 @@ pub enum Commands {
     #[cfg(feature = "mcp")]
     /// Start MCP server over stdio
     Mcp,
+}
+
+/// Response for `vipune import`: how many rows were inserted and how many
+/// were skipped because their id already existed in the destination.
+#[derive(Debug, Serialize)]
+pub struct ImportResponse {
+    /// Number of rows inserted by this import.
+    pub inserted: usize,
+    /// Number of rows skipped because their id already existed (normal path).
+    pub skipped: usize,
 }
 
 /// Subcommands under `vipune project`.
@@ -337,6 +359,15 @@ pub fn execute(
                 let project_filter = doctor_project.as_deref().or(Some(project_id.as_str()));
                 doctor::handle_doctor(&config.database_path, project_filter, json)
             }
+        }
+        Commands::Import { source } => {
+            let source = source.as_ref().map(|s| s.as_str());
+            import::handle_import(
+                &config.database_path,
+                source,
+                Some(project_id.as_str()),
+                json,
+            )
         }
         Commands::Reindex { all_projects } => {
             let project_filter = if !*all_projects {
