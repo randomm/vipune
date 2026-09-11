@@ -92,4 +92,49 @@ mod tests {
         assert_eq!(h.len(), 16);
         assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
     }
+
+    // --- Parity test: hash.rs::content_hash vs the deleted migrations.rs::content_hash_for ---
+    //
+    // Both implementations used the same FNV-1a-64 algorithm over the same
+    // normalised content (lowercase + whitespace-collapsed). This test pins
+    // the exact hash values produced by the shared implementation so any future
+    // change to `normalize_content` or `fnv1a64_hex` that breaks parity with
+    // the values already stored in production databases will be caught here.
+    //
+    // The expected hex values were computed by the original
+    // `migrations.rs::content_hash_for` before consolidation (issue #213).
+
+    #[test]
+    fn test_parity_with_deleted_content_hash_for() {
+        // Each (input, expected_hash) pair was verified against the original
+        // migrations.rs implementation (FNV-1a-64 over normalised content).
+        // These are the exact values already stored in production databases
+        // by the migration 4 backfill — any drift here means dedup breaks.
+        let cases: &[(&str, &str)] = &[
+            ("hello world", "779a65e7023cd2e7"),
+            ("leading and trailing", "0502c48fed08ef80"),
+            ("foo", "dcb27518fed9d577"),
+            ("bar", "003934191339461a"),
+            ("test content", "26877eb147d6f408"),
+            ("same input", "b94119c1d5202297"),
+            ("shared content", "74c6a290029c9309"),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                &content_hash(input),
+                expected,
+                "parity broken for input: {input:?}"
+            );
+        }
+
+        // Normalisation parity: the old migrations.rs used trim_end while
+        // hash.rs uses trim. Verify they produce identical output for the
+        // whitespace-collapsed normalisation (the collapsing loop never
+        // produces leading whitespace, so trim == trim_end here).
+        assert_eq!(
+            normalize_content("  leading and  trailing  "),
+            normalize_content("leading and trailing"),
+            "trim vs trim_end must not diverge for normalised output"
+        );
+    }
 }

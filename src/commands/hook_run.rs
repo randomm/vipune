@@ -1,44 +1,55 @@
-//! Hook event handler adapter (issue #191, task-a).
+//! Hook event handler adapter (issue #191, task-a; completed in issue #213).
 //!
-//! Thin command-surface module that reads the Claude Code JSON payload
-//! from stdin, delegates to the `crate::hook` module (task-b), and
-//! always exits 0 with empty stdout on any non-fatal failure.
+//! Thin command-surface module that reads the Claude Code JSON payload from
+//! stdin, delegates to the `crate::hook` module (task-b), and always exits 0
+//! with empty stdout on any non-fatal failure.
 //!
-//! The hook path must never load the ONNX model.
+//! The hook path must never load the ONNX model. The adapter reads stdin
+//! once and passes the event type (from the subcommand) to the pipeline.
 
-use std::io::Read;
 use std::process::ExitCode;
 
-/// Read the full stdin payload and run the hook pipeline.
+use crate::hook::{HookEvent, read_stdin, run_hook_event};
+
+/// Map a `HookEvent` subcommand variant to its pipeline counterpart.
 ///
-/// Always returns `ExitCode::SUCCESS` — the hook must never surface an
-/// error to the agent mid-session (malformed stdin, DB lock, empty
-/// extraction, unknown event all map to silent success).
-///
-/// # Errors
-///
-/// Returns `Err` only on catastrophic failure that the caller should
-/// still map to exit 0.
-#[allow(unused_variables)] // `config` reserved for task-b's DB path
+/// The command surface carries the event type via the subcommand variant
+/// (Claude Code invokes a different `vipune hook <event>` for each event).
+/// The pipeline receives the enum directly.
 pub fn handle_hook_event(
     config: &crate::config::Config,
     _json: bool,
+    event: HookEvent,
 ) -> Result<ExitCode, crate::errors::Error> {
-    let mut input = String::new();
-    if std::io::stdin().read_to_string(&mut input).is_err() {
-        return Ok(ExitCode::SUCCESS);
+    let input = read_stdin();
+    run_hook_event(config, event, &input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hook::run_hook_event;
+
+    /// The adapter must never surface an error to the agent. Even on
+    /// catastrophic failure (e.g. unreadable stdin), the exit code is
+    /// `SUCCESS`. This test exercises the happy path only; the full
+    /// non-fatal-failure matrix lives in `crate::hook::run::tests`.
+    #[test]
+    fn handle_hook_event_delegates_to_pipeline() {
+        let config = crate::config::Config::default();
+        // The adapter reads from the real stdin — in a test context, stdin
+        // is whatever the test harness provides (often empty). An empty
+        // payload is a non-fatal failure that maps to exit 0.
+        let result =
+            handle_hook_event(&config, false, HookEvent::UserPromptSubmit).expect("adapter ok");
+        assert_eq!(result, ExitCode::SUCCESS);
     }
 
-    // Delegate to the hook module (task-b). The full pipeline:
-    // 1. Parse payload (cwd, event-specific fields)
-    // 2. detect_project_at(payload.cwd, None)
-    // 3. Zero-LLM extractor (credential-blocked)
-    // 4. Dedup check + insert_with_hash per candidate
-    // 5. Any failure → exit 0, empty stdout
-    //
-    // task-b (src/hook/) provides the actual implementation.
-    // This adapter is the command-surface entry point called by execute().
-    let _ = input; // silence unused until task-b wires in
-
-    Ok(ExitCode::SUCCESS)
+    #[test]
+    fn pipeline_returns_success_on_garbage_input() {
+        let config = crate::config::Config::default();
+        let exit = run_hook_event(&config, HookEvent::UserPromptSubmit, "not json")
+            .expect("garbage stdin must not error");
+        assert_eq!(exit, ExitCode::SUCCESS);
+    }
 }

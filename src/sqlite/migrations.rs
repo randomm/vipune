@@ -88,65 +88,13 @@ fn migrate_v3(conn: &Connection) -> SqliteResult<()> {
 /// failures when mapping a `SqliteError` to a silent skip.
 pub const DEDUP_INDEX_NAME: &str = "idx_memories_dedup";
 
-/// Compute the content dedup hash for a memory row.
-///
-/// This is the **single shared function** used by both the migration backfill
-/// (inside `migrate_v4`) and the hook insert path. The hash is **FNV-1a
-/// 64-bit** over the **normalised** form of the content (lowercased, internal
-/// whitespace collapsed to single spaces, leading/trailing whitespace
-/// trimmed), returned as lowercase hex (16 chars).
-///
-/// Normalisation makes case and whitespace variants of the same text produce
-/// identical hashes ("Hello   World" and "hello world" → same hash), which is
-/// the dedup guarantee: same project + same normalised content → one row.
-///
-/// FNV-1a was chosen because it is std-only (no new dependency), deterministic
-/// across all platforms and Rust versions, and its ~1-in-2^64 collision
-/// probability is acceptable for dedup purposes (not security).
-pub fn content_hash_for(content: &str) -> String {
-    let normalised = normalise_content(content);
-    format!("{:016x}", fnv1a_64(normalised.as_bytes()))
-}
-
-/// Lowercase, collapse internal whitespace to single space, trim leading and trailing.
-fn normalise_content(content: &str) -> String {
-    let lower: String = content.to_lowercase();
-    let mut result = String::with_capacity(lower.len());
-    let mut in_whitespace = false;
-    for ch in lower.chars() {
-        if ch.is_whitespace() {
-            if !in_whitespace && !result.is_empty() {
-                result.push(' ');
-            }
-            in_whitespace = true;
-        } else {
-            result.push(ch);
-            in_whitespace = false;
-        }
-    }
-    // Trim any trailing space that was pushed by the whitespace-collapsing logic.
-    // The loop pushes a space before a run of whitespace chars; if the string
-    // ends in whitespace, that last space stays. We need to strip it.
-    result.trim_end().to_string()
-}
-
-/// FNV-1a 64-bit: offset-basis 0xcbf29ce484222325, prime 0x00000100000001b3.
-fn fnv1a_64(data: &[u8]) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut h = OFFSET_BASIS;
-    for b in data {
-        h ^= *b as u64;
-        h = h.wrapping_mul(PRIME);
-    }
-    h
-}
+use super::hash::content_hash;
 
 /// Migration 4: add `content_hash` column + `idx_memories_dedup` unique index.
 ///
 /// All steps run inside the migration transaction (rolled back on failure):
 /// 1. `ALTER TABLE memories ADD COLUMN content_hash TEXT`
-/// 2. Backfill `content_hash` for all existing rows using `content_hash_for`
+/// 2. Backfill `content_hash` for all existing rows using the shared `content_hash`
 /// 3. Check for pre-existing duplicate `(project_id, content_hash)` pairs:
 ///    - If any exist, return `MigrationError::DedupCollision` so the
 ///      transaction is rolled back (no schema change, no data loss).
@@ -180,8 +128,9 @@ fn migrate_v4(conn: &Connection) -> SqliteResult<()> {
 
 /// Backfill `content_hash` for all rows that currently have `NULL`.
 ///
-/// The hash is computed in Rust via the shared `content_hash_for` function so
-/// the migration and the hook path always produce identical values.
+/// The hash is computed in Rust via the shared `content_hash` function
+/// (`crate::sqlite::hash::content_hash`) so the migration and the hook path
+/// always produce identical values.
 fn backfill_content_hash(conn: &Connection) -> SqliteResult<()> {
     let rows: Vec<(String, String)> = {
         let mut stmt =
@@ -196,7 +145,7 @@ fn backfill_content_hash(conn: &Connection) -> SqliteResult<()> {
     };
     let mut upd = conn.prepare("UPDATE memories SET content_hash = ?1 WHERE id = ?2")?;
     for (id, content) in rows {
-        let hash = content_hash_for(&content);
+        let hash = content_hash(&content);
         upd.execute((hash, id))?;
     }
     Ok(())
@@ -407,29 +356,29 @@ mod tests {
         assert_eq!(version_of(&conn), 5);
     }
 
-    // --- content_hash_for tests ---
+    // --- content_hash parity tests (shared hash.rs::content_hash) ---
 
     #[test]
     fn test_content_hash_normalises_case_and_whitespace() {
         assert_eq!(
-            content_hash_for("Hello   World"),
-            content_hash_for("hello world"),
+            content_hash("Hello   World"),
+            content_hash("hello world"),
             "case + whitespace must be normalised"
         );
         assert_eq!(
-            content_hash_for("  Leading and  trailing  "),
-            content_hash_for("leading and trailing")
+            content_hash("  Leading and  trailing  "),
+            content_hash("leading and trailing")
         );
     }
 
     #[test]
     fn test_content_hash_different_content_different_hash() {
-        assert_ne!(content_hash_for("foo"), content_hash_for("bar"));
+        assert_ne!(content_hash("foo"), content_hash("bar"));
     }
 
     #[test]
     fn test_content_hash_is_lowercase_hex_16_chars() {
-        let h = content_hash_for("test content");
+        let h = content_hash("test content");
         assert_eq!(h.len(), 16, "expected 16 hex chars, got {:?}", h);
         assert!(
             h.chars()
@@ -441,10 +390,7 @@ mod tests {
 
     #[test]
     fn test_content_hash_deterministic() {
-        assert_eq!(
-            content_hash_for("same input"),
-            content_hash_for("same input")
-        );
+        assert_eq!(content_hash("same input"), content_hash("same input"));
     }
 
     // --- Migration 4: dedup behaviour tests ---
@@ -491,7 +437,7 @@ mod tests {
         let conn = create_test_db();
         setup_v3_with_row(&conn, "proj-a", "Hello World");
         migrate_v4(&conn).unwrap();
-        let hash = content_hash_for("hello world");
+        let hash = content_hash("hello world");
         let result = conn.execute(
             "INSERT INTO memories (id, project_id, content, embedding, created_at, updated_at, content_hash)
              VALUES ('r2', 'proj-a', 'hello world', X'00', 't', 't', ?1)",
@@ -508,7 +454,7 @@ mod tests {
         let conn = create_test_db();
         setup_v3_with_row(&conn, "proj-a", "shared content");
         migrate_v4(&conn).unwrap();
-        let hash = content_hash_for("shared content");
+        let hash = content_hash("shared content");
         let result = conn.execute(
             "INSERT INTO memories (id, project_id, content, embedding, created_at, updated_at, content_hash)
              VALUES ('r2', 'proj-b', 'shared content', X'00', 't', 't', ?1)",

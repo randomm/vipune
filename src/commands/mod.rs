@@ -5,8 +5,11 @@ mod doctor;
 mod doctor_fts;
 mod export;
 mod handlers;
-mod hook_install;
-mod hook_run;
+pub mod hook_install;
+pub mod hook_run;
+
+#[cfg(test)]
+mod hook_install_tests;
 mod import;
 mod merge;
 mod promote;
@@ -45,6 +48,7 @@ mod reindex_tests;
 
 use crate::config;
 use crate::errors::Error;
+use crate::hook::HookEvent;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
 use serde::Serialize;
@@ -512,11 +516,24 @@ pub fn execute(
             HookCommands::Uninstall => hook_install::handle_hook_uninstall(json),
             // Event subcommands read stdin, call the hook run path, and
             // always exit 0 (the hook must never surface an error mid-session).
-            HookCommands::SessionStart => hook_run::handle_hook_event(config, json),
-            HookCommands::UserPromptSubmit => hook_run::handle_hook_event(config, json),
-            HookCommands::PreToolUse => hook_run::handle_hook_event(config, json),
-            HookCommands::PostToolUse => hook_run::handle_hook_event(config, json),
-            HookCommands::PreCompact => hook_run::handle_hook_event(config, json),
+            // The event type is carried by the subcommand variant — the
+            // Claude Code hook contract does not include an `event_type`
+            // field in the JSON payload itself.
+            HookCommands::SessionStart => {
+                hook_run::handle_hook_event(config, json, HookEvent::SessionStart)
+            }
+            HookCommands::UserPromptSubmit => {
+                hook_run::handle_hook_event(config, json, HookEvent::UserPromptSubmit)
+            }
+            HookCommands::PreToolUse => {
+                hook_run::handle_hook_event(config, json, HookEvent::PreToolUse)
+            }
+            HookCommands::PostToolUse => {
+                hook_run::handle_hook_event(config, json, HookEvent::PostToolUse)
+            }
+            HookCommands::PreCompact => {
+                hook_run::handle_hook_event(config, json, HookEvent::PreCompact)
+            }
         },
         Commands::Version => handlers::handle_version(json),
         #[cfg(feature = "mcp")]
