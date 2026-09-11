@@ -71,6 +71,10 @@ test = false
 criterion = "0.5"
 tempfile = "3.13"
 tokio = { version = "1", features = ["macros", "rt"] }
+# Needed by tests/backup_roundtrip_integration.rs (issue #195) to open the
+# SQLite DB with raw SQL (bypassing the crate's pub(crate) conn() accessor)
+# and to verify raw embedding BLOB byte-identity at the SQL level.
+rusqlite = { version = "0.38", features = ["bundled"] }
 
 [profile.release]
 strip = true
