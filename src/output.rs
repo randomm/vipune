@@ -207,6 +207,45 @@ pub struct DoctorProjectsResponse {
     pub suspected_splits: Vec<DoctorProjectsSuspectedSplit>,
 }
 
+/// A single under-populated project reported by `doctor --fts`.
+///
+/// `memory_rows` is the total number of rows in that project; `missing_from_fts` is
+/// the number of that project's rowids absent from `memories_fts`.
+#[derive(Serialize)]
+pub struct DoctorFtsProject {
+    /// Project identifier.
+    pub project_id: String,
+    /// Total number of rows in this project.
+    pub memory_rows: usize,
+    /// Rows in this project whose rowid is missing from `memories_fts`.
+    pub missing_from_fts: usize,
+}
+
+/// Response for `doctor --fts` FTS desync check.
+///
+/// `in_sync` is true when both the under-population and orphan directions report
+/// zero. `underpopulated_by_project` lists each project with missing FTS rows (empty
+/// when in sync). `orphan_rows` is a GLOBAL count of `memories_fts` rowids with no
+/// matching `memories` row — never attributed to a project, because an orphan row's
+/// content in an external-content table is undefined. When `--repair` is passed,
+/// `repaired` is true if a rebuild ran (false if the pre-check found zero desync and
+/// the rebuild was skipped); `actions` counts the rows a rebuild re-indexed.
+#[derive(Serialize)]
+pub struct DoctorFtsResponse {
+    /// True when the FTS index is in sync with the memories table.
+    pub in_sync: bool,
+    /// Per-project under-population reports (empty when in sync).
+    pub underpopulated_by_project: Vec<DoctorFtsProject>,
+    /// Global count of orphan FTS rows (no matching memories row).
+    pub orphan_rows: usize,
+    /// Total number of desynced rows (under-population + orphans).
+    pub total_desynced: usize,
+    /// Whether `--repair` ran a rebuild (false when the pre-check found zero desync).
+    pub repaired: bool,
+    /// Number of FTS rows the rebuild re-indexed (0 when skipped).
+    pub actions: usize,
+}
+
 /// Response for `project merge` operation.
 #[derive(Serialize)]
 pub struct MergeResponse {
