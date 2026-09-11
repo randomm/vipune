@@ -10,6 +10,7 @@ mod hook_run;
 mod import;
 mod merge;
 mod promote;
+mod prune;
 mod reindex;
 
 #[cfg(test)]
@@ -35,6 +36,9 @@ mod promote_tests;
 
 #[cfg(test)]
 mod merge_tests;
+
+#[cfg(test)]
+mod prune_tests;
 
 #[cfg(test)]
 mod reindex_tests;
@@ -216,6 +220,32 @@ pub enum Commands {
     /// Superseded and deprecated rows are never promoted. The promotion issues
     /// `UPDATE status='active'` via the existing update path.
     Promote,
+
+    /// Prune stale candidate memories by demoting them to `deprecated`.
+    ///
+    /// Prune **never deletes**: demotions are issued as `UPDATE status =
+    /// 'deprecated'` through the existing update path, so the total row count
+    /// of the database is unchanged after any run. A row is demoted when and
+    /// only when `status = 'candidate' AND retrieval_count < N AND
+    /// age(created_at) > T`, where N and T are configurable (TOML
+    /// `prune_count` / `prune_age_days` with `VIPUNE_PRUNE_COUNT` /
+    /// `VIPUNE_PRUNE_AGE_DAYS` env overrides mirroring `VIPUNE_RECENCY_WEIGHT`).
+    /// Guard-type memories and rows with `importance IN ('high','critical')`
+    /// are hard exclusions: they are never demoted.
+    Prune {
+        /// Retrieval-count threshold N: prune candidates with
+        /// `retrieval_count < N` (subject to the age rule and hard
+        /// exclusions). Configurable via TOML `prune_count` / env
+        /// `VIPUNE_PRUNE_COUNT`.
+        #[arg(long)]
+        count: Option<i64>,
+        /// Age threshold T (in days): prune candidates with
+        /// `age(created_at) > T` (subject to the count rule and hard
+        /// exclusions). Configurable via TOML `prune_age_days` / env
+        /// `VIPUNE_PRUNE_AGE_DAYS`.
+        #[arg(long)]
+        age_days: Option<i64>,
+    },
 
     /// Back up the database to a consistent snapshot using SQLite's Online Backup API.
     ///
@@ -448,6 +478,11 @@ pub fn execute(
             export::handle_export(&config.database_path, Path::new(output_path), None, json)
         }
         Commands::Promote => promote::handle_promote(&config.database_path, &project_id, json),
+        Commands::Prune { count, age_days } => {
+            let n = count.unwrap_or(prune::DEFAULT_PRUNE_COUNT);
+            let t = age_days.unwrap_or(prune::DEFAULT_PRUNE_AGE_DAYS);
+            prune::handle_prune(&config.database_path, n, t, json)
+        }
         Commands::Backup { output } => {
             backup::handle_backup(&config.database_path, output.as_deref(), json)
         }
