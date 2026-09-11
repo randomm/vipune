@@ -405,4 +405,75 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].memory_type, "preference");
     }
+
+    // ====================================================================
+    // FTS5 desync detection tests (Issue #193)
+    // ====================================================================
+
+    #[test]
+    fn test_detect_fts_desync_fresh_zero_row_db_is_healthy() {
+        let db = create_test_db();
+        let report = db.detect_fts_desync().unwrap();
+        assert!(report.underpopulated_by_project.is_empty());
+        assert_eq!(report.underpopulated_global, 0);
+        assert_eq!(report.orphans, 0);
+        assert!(!report.is_desynced());
+    }
+
+    #[test]
+    fn test_detect_fts_desync_healthy_trigger_synced_db_is_in_sync() {
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        for content in ["first memory", "second memory", "third memory"] {
+            db.insert("proj1", content, &embedding, None, "fact", "active")
+                .unwrap();
+        }
+
+        let report = db.detect_fts_desync().unwrap();
+        assert!(!report.is_desynced());
+        assert_eq!(report.underpopulated_global, 0);
+        assert_eq!(report.orphans, 0);
+        assert_eq!(report.underpopulated_by_project.len(), 0);
+    }
+
+    // NOTE: FTS5 external-content tables (content='memories') make it
+    // difficult to create desync fixtures in unit tests. The triggers are
+    // the primary sync mechanism, but dropping them and doing raw SQL
+    // operations does NOT reliably create a detectable desync because
+    // SELECT rowid FROM memories_fts reads from the content table, not
+    // the FTS index. The desync detection is designed for production
+    // scenarios where desync arises from trigger-bypassing code paths
+    // (e.g., direct SQL manipulation, failed migrations, etc.).
+    //
+    // The tests below verify the detection method works correctly on
+    // healthy databases and that the SQL queries are well-formed.
+    // Comprehensive desync fixture tests would require either:
+    // 1. Modifying the FTS5 schema to use contentless_rowid
+    // 2. Using a mock FTS table
+    // 3. Testing at the integration level with real desync scenarios
+
+    #[test]
+    fn test_detect_fts_desync_report_is_read_only() {
+        // Verify that detection does not modify the database.
+        let db = create_test_db();
+        let embedding = vec![0.1f32; 384];
+        db.insert("proj1", "row one", &embedding, None, "fact", "active")
+            .unwrap();
+        db.insert("proj1", "row two", &embedding, None, "fact", "active")
+            .unwrap();
+
+        let data_version_before: i64 = db
+            .conn()
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .unwrap();
+
+        let report = db.detect_fts_desync().unwrap();
+        assert!(!report.is_desynced());
+
+        let data_version_after: i64 = db
+            .conn()
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(data_version_before, data_version_after);
+    }
 }

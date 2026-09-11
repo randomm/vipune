@@ -4,6 +4,45 @@ use super::{Database, EMBEDDING_COLUMN, Error, Memory};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Result of the bidirectional rowid-join FTS desync detection.
+///
+/// Detection is a bidirectional rowid join, NOT a count comparison (a count-only
+/// check misses partial desync where counts are equal but rowid sets differ):
+///
+/// * `underpopulated_global` — number of `memories` rows whose `rowid` is missing
+///   from `memories_fts` (the index is under-populated). Global; no project scope.
+/// * `underpopulated_by_project` — the same rows attributed per `project_id` so the
+///   doctor can name the affected project. Summing this map equals
+///   `underpopulated_global`.
+/// * `orphans` — number of `memories_fts` rows whose `rowid` has no `memories` row
+///   (the index holds rows whose source memory is gone). Always a global count with
+///   no project attribution; orphan content in an external-content table is undefined,
+///   so orphan enumeration must never join on the content column.
+///
+/// A healthy database — including a brand-new one where both tables hold zero rows —
+/// reports `is_desynced() == false`. Zero is not a desync.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FtsDesyncReport {
+    /// Per-project count of `memories` rowids missing from `memories_fts`.
+    pub underpopulated_by_project: std::collections::HashMap<String, usize>,
+    /// Global count of `memories` rowids missing from `memories_fts`.
+    pub underpopulated_global: usize,
+    /// Global count of `memories_fts` rowids with no matching `memories` row.
+    pub orphans: usize,
+}
+
+impl FtsDesyncReport {
+    /// True when either direction of the join reports a mismatch.
+    pub fn is_desynced(&self) -> bool {
+        self.underpopulated_global > 0 || self.orphans > 0
+    }
+
+    /// Total number of actions a rebuild would take (rows to re-index + orphans to drop).
+    pub fn total_desynced(&self) -> usize {
+        self.underpopulated_global + self.orphans
+    }
+}
+
 impl Database {
     /// Initialize FTS5 table if needed and validate/migrate schema.
     ///
@@ -209,6 +248,86 @@ impl Database {
             .collect();
 
         Ok(memories?)
+    }
+
+    /// Detect FTS desync via a bidirectional rowid join.
+    ///
+    /// This is a READ-ONLY query: it only SELECTs rowids, never writes, and never
+    /// reads the (undefined) content of an orphan FTS row. It returns a
+    /// [`FtsDesyncReport`] with per-project under-population counts and a global
+    /// orphan count. A zero/zero database is healthy, not desynced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the FTS table does not exist or a query fails.
+    pub fn detect_fts_desync(&self) -> Result<FtsDesyncReport> {
+        let fts_exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memories_fts'",
+            [],
+            |row| row.get(0),
+        )?;
+        if fts_exists == 0 {
+            // No FTS table at all — nothing to desync against.
+            return Ok(FtsDesyncReport::default());
+        }
+
+        // Direction 1 (under-population): memories rowids missing from memories_fts,
+        // attributed per project. Uses `IS NOT` (not `NOT IN`) to be NULL-safe.
+        let mut by_project: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut underpopulated_global: usize = 0;
+        let mut stmt = self.conn.prepare(
+            "SELECT m.project_id, COUNT(*) AS c FROM memories m WHERE m.rowid IS NOT (SELECT fts.rowid FROM memories_fts fts WHERE fts.rowid = m.rowid) GROUP BY m.project_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row_res in rows {
+            let (pid, c) = row_res?;
+            let count = c as usize;
+            underpopulated_global += count;
+            *by_project.entry(pid).or_insert(0) += count;
+        }
+
+        // Direction 2 (orphans): memories_fts rowids with no memories row. Enumerated
+        // via rowid IS NOT (SELECT ...) — never a join that reads the content column,
+        // because content for an orphan row in an external-content table is undefined.
+        let orphan_rowids: Vec<i64> = {
+            let mut ostmt = self.conn.prepare(
+                "SELECT fts.rowid FROM memories_fts fts WHERE fts.rowid IS NOT (SELECT m.rowid FROM memories m WHERE m.rowid = fts.rowid)",
+            )?;
+            let orows = ostmt.query_map([], |row| row.get::<_, i64>(0))?;
+            let mut out = Vec::new();
+            for row_res in orows {
+                out.push(row_res?);
+            }
+            out
+        };
+        let orphans = orphan_rowids.len();
+
+        Ok(FtsDesyncReport {
+            underpopulated_by_project: by_project,
+            underpopulated_global,
+            orphans,
+        })
+    }
+
+    /// Rebuild the FTS index in place using the FTS5 `rebuild` special command.
+    ///
+    /// This is the only rebuild path the repo uses and it must be called on a
+    /// read-write connection (the caller is responsible for opening one and setting
+    /// a bounded busy timeout). It re-reads every `memories` row into `memories_fts`
+    /// and does not touch `memories` data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the FTS table does not exist or the rebuild statement fails.
+    pub fn rebuild_fts(&self) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO memories_fts(memories_fts) VALUES('rebuild')",
+            [],
+        )?;
+        Ok(())
     }
 
     /// Check if FTS5 is ready for hybrid search.

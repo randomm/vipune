@@ -1,12 +1,16 @@
 //! Command handlers for vipune CLI.
 
 mod doctor;
+mod doctor_fts;
 mod handlers;
 mod merge;
 mod reindex;
 
 #[cfg(test)]
 pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search};
+
+#[cfg(test)]
+mod doctor_fts_tests;
 
 #[cfg(test)]
 mod doctor_projects_tests;
@@ -140,7 +144,7 @@ pub enum Commands {
         status: Option<String>,
     },
     /// Diagnose database health.
-    #[command(group = clap::ArgGroup::new("doctor-mode").args(["embeddings", "projects"]).required(true).multiple(false))]
+    #[command(group = clap::ArgGroup::new("doctor-mode").args(["embeddings", "projects", "fts"]).required(true).multiple(false))]
     Doctor {
         /// Check embedding quality (classifies real/mock/unknown)
         #[arg(long)]
@@ -150,9 +154,17 @@ pub enum Commands {
         #[arg(long)]
         projects: bool,
 
+        /// Check FTS index for desync against the memories table (bidirectional rowid join)
+        #[arg(long)]
+        fts: bool,
+
         /// Project identifier (only relevant for --embeddings; ignored for --projects with a warning)
         #[arg(long, short = 'p')]
         project: Option<String>,
+
+        /// Rebuild the FTS index when desync is detected (only for --fts; global, ignores -p)
+        #[arg(long)]
+        repair: bool,
     },
 
     /// Re-embed rows with mock embeddings using the real model.
@@ -295,12 +307,20 @@ pub fn execute(
         Commands::Doctor {
             embeddings: _,
             projects,
+            fts,
             project: doctor_project,
+            repair,
         } => {
             if *projects {
                 // doctor --projects always scans all projects; -p is ignored (with warning).
                 let project_filter = doctor_project.as_deref();
                 doctor::handle_doctor_projects(&config.database_path, project_filter, json)
+            } else if *fts {
+                // doctor --fts: joins the rowid join over ALL projects (no detected-project
+                // fallback, unlike --embeddings). -p scopes the under-population count but
+                // is ignored for orphan rows and --repair (always global).
+                let project_filter = doctor_project.as_deref();
+                doctor_fts::handle_doctor_fts(&config.database_path, project_filter, *repair, json)
             } else {
                 // doctor --embeddings: use explicit -p or fall back to the detected project_id.
                 let project_filter = doctor_project.as_deref().or(Some(project_id.as_str()));

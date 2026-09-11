@@ -680,7 +680,9 @@ mod tests {
         if let Commands::Doctor {
             embeddings: false,
             projects: true,
+            fts: false,
             project: None,
+            repair: false,
         } = cli.command
         {
         } else {
@@ -694,11 +696,92 @@ mod tests {
         if let Commands::Doctor {
             embeddings: true,
             projects: false,
+            fts: false,
             project: None,
+            repair: false,
         } = cli.command
         {
         } else {
             panic!("Expected Doctor with --embeddings flag");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_fts() {
+        let cli = Cli::parse_from(["vipune", "doctor", "--fts"]);
+        if let Commands::Doctor {
+            embeddings: false,
+            projects: false,
+            fts: true,
+            project: None,
+            repair: false,
+        } = cli.command
+        {
+        } else {
+            panic!("Expected Doctor with --fts flag");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_fts_with_p() {
+        let cli = Cli::parse_from(["vipune", "doctor", "--fts", "-p", "my-proj"]);
+        if let Commands::Doctor {
+            embeddings: _,
+            projects: _,
+            fts: true,
+            project: Some(ref p),
+            repair: false,
+        } = cli.command
+        {
+            assert_eq!(p, "my-proj");
+        } else {
+            panic!("Expected Doctor with --fts and -p flags");
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_fts_and_embeddings_errors() {
+        // Two doctor-mode flags → parse error via the ArgGroup (multiple=false).
+        let result = Cli::try_parse_from(["vipune", "doctor", "--fts", "--embeddings"]);
+        assert!(
+            result.is_err(),
+            "doctor --fts --embeddings should fail at parse time"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_fts_and_projects_errors() {
+        let result = Cli::try_parse_from(["vipune", "doctor", "--fts", "--projects"]);
+        assert!(
+            result.is_err(),
+            "doctor --fts --projects should fail at parse time"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_repair_alone_errors() {
+        // --repair is a plain bool modifier OUTSIDE the ArgGroup; it cannot satisfy
+        // the required group, so `doctor --repair` alone is a parse error.
+        let result = Cli::try_parse_from(["vipune", "doctor", "--repair"]);
+        assert!(
+            result.is_err(),
+            "doctor --repair alone should fail at parse time (no doctor-mode flag)"
+        )
+    }
+
+    #[test]
+    fn test_cli_parse_doctor_fts_with_repair_parses() {
+        let cli = Cli::parse_from(["vipune", "doctor", "--fts", "--repair"]);
+        if let Commands::Doctor {
+            embeddings: false,
+            projects: false,
+            fts: true,
+            project: None,
+            repair: true,
+        } = cli.command
+        {
+        } else {
+            panic!("Expected Doctor with --fts --repair");
         }
     }
 
@@ -708,7 +791,9 @@ mod tests {
         if let Commands::Doctor {
             embeddings: _,
             projects: true,
+            fts: _,
             project: Some(ref p),
+            repair: _,
         } = cli.command
         {
             assert_eq!(p, "my-proj");
@@ -729,10 +814,10 @@ mod tests {
     #[test]
     fn test_cli_parse_doctor_neither_flag_errors() {
         let result = Cli::try_parse_from(["vipune", "doctor"]);
-        // With clap ArgGroup (required, multiple=false), parse fails when neither flag is given.
+        // With clap ArgGroup (required, multiple=false), parse fails when no doctor-mode flag is given.
         assert!(
             result.is_err(),
-            "doctor without --embeddings or --projects should fail at parse time"
+            "doctor without a doctor-mode flag should fail at parse time"
         );
     }
 
