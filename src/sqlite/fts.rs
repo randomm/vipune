@@ -1,8 +1,54 @@
 //! FTS5 full-text search and BM25 ranking (Issue #40).
 
 use super::{Database, EMBEDDING_COLUMN, Error, Memory};
-
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Per-project under-population result from an FTS5 desync scan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // lib target compiles src/sqlite/ but not src/commands/; only caller is in binary target
+pub struct ProjectFtsCounts {
+    /// Project identifier the counts belong to.
+    pub project_id: String,
+    /// Number of `memories` rows for this project.
+    pub memory_count: i64,
+    /// Number of `memories_fts` rows for this project.
+    pub fts_count: i64,
+    /// Rowids present in `memories` but missing from `memories_fts`
+    /// (the FTS index is under-populated for this project).
+    pub missing_from_fts: i64,
+}
+
+/// Read-only report of FTS5 desync, produced by a bidirectional rowid join
+/// (issue #193). Never reads the content column of `memories_fts`: for an
+/// orphan FTS rowid the external-content backing row does not exist, so
+/// `content` is undefined and only `rowid` may be selected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // lib target compiles src/sqlite/ but not src/commands/; only caller is in binary target
+pub struct FtsDesyncReport {
+    /// Under-population counts, one entry per project found in `memories`.
+    /// The global orphan count is intentionally NOT attributed to a project.
+    pub projects: Vec<ProjectFtsCounts>,
+    /// Total number of `memories` rows across all projects.
+    pub total_memories: i64,
+    /// Total number of `memories_fts` rows across all projects.
+    pub total_fts: i64,
+    /// Rowids present in `memories_fts` but with no `memories` row. Always
+    /// a global count — orphan content is undefined so no project attribution
+    /// is possible.
+    pub orphan_fts_rows: i64,
+}
+
+impl FtsDesyncReport {
+    /// True when either direction of the rowid join disagrees: some project
+    /// has `memories` rowids missing from `memories_fts`, or `memories_fts`
+    /// holds rowids with no backing `memories` row.
+    ///
+    /// A 0/0 database (brand-new or fully empty) is NOT a desync.
+    #[allow(dead_code)] // lib target compiles src/sqlite/ but not src/commands/; only caller is in binary target
+    pub fn is_desynced(&self) -> bool {
+        self.projects.iter().any(|p| p.missing_from_fts > 0) || self.orphan_fts_rows > 0
+    }
+}
 
 impl Database {
     /// Initialize FTS5 table if needed and validate/migrate schema.
@@ -229,6 +275,95 @@ impl Database {
                 .query_row("SELECT COUNT(*) FROM memories_fts", [], |row| row.get(0))?;
 
         Ok(fts_count > 0)
+    }
+
+    /// Detect FTS5 desync with a bidirectional rowid join (issue #193).
+    ///
+    /// Reports BOTH directions of the rowid mismatch, not a count comparison
+    /// (equal-but-different rowid sets would defeat a count check):
+    /// - per project: `memories` rowids missing from `memories_fts`
+    ///   (under-population), scoped to `project_id` when given, all projects
+    ///   otherwise;
+    /// - globally: `memories_fts` rowids with no `memories` row (orphans),
+    ///   enumerated via `SELECT rowid ... NOT IN (SELECT rowid FROM memories)`
+    ///   — never a join pulling the content column, which is undefined for an
+    ///   orphan row in an external-content table.
+    ///
+    /// Read-only: performs no writes, so the result is the same whether the
+    /// connection is read-only or read-write. The caller (the `doctor --fts`
+    /// handler) is responsible for opening with `SQLITE_OPEN_READ_ONLY`.
+    ///
+    /// # Arguments
+    ///
+    /// * `project_id` - Optional project scope for the under-population side.
+    ///   `None` scans every project present in `memories`.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if any of the detection queries fails.
+    #[allow(dead_code)] // lib target compiles src/sqlite/ but not src/commands/; only caller is in binary target
+    pub fn detect_fts_desync(&self, project_id: Option<&str>) -> Result<FtsDesyncReport> {
+        // Per-project under-population: memories rowids NOT IN memories_fts,
+        // plus both row counts, joined in one pass over memories so the
+        // per-project counts and the missing count cannot diverge.
+        const UNDERPOP_SQL: &str = concat!(
+            "SELECT m.project_id, m.missing, m.cnt, COALESCE(f.cnt, 0) AS fcnt FROM\n",
+            "(SELECT project_id,\n",
+            "        COUNT(*) AS cnt,\n",
+            "        SUM(rowid NOT IN (SELECT rowid FROM memories_fts)) AS missing\n",
+            " FROM memories GROUP BY project_id) m\n",
+            "LEFT JOIN (SELECT project_id, COUNT(*) AS cnt FROM memories_fts GROUP BY project_id) f\n",
+            " ON m.project_id = f.project_id"
+        );
+
+        let mut stmt = self.conn.prepare(UNDERPOP_SQL)?;
+
+        let rows: Vec<(String, i64, i64, i64)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut projects: Vec<ProjectFtsCounts> = rows
+            .into_iter()
+            .map(
+                |(project_id, missing, memory_count, fts_count)| ProjectFtsCounts {
+                    project_id,
+                    memory_count,
+                    fts_count,
+                    missing_from_fts: missing,
+                },
+            )
+            .collect();
+
+        let total_memories: i64 = projects.iter().map(|p| p.memory_count).sum();
+        let total_fts: i64 = projects.iter().map(|p| p.fts_count).sum();
+
+        if let Some(scope) = project_id {
+            projects.retain(|p| p.project_id == scope);
+        } else {
+            projects.sort_by(|a, b| a.project_id.cmp(&b.project_id));
+        }
+
+        // Global orphan count: memories_fts rowids with no memories row.
+        // SELECT rowid only — content for an orphan row is undefined.
+        let orphan_fts_rows: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM (SELECT rowid FROM memories_fts WHERE rowid NOT IN (SELECT rowid FROM memories))",
+            [],
+            |row| row.get(0),
+        )?;
+
+        Ok(FtsDesyncReport {
+            projects,
+            total_memories,
+            total_fts,
+            orphan_fts_rows,
+        })
     }
 
     /// Escape and normalize FTS5 query string.
