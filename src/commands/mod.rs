@@ -16,9 +16,6 @@ mod doctor_fts_tests;
 mod doctor_projects_tests;
 
 #[cfg(test)]
-mod doctor_fts_tests;
-
-#[cfg(test)]
 mod merge_tests;
 
 #[cfg(test)]

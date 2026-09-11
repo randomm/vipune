@@ -413,11 +413,10 @@ mod tests {
     #[test]
     fn test_detect_fts_desync_fresh_zero_row_db_is_healthy() {
         let db = create_test_db();
-        let report = db.detect_fts_desync(None).unwrap();
-        assert!(report.projects.is_empty());
-        assert_eq!(report.total_memories, 0);
-        assert_eq!(report.total_fts, 0);
-        assert_eq!(report.orphan_fts_rows, 0);
+        let report = db.detect_fts_desync().unwrap();
+        assert!(report.underpopulated_by_project.is_empty());
+        assert_eq!(report.underpopulated_global, 0);
+        assert_eq!(report.orphans, 0);
         assert!(!report.is_desynced());
     }
 
@@ -430,17 +429,11 @@ mod tests {
                 .unwrap();
         }
 
-        let report = db.detect_fts_desync(None).unwrap();
+        let report = db.detect_fts_desync().unwrap();
         assert!(!report.is_desynced());
-        assert_eq!(report.total_memories, 3);
-        assert_eq!(report.total_fts, 3);
-        assert_eq!(report.orphan_fts_rows, 0);
-        assert_eq!(report.projects.len(), 1);
-        let p = &report.projects[0];
-        assert_eq!(p.project_id, "proj1");
-        assert_eq!(p.memory_count, 3);
-        assert_eq!(p.fts_count, 3);
-        assert_eq!(p.missing_from_fts, 0);
+        assert_eq!(report.underpopulated_global, 0);
+        assert_eq!(report.orphans, 0);
+        assert_eq!(report.underpopulated_by_project.len(), 0);
     }
 
     // NOTE: FTS5 external-content tables (content='memories') make it
@@ -460,41 +453,6 @@ mod tests {
     // 3. Testing at the integration level with real desync scenarios
 
     #[test]
-    fn test_detect_fts_desync_project_scoping_healthy() {
-        // Verify project scoping works correctly on a healthy DB.
-        let db = create_test_db();
-        let embedding = vec![0.1f32; 384];
-        db.insert("projA", "alpha memory", &embedding, None, "fact", "active")
-            .unwrap();
-        db.insert("projB", "beta memory", &embedding, None, "fact", "active")
-            .unwrap();
-
-        // Scoped to projA: healthy, in-sync.
-        let report = db.detect_fts_desync(Some("projA")).unwrap();
-        assert!(!report.is_desynced());
-        assert_eq!(report.projects.len(), 1);
-        assert_eq!(report.projects[0].project_id, "projA");
-        assert_eq!(report.projects[0].memory_count, 1);
-        assert_eq!(report.projects[0].fts_count, 1);
-        assert_eq!(report.projects[0].missing_from_fts, 0);
-
-        // Scoped to projB: healthy, in-sync.
-        let report = db.detect_fts_desync(Some("projB")).unwrap();
-        assert!(!report.is_desynced());
-        assert_eq!(report.projects.len(), 1);
-        assert_eq!(report.projects[0].project_id, "projB");
-        assert_eq!(report.projects[0].memory_count, 1);
-        assert_eq!(report.projects[0].fts_count, 1);
-        assert_eq!(report.projects[0].missing_from_fts, 0);
-
-        // Unknown project: zero memories rows reports in-sync, no error.
-        let report = db.detect_fts_desync(Some("no-such-project")).unwrap();
-        assert!(!report.is_desynced());
-        assert!(report.projects.is_empty());
-        assert_eq!(report.orphan_fts_rows, 0);
-    }
-
-    #[test]
     fn test_detect_fts_desync_report_is_read_only() {
         // Verify that detection does not modify the database.
         let db = create_test_db();
@@ -509,7 +467,7 @@ mod tests {
             .query_row("PRAGMA data_version", [], |row| row.get(0))
             .unwrap();
 
-        let report = db.detect_fts_desync(None).unwrap();
+        let report = db.detect_fts_desync().unwrap();
         assert!(!report.is_desynced());
 
         let data_version_after: i64 = db
