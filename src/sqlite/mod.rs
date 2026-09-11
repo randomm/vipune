@@ -8,6 +8,7 @@
 //! - `fts`: FTS5 full-text search (Issue #40)
 
 pub mod embedding;
+pub mod export_scan;
 pub mod fts;
 pub mod list;
 pub mod migrations;

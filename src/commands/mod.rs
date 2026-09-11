@@ -2,6 +2,7 @@
 
 mod doctor;
 mod doctor_fts;
+mod export;
 mod handlers;
 mod merge;
 mod reindex;
@@ -16,6 +17,9 @@ mod doctor_fts_tests;
 mod doctor_projects_tests;
 
 #[cfg(test)]
+mod export_tests;
+
+#[cfg(test)]
 mod merge_tests;
 
 #[cfg(test)]
@@ -25,6 +29,7 @@ use crate::config;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
+use std::path::Path;
 use std::process::ExitCode;
 
 /// Commands supported by vipune CLI.
@@ -172,6 +177,12 @@ pub enum Commands {
         /// Reindex all projects in the database instead of only the current one
         #[arg(long)]
         all_projects: bool,
+    },
+
+    /// Export all rows (all projects, uncapped) to a JSONL file.
+    Export {
+        /// Destination JSONL file (use "> out.jsonl" via shell if omitting)
+        output_path: String,
     },
 
     /// Project management operations.
@@ -339,6 +350,9 @@ pub fn execute(
                 project_filter,
                 json,
             )
+        }
+        Commands::Export { output_path } => {
+            export::handle_export(&config.database_path, Path::new(output_path), None, json)
         }
         Commands::Project { command } => match command {
             ProjectCommands::Merge { from, to } => {

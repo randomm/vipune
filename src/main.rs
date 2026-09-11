@@ -827,4 +827,52 @@ mod tests {
         assert!(cli.json);
         matches!(cli.command, Commands::Doctor { .. });
     }
+
+    // ── export CLI parse tests ──
+
+    #[test]
+    fn test_cli_parse_export() {
+        let cli = Cli::parse_from(["vipune", "export", "/tmp/out.jsonl"]);
+        matches!(
+            cli.command,
+            Commands::Export {
+                ref output_path
+            } if output_path == "/tmp/out.jsonl"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_export_with_json() {
+        let cli = Cli::parse_from(["vipune", "--json", "export", "out.jsonl"]);
+        assert!(cli.json);
+        matches!(cli.command, Commands::Export { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_export_with_db_path() {
+        let cli = Cli::parse_from([
+            "vipune",
+            "--db-path",
+            "/tmp/seeded.db",
+            "export",
+            "out.jsonl",
+        ]);
+        assert_eq!(cli.db_path, Some("/tmp/seeded.db".to_string()));
+        matches!(cli.command, Commands::Export { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_export_with_stray_project_parses_but_is_ignored() {
+        // The global --project flag parses; the handler ignores it (with a
+        // stderr warning) because export is cross-project by contract.
+        let cli = Cli::parse_from(["vipune", "-p", "my-proj", "export", "out.jsonl"]);
+        assert_eq!(cli.project, Some("my-proj".to_string()));
+        matches!(cli.command, Commands::Export { .. });
+    }
+
+    #[test]
+    fn test_cli_parse_export_missing_output_path_fails() {
+        let result = Cli::try_parse_from(["vipune", "export"]);
+        assert!(result.is_err());
+    }
 }
