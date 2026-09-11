@@ -7,6 +7,9 @@ mod export;
 mod handlers;
 pub mod hook_install;
 pub mod hook_run;
+
+#[cfg(test)]
+mod hook_install_tests;
 mod import;
 mod merge;
 mod promote;
