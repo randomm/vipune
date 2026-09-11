@@ -142,6 +142,9 @@ impl Database {
                 superseded_by,
                 retrieval_count,
                 last_retrieved_at,
+                // Placeholder until task-a's 13-col read fan-in (issue #194 sub-issue 2 migration
+                // adds the importance column); the search SELECT must then include it.
+                importance: "medium".to_string(),
             });
         }
 

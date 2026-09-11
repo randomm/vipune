@@ -195,6 +195,7 @@ mod issue_178_tests {
             last_retrieved_at: memory.last_retrieved_at,
             memory_type: memory.memory_type.clone(),
             status: memory.status.clone(),
+            importance: memory.importance.clone(),
         };
         // `handle_get` returned SUCCESS for this row and `store.get` reads back
         // the exact type/status the row was written with; the handler's mapping
@@ -280,6 +281,7 @@ mod issue_178_tests {
                 last_retrieved_at: m.last_retrieved_at,
                 memory_type: m.memory_type,
                 status: m.status,
+                importance: m.importance,
             })
             .collect::<Vec<_>>();
         let list_json =
@@ -315,6 +317,7 @@ mod issue_178_tests {
                 last_retrieved_at: m.last_retrieved_at,
                 memory_type: m.memory_type,
                 status: m.status,
+                importance: m.importance,
             })
             .collect::<Vec<_>>();
         let search_json =

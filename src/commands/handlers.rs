@@ -222,6 +222,7 @@ pub(crate) fn handle_search(
                 last_retrieved_at: m.last_retrieved_at,
                 memory_type: m.memory_type,
                 status: m.status,
+                importance: m.importance,
             })
             .collect();
         print_json(&SearchResponse { results });
@@ -266,6 +267,7 @@ pub(crate) fn handle_get(
             last_retrieved_at: memory.last_retrieved_at.clone(),
             memory_type: memory.memory_type,
             status: memory.status,
+            importance: memory.importance,
         });
     } else {
         println!("ID: {}", memory.id);
@@ -318,6 +320,7 @@ pub(crate) fn handle_list(
                 last_retrieved_at: m.last_retrieved_at,
                 memory_type: m.memory_type,
                 status: m.status,
+                importance: m.importance,
             })
             .collect();
         print_json(&ListResponse { memories: items });
@@ -401,10 +404,12 @@ mod tests {
             last_retrieved_at: Some("2024-01-15T10:30:00Z".to_string()),
             memory_type: "fact".to_string(),
             status: "active".to_string(),
+            importance: "medium".to_string(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"retrieval_count\":5"));
         assert!(json.contains("\"last_retrieved_at\":\"2024-01-15T10:30:00Z\""));
+        assert!(json.contains("\"importance\":\"medium\""));
 
         // Null case: never-retrieved memory.
         let response = GetResponse {
@@ -445,6 +450,7 @@ mod tests {
             last_retrieved_at: memory.last_retrieved_at,
             memory_type: memory.memory_type,
             status: memory.status,
+            importance: memory.importance,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"retrieval_count\":1"));

@@ -63,6 +63,11 @@ pub struct Memory {
     pub retrieval_count: i64,
     /// RFC3339 timestamp of last retrieval (None if never retrieved).
     pub last_retrieved_at: Option<String>,
+    /// Operator-assigned importance (low, medium, high, critical; default medium).
+    /// Populated by task-a's read fan-in once the importance column lands (issue #194 sub-issue 1
+    /// depends on sub-issue 2); surfaced by the CLI JSON structs in src/output.rs.
+    #[allow(dead_code)]
+    pub importance: String,
 }
 
 /// Error types for SQLite operations.

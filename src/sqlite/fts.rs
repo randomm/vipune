@@ -242,6 +242,9 @@ impl Database {
                     superseded_by: row.get(9)?,
                     retrieval_count: row.get(10)?,
                     last_retrieved_at: row.get(11)?,
+                    // Placeholder until task-a's 13-col read fan-in (issue #194 sub-issue 2 migration
+                    // adds the importance column); the FTS SELECT must then include it.
+                    importance: "medium".to_string(),
                     similarity: Some(row.get::<_, f64>(12)?),
                 })
             })?

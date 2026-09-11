@@ -67,6 +67,9 @@ pub fn map_row_to_memory(row: &Row) -> SqliteResult<Memory> {
         superseded_by: row.get(9)?,
         retrieval_count: row.get(10)?,
         last_retrieved_at: row.get(11)?,
+        // Placeholder until task-a's 13-col read fan-in (issue #194 sub-issue 2 migration
+        // adds the importance column); map_row_to_memory must then read the new column.
+        importance: "medium".to_string(),
     })
 }
 

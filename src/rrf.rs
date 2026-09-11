@@ -133,6 +133,7 @@ mod tests {
             superseded_by: None,
             retrieval_count: 0,
             last_retrieved_at: None,
+            importance: "medium".to_string(),
         }
     }
 
@@ -266,6 +267,7 @@ mod tests {
             superseded_by: None,
             retrieval_count: 0,
             last_retrieved_at: None,
+            importance: "medium".to_string(),
         };
 
         let fused = rrf_fusion(vec![vec![memory]], None).unwrap();

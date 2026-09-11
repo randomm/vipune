@@ -37,6 +37,8 @@ pub struct SearchResultItem {
     pub memory_type: String,
     /// Lifecycle status (active, candidate, superseded, deprecated).
     pub status: String,
+    /// Operator-assigned importance (low, medium, high, critical; default medium).
+    pub importance: String,
 }
 
 /// Response for retrieving a specific memory.
@@ -62,6 +64,8 @@ pub struct GetResponse {
     pub memory_type: String,
     /// Lifecycle status (active, candidate, superseded, deprecated).
     pub status: String,
+    /// Operator-assigned importance (low, medium, high, critical; default medium).
+    pub importance: String,
 }
 
 /// Response for listing memories.
@@ -88,6 +92,8 @@ pub struct ListItem {
     pub memory_type: String,
     /// Lifecycle status (active, candidate, superseded, deprecated).
     pub status: String,
+    /// Operator-assigned importance (low, medium, high, critical; default medium).
+    pub importance: String,
 }
 
 /// Response for successful memory deletion.
@@ -363,6 +369,7 @@ mod tests {
                 last_retrieved_at: Some("2024-01-02T00:00:00Z".to_string()),
                 memory_type: "guard".to_string(),
                 status: "active".to_string(),
+                importance: "high".to_string(),
             }],
         };
         let json = serde_json::to_string(&response).unwrap();
@@ -373,6 +380,7 @@ mod tests {
         // #178: type/status must be observable in JSON, not just filterable.
         assert!(json.contains("\"memory_type\":\"guard\""));
         assert!(json.contains("\"status\":\"active\""));
+        assert!(json.contains("\"importance\":\"high\""));
     }
 
     #[test]
@@ -387,6 +395,7 @@ mod tests {
                 last_retrieved_at: None,
                 memory_type: "fact".to_string(),
                 status: "active".to_string(),
+                importance: "medium".to_string(),
             }],
         };
         let json = serde_json::to_string(&response).unwrap();
@@ -404,10 +413,12 @@ mod tests {
             last_retrieved_at: Some("2024-01-02T12:00:00Z".to_string()),
             memory_type: "fact".to_string(),
             status: "active".to_string(),
+            importance: "medium".to_string(),
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("\"retrieval_count\":5"));
         assert!(json.contains("\"last_retrieved_at\":\"2024-01-02T12:00:00Z\""));
+        assert!(json.contains("\"importance\":\"medium\""));
 
         let item_none = ListItem {
             id: "test-id".to_string(),
@@ -417,6 +428,7 @@ mod tests {
             last_retrieved_at: None,
             memory_type: "fact".to_string(),
             status: "active".to_string(),
+            importance: "low".to_string(),
         };
         let json_none = serde_json::to_string(&item_none).unwrap();
         assert!(json_none.contains("\"retrieval_count\":0"));
@@ -522,11 +534,13 @@ mod tests {
             last_retrieved_at: Some("2024-01-02T00:00:00Z".to_string()),
             memory_type: "procedure".to_string(),
             status: "candidate".to_string(),
+            importance: "critical".to_string(),
         };
         let get_json = serde_json::to_string(&get).unwrap();
         assert!(get_json.contains("\"retrieval_count\":2"));
         assert!(get_json.contains("\"memory_type\":\"procedure\""));
         assert!(get_json.contains("\"status\":\"candidate\""));
+        assert!(get_json.contains("\"importance\":\"critical\""));
 
         let list = ListResponse {
             memories: vec![ListItem {
@@ -537,10 +551,12 @@ mod tests {
                 last_retrieved_at: None,
                 memory_type: "observation".to_string(),
                 status: "deprecated".to_string(),
+                importance: "medium".to_string(),
             }],
         };
         let list_json = serde_json::to_string(&list).unwrap();
         assert!(list_json.contains("\"memory_type\":\"observation\""));
         assert!(list_json.contains("\"status\":\"deprecated\""));
+        assert!(list_json.contains("\"importance\":\"medium\""));
     }
 }
