@@ -50,7 +50,10 @@ fn make_row_json(
     // string rather than inlining the raw JSON.
     match metadata {
         Some(m) => {
-            s.push_str(&format!("\"metadata\":{},", serde_json::to_string(m).unwrap()));
+            s.push_str(&format!(
+                "\"metadata\":{},",
+                serde_json::to_string(m).unwrap()
+            ));
         }
         None => s.push_str("\"metadata\":null,"),
     }
