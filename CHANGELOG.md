@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-11
+
+### Bug Fixes
+
+- Handle duplicate content rows gracefully in v4 migration instead of aborting ([#216](https://github.com/randomm/vipune/pull/216))
+
+### Features
+
+- Complete agent lifecycle hooks with run handler, credential blocking, and installer ([#214](https://github.com/randomm/vipune/pull/214))
+
+
 ## [0.11.0] - 2026-09-11
 
 ### Features
