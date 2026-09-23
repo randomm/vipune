@@ -10,7 +10,13 @@
 //! # JSONL schema
 //!
 //! Header line (not counted as a data row):
-//! `{"type":"export","format_version":1,"embedding_dims":384,"exported_at":<RFC3339>,"rows":<N>}`
+//! `{"type":"export","format_version":1,"embedding_dims":384,"model_id":...,
+//! "model_revision":...,"exported_at":<RFC3339>,"rows":<N>}`
+//!
+//! The model id + revision record the identity the store's embeddings were
+//! produced with (the recorded identity, or the default bge identity when no
+//! row exists — see `crate::sqlite::model_identity`). Importers compare these
+//! against the destination database's identity and refuse on mismatch.
 //!
 //! Row line (12 fields; the DB column `type` is renamed `memory_type` so the
 //! JSON key never collides with the header's `type` discriminator):
@@ -24,6 +30,7 @@
 use crate::errors::Error;
 use crate::sqlite::Database;
 use crate::sqlite::export_scan::ExportRow;
+use crate::sqlite::model_identity;
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
@@ -31,8 +38,7 @@ use std::process::ExitCode;
 /// Format version of the JSONL export, written in the header line.
 pub const EXPORT_FORMAT_VERSION: u32 = 1;
 
-/// Dimensions of the vipune embedding model, written in the header line.
-const EMBEDDING_DIMS: u32 = 384;
+use crate::embedding::EMBEDDING_DIMS;
 
 /// Base64 standard-alphabet encoder — vendored so the export does not need a
 /// new crate dependency. 1536-byte blobs encode to a 2048-char string, so the
@@ -66,9 +72,11 @@ pub(crate) fn base64_encode(input: &[u8]) -> String {
 /// Inverse of [`base64_encode`] (used by the round-trip tests). Rejects
 /// padding in the wrong position and any character outside the alphabet.
 ///
-/// Used by the round-trip tests; the production consumer (the import handler,
-/// task-b of issue #195) lands in a sibling workstream, hence the allow.
-#[allow(dead_code)] // production caller (import) lands in task-b
+/// `#[allow(dead_code)]`: in the library target the only consumer is the
+/// `#[cfg(test)]` round-trip tests in `export_tests.rs` (the import command
+/// uses the `base64` crate), so the binary-only visibility leaves the lib
+/// build with no production caller.
+#[allow(dead_code)] // production caller (import) uses the `base64` crate; lib target sees only tests
 pub(crate) fn base64_decode(input: &str) -> Result<Vec<u8>, Error> {
     fn value(c: u8) -> Option<u32> {
         match c {
@@ -220,11 +228,15 @@ pub fn write_jsonl<W: Write>(
     out: &mut W,
     rows: &[ExportRow],
     exported_at: &str,
+    model_id: &str,
+    model_revision: &str,
 ) -> std::result::Result<usize, Error> {
     let header = serde_json::json!({
         "type": "export",
         "format_version": EXPORT_FORMAT_VERSION,
         "embedding_dims": EMBEDDING_DIMS,
+        "model_id": model_id,
+        "model_revision": model_revision,
         "exported_at": exported_at,
         "rows": rows.len(),
     });
@@ -281,6 +293,13 @@ pub fn handle_export(
         Error::Config(msg)
     })?;
 
+    // The header records the identity the store's embeddings were produced
+    // with (the recorded identity, or the default bge identity when no row
+    // exists — the zero-change contract for pre-v6 stores).
+    let (recorded, _) = model_identity::read_identity(db.conn())
+        .map_err(|e| Error::Config(format!("identity read failed: {e}")))?;
+    let identity = recorded.unwrap_or_else(model_identity::default_identity);
+
     let rows = db
         .scan_all_rows()
         .map_err(|e| Error::InvalidInput(format!("export scan failed: {e}")))?;
@@ -288,7 +307,13 @@ pub fn handle_export(
     let exported_at = chrono::Utc::now().to_rfc3339();
     let mut file = std::fs::File::create(output_path)
         .map_err(|e| Error::Config(format!("cannot create {}: {e}", output_path.display())))?;
-    let count = write_jsonl(&mut file, &rows, &exported_at)?;
+    let count = write_jsonl(
+        &mut file,
+        &rows,
+        &exported_at,
+        &identity.model_id,
+        &identity.revision,
+    )?;
 
     let response = ExportResponse {
         rows: count,

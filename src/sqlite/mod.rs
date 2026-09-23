@@ -10,6 +10,7 @@ pub mod identity;
 pub mod import;
 pub mod list;
 pub mod migrations;
+pub mod model_identity;
 pub mod query_mod;
 pub mod search;
 pub mod supersede;

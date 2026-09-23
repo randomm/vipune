@@ -165,8 +165,9 @@ fn migrate_v5(conn: &Connection) -> SqliteResult<()> {
 /// Single-row table holding the embedding model identity (id + revision) and
 /// an optional migration marker. The migration inserts NO rows: a database
 /// with no identity row is treated as the built-in default (bge at its pinned
-/// revision). Row writes are owned by the `reindex --force` migration path,
-/// not the migration itself.
+/// revision), so existing stores are unaffected (zero-change contract).
+/// Row writes are owned by the `reindex --force` migration path, not the
+/// migration itself.
 fn migrate_v6(conn: &Connection) -> SqliteResult<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS model_identity (
@@ -368,6 +369,16 @@ mod tests {
         assert_eq!(
             count, 0,
             "migration v6 must create the table without inserting any row"
+        );
+        // A no-identity-row database is treated as bge at its pinned revision:
+        // the default must match the configured default with zero changes.
+        assert!(
+            crate::sqlite::model_identity::identity_matches_configured(
+                &conn,
+                crate::embedding::EMBED_MODEL_ID
+            )
+            .unwrap(),
+            "pre-v6 store must match the default bge model with zero changes"
         );
     }
 

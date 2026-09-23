@@ -49,6 +49,10 @@ mod rrf;
 pub mod sqlite;
 mod temporal;
 
+#[cfg(test)]
+#[path = "embedding_dim_audit_tests.rs"]
+mod embedding_dim_audit_tests;
+
 #[cfg(feature = "mcp")]
 pub mod mcp;
 

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use crate::config::Config;
 use crate::errors::Error;
-use crate::hook::embedding::placeholder_embedding;
+use crate::hook::embedding::{ensure_hook_identity_ok, placeholder_embedding};
 use crate::hook::extract::extract_candidate;
 use crate::hook::payload::{HookEvent, HookPayload, parse_hook_payload};
 use crate::project::detect_project_at;
@@ -68,7 +68,22 @@ pub fn run_hook_event(
         None => return Ok(ExitCode::SUCCESS),
     };
 
-    // 5. Insert with placeholder embedding. A UNIQUE constraint violation
+    // 5. Model-identity check (issue #217): the hook uses the same profile
+    //    source as the main CLI path. A store whose recorded identity (or
+    //    default) does not match the configured model — or one with an
+    //    interrupted `reindex --force` marker — is refused: placeholder rows
+    //    would accumulate that no plain `reindex` would ever backfill (real
+    //    vectors classify as Real, so only `reindex --force` re-embeds a
+    //    switched store). The hook stays silent: skip, exit 0.
+    if ensure_hook_identity_ok(&db, config).is_err() {
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // 6. Insert with placeholder embedding (its dimension tracks the shared
+    //    `EMBEDDING_DIMS` constant, so it stays valid under any 384-dim
+    //    profile — the profile source is the constant, and the placeholder
+    //    classifies as `Mock` so `reindex --force` re-embeds it with the
+    //    configured profile's passage prefix). A UNIQUE constraint violation
     //    (either from a pre-existing row or a concurrent hook event that
     //    raced past any pre-check) is treated as a silent skip — the row
     //    was already inserted by the other invocation, so the outcome is
