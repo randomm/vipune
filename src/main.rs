@@ -3,7 +3,9 @@
 mod commands;
 mod config;
 mod embedding;
+pub mod embedding_profiles; // Re-export for library consumers: built-in model profile table
 mod errors;
+
 mod hook;
 mod memory;
 pub mod memory_types; // Re-export for library consumers: IngestPolicy, BatchIngestItemResult, BatchIngestResult

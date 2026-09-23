@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 use crate::embedding::l2_normalize; // test-only; pure function, pragmatic coupling
+use crate::embedding_profiles::{EmbeddingRole, profile_for};
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, ConflictMemory, IngestPolicy};
@@ -106,7 +107,7 @@ impl MemoryStore {
     ) -> Result<AddResult, Error> {
         Self::validate_input_length(content)?;
 
-        let embedding = self.get_embedding(content)?;
+        let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
         let memory_type_str = memory_type.as_str();
         let status_str = status.as_str();
 
@@ -344,7 +345,7 @@ impl MemoryStore {
         // If content is provided, validate and generate new embedding
         let embedding = if let Some(text) = content {
             Self::validate_input_length(text)?;
-            Some(self.get_embedding(text)?)
+            Some(self.get_embedding(text, EmbeddingRole::Passage)?)
         } else {
             None
         };
@@ -458,18 +459,41 @@ impl MemoryStore {
         Ok(self.db.get_many(ids)?)
     }
 
-    /// Get the embedding for content.
+    /// Get the embedding for content, with an explicit role.
     ///
-    /// In test builds, uses the injected `test_embedder` if present.
-    /// Otherwise, delegates to the real embedding engine.
-    /// If the embedder is unavailable, returns `Error::EmbedderUnavailable`.
-    pub(crate) fn get_embedding(&mut self, content: &str) -> Result<Vec<f32>, Error> {
+    /// The role selects the model profile's prefix (see
+    /// [`crate::embedding_profiles::EmbeddingRole`]): stored content (add /
+    /// update / re-index) uses the passage prefix, search uses the query
+    /// prefix. The prefix is prepended *before* `EmbeddingEngine::embed` so
+    /// the 512-token `ContentTooLong` check sees the prefixed text; the
+    /// prefix never touches the stored content, FTS index, or output.
+    ///
+    /// In test builds, uses the injected `test_embedder` if present (the fake
+    /// embedder ignores the prefix and embeds the raw text). Otherwise
+    /// delegates to the real embedding engine.
+    pub(crate) fn get_embedding(
+        &mut self,
+        content: &str,
+        role: EmbeddingRole,
+    ) -> Result<Vec<f32>, Error> {
         #[cfg(test)]
         {
             if let Some(f) = &self.test_embedder {
                 return f(content);
             }
         }
-        self.embedder()?.embed(content)
+
+        // Resolve the profile for this store's configured model. Unknown ids
+        // are rejected here too — the chokepoint must never fall through to
+        // an unpinned download.
+        let profile = profile_for(&self.model_id)?;
+        let prefix = role.prefix(profile);
+        if prefix.is_empty() {
+            // No prefix (bge): byte-identical behaviour to the unprefixed path.
+            return self.embedder()?.embed(content);
+        }
+
+        let prefixed = format!("{prefix}{content}");
+        self.embedder()?.embed(&prefixed)
     }
 }

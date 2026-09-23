@@ -41,6 +41,7 @@
 
 pub mod config;
 pub mod embedding;
+pub mod embedding_profiles;
 pub mod errors;
 pub mod memory;
 pub mod memory_types; // Library-only: batch ingest API (not used in CLI)
@@ -59,6 +60,9 @@ pub mod mcp;
 // Re-export public API
 pub use config::Config;
 pub use embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine};
+pub use embedding_profiles::{
+    BUILTIN_PROFILES, EmbeddingRole, ModelProfile, default_profile, profile_for,
+};
 pub use errors::Error;
 pub use memory::lifecycle::{MemoryStatus, MemoryType};
 pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};

@@ -29,7 +29,8 @@ impl ConfigValidator {
     /// Checks that:
     /// - Similarity threshold is between 0.0 and 1.0
     /// - Recency weight is between 0.0 and 1.0
-    /// - Embedding model is not empty
+    /// - Embedding model is not empty and names a built-in profile
+    ///   (unknown ids are rejected listing the available built-in models)
     /// - Database path is not empty
     /// - No NaN or infinite values
     ///
@@ -87,6 +88,11 @@ impl ConfigValidator {
         if self.embedding_model.trim().is_empty() {
             return Err(Error::Config("Embedding model cannot be empty".to_string()));
         }
+
+        // The model id must name a built-in profile. Unknown ids are rejected
+        // here (at config-validation time, before any download is attempted)
+        // with an error listing every available built-in profile.
+        crate::embedding_profiles::profile_for(&self.embedding_model)?;
 
         Ok(())
     }
@@ -174,7 +180,7 @@ mod tests {
     ) -> ConfigValidator {
         ConfigValidator {
             database_path: PathBuf::from("/test"),
-            embedding_model: "test/model".to_string(),
+            embedding_model: "BAAI/bge-small-en-v1.5".to_string(),
             similarity_threshold,
             recency_weight,
             decay_refresh_days,
@@ -307,6 +313,32 @@ mod tests {
     fn test_valid_lifecycle_defaults() {
         let validator = build_validator(0.85, 0.3, LIFECYCLE_DEFAULTS);
 
+        assert!(validator.validate().is_ok());
+    }
+
+    #[test]
+    fn test_embedding_model_must_name_a_builtin_profile() {
+        let mut validator = build_validator(0.85, 0.3, LIFECYCLE_DEFAULTS);
+        validator.embedding_model = "unknown/unknown-model".to_string();
+
+        let result = validator.validate();
+        assert!(matches!(result, Err(Error::Config(_))));
+        let msg = match result {
+            Err(Error::Config(msg)) => msg,
+            other => panic!("expected Error::Config, got {other:?}"),
+        };
+        assert!(msg.contains("unknown/unknown-model"));
+        assert!(msg.contains("BAAI/bge-small-en-v1.5"));
+        assert!(msg.contains("intfloat/multilingual-e5-small"));
+    }
+
+    #[test]
+    fn test_embedding_model_builtin_id_accepted() {
+        let validator = build_validator(0.85, 0.3, LIFECYCLE_DEFAULTS);
+        assert!(validator.validate().is_ok());
+
+        let mut validator = build_validator(0.85, 0.3, LIFECYCLE_DEFAULTS);
+        validator.embedding_model = "intfloat/multilingual-e5-small".to_string();
         assert!(validator.validate().is_ok());
     }
 }

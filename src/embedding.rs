@@ -1,6 +1,11 @@
 //! Synchronous ONNX embedding engine for text-to-vector conversion.
 //!
-//! Uses bge-small-en-v1.5 model (384 dimensions) with mean pooling and L2 normalization.
+//! Loads one of the built-in model profiles from
+//! [`crate::embedding_profiles`] (each pinned to an exact revision) and
+//! produces 384-dimensional vectors with mean pooling and L2 normalization.
+//! Query/passage prefixes are applied by callers at the embedding chokepoint
+//! *before* calling [`EmbeddingEngine::embed`], so the 512-token check sees
+//! the prefixed text; the engine itself is prefix-unaware.
 
 use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
 use ort::inputs;
@@ -28,6 +33,10 @@ pub const EMBED_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 /// Pinned commit SHA for the bge-small-en-v1.5 ONNX model on HuggingFace.
 /// To update: verify new SHA resolves onnx/model.onnx (200 OK), update the
 /// HF_CACHE_KEY env var in .github/workflows/ci.yml, re-embed all stored memories.
+///
+/// The revision value itself is also declared in the profile table
+/// (`crate::embedding_profiles::BUILTIN_PROFILES`); this constant is kept as
+/// the stable public re-export the library API and drift tests reference.
 pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
 
 /// ONNX embedding engine for synchronous text-to-vector conversion.
@@ -49,50 +58,42 @@ pub struct EmbeddingEngine {
 }
 
 impl EmbeddingEngine {
-    /// Creates a new embedding engine with the specified model.
+    /// Creates a new embedding engine for the given built-in model id.
     ///
-    /// When `model_id` is the default model (`EMBED_MODEL_ID`), the pinned revision
-    /// `EMBED_MODEL_REVISION` is used to ensure reproducibility. Custom model IDs
-    /// fall back to the `main` branch.
+    /// The id must name a built-in profile (see
+    /// [`crate::embedding_profiles::BUILTIN_PROFILES`]); an unknown id is
+    /// rejected with an error listing the available profiles. No profile ever
+    /// loads a floating revision — each is pinned to an exact commit SHA.
     ///
     /// Files are cached locally in the HF Hub cache
     /// (`~/.cache/huggingface/hub/` by default, or `$HF_HOME/hub` when `HF_HOME`
     /// is set), only downloaded once.
     pub fn new(model_id: &str) -> Result<Self, Error> {
+        use crate::embedding_profiles::profile_for;
+
+        // Resolve through the profile table: unknown ids are rejected here, and
+        // every profile carries its exact pinned revision.
+        let profile = profile_for(model_id)?;
         let api = ApiBuilder::new().build()?;
 
-        // Use pinned revision for default model, "main" for custom models
-        let revision = if model_id == EMBED_MODEL_ID {
-            EMBED_MODEL_REVISION.to_string()
-        } else {
-            "main".to_string()
-        };
-
-        // Capture the actual model_id and revision for the error message
-        let err_model_id = model_id.to_string();
-        let err_revision = revision.clone();
-
         let repo = api.repo(Repo::with_revision(
-            model_id.to_string(),
+            profile.model_id.to_string(),
             RepoType::Model,
-            revision,
+            profile.revision.to_string(),
         ));
 
-        // Helper function for error messaging
+        // Helper function for error messaging (every profile is revision-pinned,
+        // so the hint always carries `--revision`)
         let wrap_download_err = move |e: hf_hub::api::sync::ApiError| {
-            let revision_hint = if err_model_id == EMBED_MODEL_ID {
-                format!(" --revision {}", err_revision)
-            } else {
-                String::new()
-            };
             Error::Config(format!(
-                "Failed to download embedding model '{}': {}.\n\nIf running in an air-gapped environment, pre-fetch the model before going offline:\n  huggingface-cli download {}{} --cache-dir ~/.cache/huggingface/hub",
-                err_model_id, e, err_model_id, revision_hint
+                "Failed to download embedding model '{}': {}.\n\nIf running in an air-gapped environment, pre-fetch the model before going offline:\n  huggingface-cli download {} --revision {} --cache-dir ~/.cache/huggingface/hub",
+                profile.model_id, e, profile.model_id, profile.revision
             ))
         };
 
         let model_path = repo
-            .get("onnx/model.onnx")
+            .get(profile.onnx_path)
+            .or_else(|_| repo.get("onnx/model.onnx"))
             .or_else(|_| repo.get("model.onnx"))
             .map_err(&wrap_download_err)?;
         let tokenizer_path = repo.get("tokenizer.json").map_err(&wrap_download_err)?;
@@ -279,6 +280,45 @@ mod tests {
     fn test_embed_model_constants() {
         assert_eq!(EMBED_MODEL_ID, "BAAI/bge-small-en-v1.5");
         assert!(!EMBED_MODEL_REVISION.is_empty());
+    }
+
+    /// The pinned-revision constant must agree with the profile table — the
+    /// table is the runtime source of truth (see
+    /// `crate::embedding_profiles::BUILTIN_PROFILES`), so a drift between the
+    /// two would break the README/CI drift test and the profile simultaneously.
+    #[test]
+    fn test_default_profile_matches_embed_constants() {
+        use crate::embedding_profiles::{default_profile, profile_for};
+        let p = profile_for(EMBED_MODEL_ID).expect("default profile lookup");
+        assert_eq!(p.revision, EMBED_MODEL_REVISION);
+        assert_eq!(default_profile().model_id, EMBED_MODEL_ID);
+    }
+
+    /// `EmbeddingEngine::new` must resolve every model id through the profile
+    /// table. An unknown id is rejected (listing the available profiles) and
+    /// an id naming a real HuggingFace repo that is NOT a built-in profile
+    /// must also be rejected — the floating-`main` download path is gone, so
+    /// no arbitrary repo can ever be loaded.
+    #[test]
+    fn test_engine_new_rejects_unknown_model_id() {
+        let result = EmbeddingEngine::new("openai/clip-vit-base-patch32");
+        let msg = match result {
+            Err(Error::Config(m)) => m,
+            other => panic!(
+                "expected Error::Config for unknown model id, got {:?}",
+                other.map(|_| "Ok")
+            ),
+        };
+        assert!(msg.contains("openai/clip-vit-base-patch32"));
+        assert!(msg.contains("BAAI/bge-small-en-v1.5"));
+        assert!(msg.contains("intfloat/multilingual-e5-small"));
+
+        // And the unknown-id rejection happens BEFORE any download: the error
+        // is the profile-list error, not a download failure.
+        assert!(
+            !msg.contains("Failed to download"),
+            "unknown id must be rejected at profile lookup, not at download: {msg}"
+        );
     }
 
     /// The README's air-gapped instructions and the CI HuggingFace cache key

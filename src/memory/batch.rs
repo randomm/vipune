@@ -1,5 +1,6 @@
 //! Batch operations for the memory store.
 
+use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, BatchIngestItemResult, BatchIngestResult, IngestPolicy};
@@ -129,7 +130,7 @@ impl MemoryStore {
                 .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
         }
 
-        let embedding = self.get_embedding(content)?;
+        let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
 
         Ok(self.db.supersede(
             project_id,
