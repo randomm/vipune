@@ -6,6 +6,7 @@ pub mod embedding;
 pub mod export_scan;
 pub mod fts;
 pub mod hash;
+pub mod identity;
 pub mod import;
 pub mod list;
 pub mod migrations;

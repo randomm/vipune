@@ -46,7 +46,7 @@ pub mod memory;
 pub mod memory_types; // Library-only: batch ingest API (not used in CLI)
 pub mod project;
 mod rrf;
-mod sqlite;
+pub mod sqlite;
 mod temporal;
 
 #[cfg(feature = "mcp")]
@@ -67,6 +67,7 @@ pub use sqlite::Database;
 pub use sqlite::Memory;
 pub use sqlite::embedding::EmbeddingClass;
 pub use sqlite::embedding::classify_embedding;
+pub use sqlite::identity::{ModelIdentity, current_identity, force_migrate_project, is_migrating};
 
 #[cfg(test)]
 mod integration_tests {

@@ -1,12 +1,22 @@
 //! `vipune reindex` handler.
 //!
 //! Re-embeds rows classified as mock, leaves real rows byte-identical, skips unknown.
+//!
+//! `--force` (issue #217): model-switch migration path. Writes a
+//! "migrating to `<id>@<revision>`" marker first, re-embeds every row
+//! (bypassing Mock/Real classification) with the configured profile, then
+//! in ONE transaction records the new identity and clears the marker. A
+//! re-run after an interruption re-embeds every row from the start (full
+//! idempotent pass). Plain reindex (no `--force`) still re-embeds only
+//! Mock-classified rows.
 
 use crate::embedding::EmbeddingEngine;
 use crate::errors::Error;
 use crate::output::{ReindexFailure, ReindexResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::embedding::classify_embedding;
+use crate::sqlite::identity;
+use crate::sqlite::identity::ModelIdentity;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -34,6 +44,7 @@ fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
 /// * `db_path` - Path to the SQLite database
 /// * `model_id` - HuggingFace model ID for the embedding engine
 /// * `project_filter` - If Some, only reindex this project; if None, reindex all projects
+/// * `force` - If true, full model-switch migration (marker → re-embed all rows → record identity)
 /// * `json` - If true, output JSON; otherwise human-readable
 ///
 /// # Errors
@@ -44,6 +55,7 @@ pub fn handle_reindex(
     db_path: &Path,
     model_id: &str,
     project_filter: Option<&str>,
+    force: bool,
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Open database
@@ -100,13 +112,16 @@ pub fn handle_reindex(
         }
     }
 
-    // Initialise the embedding engine (downloads model if needed)
-    let mut engine = EmbeddingEngine::new(model_id)?;
+    if force {
+        return handle_reindex_force(&db, model_id, &projects, json);
+    }
 
-    let mut total_reindexed: usize = 0;
-    let mut total_skipped: usize = 0;
+    // Plain reindex: mock-only classification path.
     let mut total_failed: usize = 0;
     let mut responses: Vec<ReindexResponse> = vec![];
+
+    // Initialise the embedding engine (downloads model if needed)
+    let mut engine = EmbeddingEngine::new(model_id)?;
 
     for project_id in &projects {
         if !json {
@@ -121,8 +136,6 @@ pub fn handle_reindex(
         let (reindexed, skipped, failed) =
             wrap_busy(reindex_project(&db, &mut embed_callback, project_id, json))?;
         let failed_count = failed.len();
-        total_reindexed += reindexed;
-        total_skipped += skipped;
         total_failed += failed_count;
         responses.push(ReindexResponse {
             project_id: project_id.clone(),
@@ -139,39 +152,171 @@ pub fn handle_reindex(
         }
     }
 
-    // Print JSON: single array of all project responses
-    if json {
-        print_json(&responses);
+    print_summary(
+        &responses,
+        &total_projects_scope(&projects),
+        json,
+        total_failed,
+    )?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `--force` model-switch path (issue #217).
+///
+/// 1. Marker-first: write the "migrating to `<id>@<revision>`" marker before
+///    any row is touched. A crash mid-run leaves the marker behind; all
+///    embedding operations refuse while the marker is present.
+/// 2. Re-embed every row (bypassing Mock/Real classification) with the
+///    configured profile's passage embedding.
+/// 3. In ONE transaction: record the new identity and clear the marker.
+///
+/// Re-running after an interruption re-embeds every row from the start
+/// (full idempotent pass). On any per-row failure the marker is left in
+/// place and the exit code is non-zero, so operations refuse until a clean
+/// re-run finishes.
+fn handle_reindex_force(
+    db: &Database,
+    model_id: &str,
+    projects: &[String],
+    json: bool,
+) -> Result<ExitCode, Error> {
+    let target = ModelIdentity {
+        model_id: model_id.to_string(),
+        revision: crate::embedding::EMBED_MODEL_REVISION.to_string(),
+    };
+
+    // Pre-check: if the database is already in a migrating state, the marker
+    // is already set. Re-running --force is safe (full idempotent pass), so
+    // proceed. But log the current identity and migration state for the
+    // user's awareness.
+    let current = identity::current_identity(db.conn()).map_err(Error::from)?;
+    let migrating = identity::is_migrating(db.conn()).map_err(Error::from)?;
+    if !json {
+        if migrating {
+            println!("Resuming interrupted migration to {}...", target.display());
+        } else if current != target {
+            println!(
+                "Migrating from {} to {}...",
+                current.display(),
+                target.display()
+            );
+        }
     }
 
-    // Print failures summary to stderr
+    // Initialise the embedding engine (downloads model if needed)
+    let mut engine = EmbeddingEngine::new(model_id)?;
+
+    let mut total_failed: usize = 0;
+    let mut responses: Vec<ReindexResponse> = vec![];
+
+    for project_id in projects {
+        if !json {
+            println!("Project {}: force re-embedding all rows...", project_id);
+        }
+
+        let (reindexed, skipped, failed_str) = {
+            let cb = |content: &str| {
+                engine
+                    .embed(content)
+                    .map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
+            };
+            identity::force_migrate_project(db, &target, project_id, cb)?
+        };
+
+        let failed: Vec<ReindexFailure> = failed_str
+            .iter()
+            .map(|s| {
+                let parts: Vec<&str> = s.splitn(2, ": ").collect();
+                ReindexFailure {
+                    id: parts.first().copied().unwrap_or("").to_string(),
+                    error: parts.get(1).copied().unwrap_or("").to_string(),
+                }
+            })
+            .collect();
+        let failed_count = failed.len();
+        total_failed += failed_count;
+        responses.push(ReindexResponse {
+            project_id: project_id.clone(),
+            reindexed,
+            skipped,
+            failed,
+        });
+
+        if !json {
+            println!(
+                "  Done: {} reindexed, {} skipped, {} failed",
+                reindexed, skipped, failed_count
+            );
+        }
+    }
+
+    if total_failed > 0 {
+        // Any failure means the re-embed pass did not complete; the marker
+        // stays so operations refuse until a clean re-run finishes.
+        eprintln!(
+            "Error: {} row(s) failed during force reindex. The migration marker is left in place; fix the errors and re-run `vipune reindex --force`.",
+            total_failed
+        );
+        print_summary(
+            &responses,
+            &total_projects_scope(projects),
+            json,
+            total_failed,
+        )?;
+        return Ok(ExitCode::from(1));
+    }
+
     if !json {
-        let any_failures = responses.iter().any(|r| !r.failed.is_empty());
-        if any_failures {
+        println!(
+            "Model identity updated to {} (marker cleared).",
+            target.display()
+        );
+    }
+
+    print_summary(
+        &responses,
+        &total_projects_scope(projects),
+        json,
+        total_failed,
+    )?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Print the per-project JSON / human summary shared by plain and force paths.
+fn print_summary(
+    responses: &[ReindexResponse],
+    scope: &str,
+    json: bool,
+    total_failed: usize,
+) -> Result<(), Error> {
+    if json {
+        print_json(&responses);
+    } else {
+        if total_failed > 0 {
             eprintln!("Warning: {} row(s) failed during reindex", total_failed);
-            for response in &responses {
+            for response in responses {
                 for failure in &response.failed {
                     eprintln!("  {} — {}", failure.id, failure.error);
                 }
             }
-            println!();
         }
-    }
-
-    // Print total summary (always shown in human mode)
-    if !json {
-        let scope = if projects.len() == 1 {
-            format!("project {}", projects[0])
-        } else {
-            "all projects".to_string()
-        };
         println!("Total across {}:", scope);
-        println!("  Reindexed: {}", total_reindexed);
-        println!("  Skipped:   {}", total_skipped);
+        let reindexed: usize = responses.iter().map(|r| r.reindexed).sum();
+        let skipped: usize = responses.iter().map(|r| r.skipped).sum();
+        println!("  Reindexed: {}", reindexed);
+        println!("  Skipped:   {}", skipped);
         println!("  Failed:    {}", total_failed);
     }
+    Ok(())
+}
 
-    Ok(ExitCode::SUCCESS)
+/// Scope label for the summary footer (single project vs all projects).
+fn total_projects_scope(projects: &[String]) -> String {
+    if projects.len() == 1 {
+        format!("project {}", projects[0])
+    } else {
+        "all projects".to_string()
+    }
 }
 
 pub(crate) fn reindex_project<F>(

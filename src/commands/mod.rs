@@ -213,10 +213,23 @@ pub enum Commands {
     },
 
     /// Re-embed rows with mock embeddings using the real model.
+    ///
+    /// `--force` performs a full model-switch migration: writes a
+    /// "migrating to `<id>@<revision>`" marker, re-embeds every row
+    /// (bypassing Mock/Real classification) with the configured profile,
+    /// then records the new identity and clears the marker in one
+    /// transaction. Re-run after an interruption to complete the migration.
     Reindex {
         /// Reindex all projects in the database instead of only the current one
         #[arg(long)]
         all_projects: bool,
+
+        /// Force a full model-switch migration: re-embed every row with the
+        /// configured embedding profile, regardless of Mock/Real classification.
+        /// Writes a migration marker first; records the new model identity and
+        /// clears the marker in one transaction after a clean re-embed pass.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Export all rows (all projects, uncapped) to a JSONL file.
@@ -481,7 +494,10 @@ pub fn execute(
                 json,
             )
         }
-        Commands::Reindex { all_projects } => {
+        Commands::Reindex {
+            all_projects,
+            force,
+        } => {
             let project_filter = if !*all_projects {
                 Some(project_id.as_str())
             } else {
@@ -491,6 +507,7 @@ pub fn execute(
                 &config.database_path,
                 &config.embedding_model,
                 project_filter,
+                *force,
                 json,
             )
         }

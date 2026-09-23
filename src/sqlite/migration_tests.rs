@@ -2,6 +2,7 @@
 #[cfg(test)]
 mod migration_tests {
     use crate::sqlite::Database;
+    use crate::sqlite::identity;
     use tempfile::TempDir;
 
     fn create_test_db() -> Database {
@@ -10,6 +11,105 @@ mod migration_tests {
         let db = Database::open(&path).unwrap();
         std::mem::forget(dir);
         db
+    }
+
+    // --- Migration v6: model identity table (issue #217) ---
+
+    #[test]
+    fn test_fresh_db_has_user_version_6() {
+        let db = create_test_db();
+        let version: i32 = db
+            .conn()
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 6, "fresh databases must be at schema v6");
+    }
+
+    #[test]
+    fn test_fresh_db_identity_table_exists_and_is_empty() {
+        let db = create_test_db();
+        let table_exists: bool = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='model_identity'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(table_exists, "model_identity table must exist on fresh DBs");
+        assert_eq!(
+            identity::read_identity(db.conn()).unwrap(),
+            None,
+            "fresh databases have no identity row (bge default)"
+        )
+    }
+
+    #[test]
+    fn test_fresh_db_no_marker() {
+        let db = create_test_db();
+        assert_eq!(
+            identity::read_marker(db.conn()).unwrap(),
+            None,
+            "fresh databases must not carry a migration marker"
+        )
+    }
+
+    #[test]
+    fn test_legacy_v5_db_upgrades_to_v6_preserving_rows() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy.db");
+
+        // Build a v5 database directly (schema up to v5, no v6 table yet).
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE memories (
+                id TEXT PRIMARY KEY, project_id TEXT NOT NULL, content TEXT NOT NULL,
+                embedding BLOB NOT NULL, metadata TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'fact',
+                status TEXT NOT NULL DEFAULT 'active',
+                superseded_by TEXT,
+                retrieval_count INTEGER NOT NULL DEFAULT 0,
+                last_retrieved_at TEXT,
+                content_hash TEXT,
+                importance TEXT NOT NULL DEFAULT 'medium');",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories (id, project_id, content, embedding, created_at, updated_at)
+             VALUES ('legacy-1', 'proj1', 'legacy content', X'00', 't', 't')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 5).unwrap();
+        drop(conn);
+
+        // Open via Database: migrations must run v6 and preserve the row.
+        let db = Database::open(&path).unwrap();
+        let version: i32 = db
+            .conn()
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 6);
+        let count: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "legacy rows must survive the v5→v6 migration");
+        let content: String = db
+            .conn()
+            .query_row(
+                "SELECT content FROM memories WHERE id = 'legacy-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(content, "legacy content");
+        assert_eq!(
+            identity::read_identity(db.conn()).unwrap(),
+            None,
+            "upgraded legacy DB must still have no identity row (bge default)"
+        );
     }
 
     #[test]
