@@ -8,8 +8,12 @@ on:
   schedule:
     - cron: "0 6 * * *" # Nightly at 06:00 UTC
 
+# Cache keys are keyed on the pinned model revisions (issue #217); the
+# air-gapped/docs drift test in src/embedding.rs pins both keys against the
+# profile revision constants — bump a key if and only if its revision changes.
 env:
   HF_CACHE_KEY: hf-hub-bge-small-en-v1.5-5c38ec7
+  HF_CACHE_KEY_E5: hf-hub-multilingual-e5-small-614241f
 
 jobs:
   test:
