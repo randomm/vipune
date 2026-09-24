@@ -16,7 +16,10 @@ pub(crate) fn encode_and_infer(
     engine: &mut EmbeddingEngine,
     input: &str,
 ) -> Result<Vec<f32>, Error> {
-    let encoding = engine.tokenizer.encode(input, true)?;
+    let encoding = engine
+        .tokenizer
+        .encode(input, true)
+        .map_err(|e| Error::InvalidInput(format!("inference tokenizer: {e}")))?;
     let input_ids = encoding.get_ids();
     let attention_mask = encoding.get_attention_mask();
 

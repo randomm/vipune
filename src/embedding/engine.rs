@@ -260,7 +260,10 @@ impl EmbeddingEngine {
     }
 
     fn count_tokens(&self, input: &str) -> Result<usize, Error> {
-        let encoding = self.count_tokenizer.encode(input, true)?;
+        let encoding = self
+            .count_tokenizer
+            .encode(input, true)
+            .map_err(|e| Error::InvalidInput(format!("count tokenizer: {e}")))?;
         Ok(encoding.get_ids().len())
     }
 }

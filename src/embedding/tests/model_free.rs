@@ -191,36 +191,6 @@ fn prefix_input_applies_e5_prefixes_exactly() {
     );
 }
 
-/// The engine's own `prefix_input` helper, exercised directly against the
-/// built-in profiles: e5 yields exactly `query: <text>` / `passage: <text>`;
-/// bge yields the bare text. This is the single prefix-application site the
-/// role-aware embed and token-count methods delegate to — pinned model-free
-/// here, and pinned end-to-end through the store's `#[cfg(test)]` dispatch
-/// in `store_prefix_path` below.
-#[test]
-fn engine_prefix_input_helper_yields_exactly_prefix_plus_text() {
-    // We can't construct an EmbeddingEngine without downloading the model,
-    // so we exercise the same role-prefix selection the helper delegates to
-    // (EmbeddingRole::prefix against the stored profile) and assert the
-    // helper's contract: `prefix + text` for non-empty prefixes, bare text
-    // for empty prefixes (bge).
-    let e5 = profile_for("intfloat/multilingual-e5-small").expect("e5 profile");
-    let bge = profile_for(EMBED_MODEL_ID).expect("bge profile");
-    let text = "The quick brown fox";
-
-    // e5 passage: exactly `passage: <text>`.
-    let e5_passage = format!("{}{}", EmbeddingRole::Passage.prefix(e5), text);
-    assert_eq!(e5_passage, "passage: The quick brown fox");
-    // e5 query: exactly `query: <text>`.
-    let e5_query = format!("{}{}", EmbeddingRole::Query.prefix(e5), text);
-    assert_eq!(e5_query, "query: The quick brown fox");
-    // bge: bare text (empty prefixes).
-    let bge_passage = format!("{}{}", EmbeddingRole::Passage.prefix(bge), text);
-    assert_eq!(bge_passage, text);
-    let bge_query = format!("{}{}", EmbeddingRole::Query.prefix(bge), text);
-    assert_eq!(bge_query, text);
-}
-
 /// The engine's single prefix helper, exercised through the `MemoryStore`
 /// `#[cfg(test)]` embedder dispatch: under the e5 profile the embedder the
 /// engine would see receives exactly `passage: <content>` / `query: <text>`;

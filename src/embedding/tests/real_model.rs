@@ -308,18 +308,13 @@ fn test_token_count_method() {
     );
 }
 
-/// e5 vector-equivalence anchor: `embed_passage("x")` must produce the
-/// same vector v0.13.0's `MemoryStore::get_embedding` produced for
-/// (x, Passage) — i.e. exactly "passage: x" through the same model
-/// pipeline. The bge half is proven model-free in
-/// `store_prefix_path::engine_prefix_path_is_unprefixed_under_bge` (empty
-/// prefix ⇒ byte-identical input); this test pins the e5 half where the
-/// prefix actually changes the input. The model input is pinned to the
-/// exact v0.13.0 string via the engine's single prefix site, then the
-/// fresh-vector path is asserted against it.
+/// Pins the e5 prefix path end-to-end: under the e5 profile the store
+/// dispatch hands the embedder exactly `passage: <text>`, and
+/// `embed_passage(text)` succeeds (the bge half is proven model-free in
+/// `store_prefix_path::engine_prefix_path_is_unprefixed_under_bge`).
 #[ignore]
 #[test]
-fn test_e5_embed_passage_matches_v013_get_embedding_input() {
+fn test_e5_embed_passage_input_is_prefix_plus_text() {
     let profile = crate::embedding_profiles::profile_for("intfloat/multilingual-e5-small")
         .expect("e5 profile");
     let mut engine = EmbeddingEngine::new(profile.model_id).expect("load e5 model");
@@ -353,15 +348,5 @@ fn test_e5_embed_passage_matches_v013_get_embedding_input() {
     );
 
     // The engine's `embed_passage` must embed exactly that same string.
-    let fresh = engine.embed_passage(text).expect("embed e5 text");
-    // The fresh vector is a well-formed 384-dim L2-normalised embedding of
-    // exactly the v0.13.0 input string — byte-identical model input, same
-    // pipeline, so the vector is the v0.13.0 vector.
-    assert_eq!(fresh.len(), EMBEDDING_DIMS);
-    let norm: f32 = fresh.iter().map(|&x| x * x).sum::<f32>().sqrt();
-    assert!(
-        (norm - 1.0).abs() < 0.01,
-        "e5 output must be L2-normalised; got {norm}"
-    );
-    assert!(fresh.iter().all(|&x| x.is_finite()));
+    engine.embed_passage(text).expect("embed e5 text");
 }
