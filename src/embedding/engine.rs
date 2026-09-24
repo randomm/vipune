@@ -6,8 +6,8 @@
 //!
 //! The engine is prefix-aware: it stores the resolved model profile and the
 //! role-aware methods ([`EmbeddingEngine::embed_query`] /
-//! [`EmbeddingEngine::embed_passage`], [`EmbeddingEngine::token_count_query`]
-//! / [`EmbeddingEngine::token_count_passage`]) prepend the profile's
+//! [`EmbeddingEngine::embed_passage`], [`EmbeddingEngine::token_count`])
+//! prepend the profile's
 //! query/passage prefix *before* tokenisation, so the 512-token check and any
 //! pre-flight token count always see the prefixed text. Exactly one
 //! production site applies prefixes — these methods. Empty input is
@@ -67,10 +67,9 @@ pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
 ///   added, updated, or re-indexed).
 /// - Use [`EmbeddingEngine::embed_query`] for search/classification text.
 ///
-/// The role-aware token counters ([`EmbeddingEngine::token_count_passage`] /
-/// [`EmbeddingEngine::token_count_query`]) count the *prefixed* text through
-/// the same prefix path as the embedders, so a pre-flight count and the
-/// actual embed always agree.
+/// The role-aware counter [`EmbeddingEngine::token_count`] counts the
+/// *prefixed* text through the same prefix path as the embedders, so a
+/// pre-flight count and the actual embed always agree.
 ///
 /// # No model-identity check
 ///
@@ -175,28 +174,17 @@ impl EmbeddingEngine {
     /// prefix applied (the same prefix path the embedders use), so a
     /// pre-flight count and the actual embed always agree.
     ///
+    /// Pass [`EmbeddingRole::Passage`] for stored content (added, updated, or
+    /// re-indexed text) and [`EmbeddingRole::Query`] for search text. Pass the
+    /// stored, unprefixed text — the role's prefix is applied here.
+    ///
     /// Uses a separate truncation-free tokenizer (pre-cloned at startup) so the
     /// true count is returned. The main tokenizer has truncation at 512 enabled
     /// for safe inference, but that would silently cap counts and make the
     /// `ContentTooLong` guard in the embed methods unreachable.
-    pub fn token_count_role(&self, text: &str, role: EmbeddingRole) -> Result<usize, Error> {
+    pub fn token_count(&self, role: EmbeddingRole, text: &str) -> Result<usize, Error> {
         let input = self.prefix_input(role, text);
         self.count_tokens(&input)
-    }
-
-    /// Count the tokens of `text` as stored-content (passage) input: the
-    /// profile's passage prefix is prepended before counting.
-    pub fn token_count_passage(&self, text: &str) -> Result<usize, Error> {
-        self.token_count_role(text, EmbeddingRole::Passage)
-    }
-
-    /// Count the tokens of `text` as search (query) input: the profile's query
-    /// prefix is prepended before counting.
-    ///
-    /// Counterpart of [`Self::token_count_passage`] for the query role (the
-    /// role-less `token_count` has been removed).
-    pub fn token_count_query(&self, text: &str) -> Result<usize, Error> {
-        self.token_count_role(text, EmbeddingRole::Query)
     }
 
     /// Embed stored-content (passage) text: the profile's passage prefix is
@@ -211,6 +199,10 @@ impl EmbeddingEngine {
     ///
     /// Counterpart of [`Self::embed_passage`] for the query role (the role-
     /// less `embed` has been removed).
+    ///
+    /// Library API: used by external callers of the public `EmbeddingEngine`
+    /// (the binary's own search path goes through `MemoryStore`).
+    #[allow(dead_code)]
     pub fn embed_query(&mut self, text: &str) -> Result<Vec<f32>, Error> {
         self.embed_role(text, EmbeddingRole::Query)
     }
@@ -230,7 +222,10 @@ impl EmbeddingEngine {
         }
     }
 
-    /// Generate embedding for a single text with the role's prefix applied.
+    /// Shared prefix-aware embed path (crate-internal: called from
+    /// `embed_passage` / `embed_query` and the `MemoryStore` test-embedder
+    /// dispatch). Prepends the role's profile prefix, enforces the token
+    /// limit on the prefixed text, then runs the model.
     ///
     /// Returns exactly 384-dimensional f32 vector, L2-normalized.
     ///
@@ -244,7 +239,11 @@ impl EmbeddingEngine {
     ///
     /// Texts whose *prefixed* form exceeds 512 tokens are rejected with a
     /// ContentTooLong error instead of being silently truncated.
-    pub(crate) fn embed_role(&mut self, text: &str, role: EmbeddingRole) -> Result<Vec<f32>, Error> {
+    pub(crate) fn embed_role(
+        &mut self,
+        text: &str,
+        role: EmbeddingRole,
+    ) -> Result<Vec<f32>, Error> {
         if text.is_empty() {
             return Ok(vec![0.0f32; EMBEDDING_DIMS]);
         }
@@ -269,5 +268,4 @@ impl EmbeddingEngine {
         let encoding = self.count_tokenizer.encode(input, true)?;
         Ok(encoding.get_ids().len())
     }
-
 }

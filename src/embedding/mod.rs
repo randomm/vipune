@@ -14,5 +14,9 @@ mod tests;
 
 // Public items re-exported so `crate::embedding::{...}` paths (and the crate
 // root's `pub use embedding::...` list) are unchanged by the module split.
-pub use engine::{EmbeddingEngine, EMBEDDING_DIMS, EMBED_MODEL_ID, EMBED_MODEL_REVISION, MAX_EMBEDDING_TOKENS};
+pub use engine::{
+    EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine, MAX_EMBEDDING_TOKENS,
+};
+
+#[cfg(test)]
 pub(crate) use inference::l2_normalize;

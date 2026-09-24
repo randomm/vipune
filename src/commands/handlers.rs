@@ -1,5 +1,6 @@
 //! Command handlers for vipune CLI.
 
+use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
@@ -24,7 +25,7 @@ pub(crate) fn handle_validate(text: &str, model_id: &str, json: bool) -> Result<
     let engine = EmbeddingEngine::new(model_id)?;
     // Validate uses the passage role: stored text is what is added/re-indexed,
     // so the count sees the same prefix the embed path will see.
-    let token_count = engine.token_count_passage(text)?;
+    let token_count = engine.token_count(EmbeddingRole::Passage, text)?;
 
     if token_count > crate::embedding::MAX_EMBEDDING_TOKENS {
         return Err(Error::ContentTooLong {
@@ -395,6 +396,27 @@ pub(crate) fn handle_version(json: bool) -> Result<ExitCode, Error> {
 mod tests {
     use super::*;
     use crate::memory::MemoryStore;
+
+    /// Regression (issue #220): `vipune validate` uses the passage role for
+    /// its token count — the handler calls `engine.token_count(EmbeddingRole::Passage, ..)`
+    /// (not the removed role-less `token_count`), so under e5 a text whose
+    /// raw count is ≤512 but whose `passage: <text>` count is >512 is
+    /// reported as over-limit.
+    ///
+    /// Model-free: pins the delegation contract at the profile level — the
+    /// e5 profile declares the `passage: ` prefix the passage role applies.
+    /// (The actual `token_count` call requires a loaded engine and is covered
+    /// by the `#[ignore]`d real-model tests.)
+    #[test]
+    fn test_validate_delegates_to_passage_role_engine_method() {
+        let e5_profile = crate::embedding_profiles::profile_for("intfloat/multilingual-e5-small")
+            .expect("e5 profile");
+        let prefix = crate::embedding_profiles::EmbeddingRole::Passage.prefix(e5_profile);
+        assert_eq!(
+            prefix, "passage: ",
+            "e5 must declare the 'passage: ' prefix (validate uses the passage role)"
+        );
+    }
 
     /// Assert GetResponse carries the telemetry fields so `get --json` exposes them.
     #[test]

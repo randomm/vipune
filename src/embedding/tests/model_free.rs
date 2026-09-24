@@ -2,8 +2,7 @@
 //! engine's prefix-application contract (no model download).
 
 use crate::embedding::{
-    EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, MAX_EMBEDDING_TOKENS,
-    l2_normalize,
+    EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine, l2_normalize,
 };
 use crate::embedding_profiles::{EmbeddingRole, profile_for};
 use crate::errors::Error;
@@ -229,8 +228,7 @@ fn engine_prefix_input_helper_yields_exactly_prefix_plus_text() {
 /// path is wired for the role-aware entry points without a model download
 /// (the recording embedder stands in for the engine, exactly as the
 /// `#[cfg(test)]` dispatch stands in for the production engine).
-#[cfg(test)]
-mod store_prefix_path {
+pub(crate) mod store_prefix_path {
     use super::*;
 
     /// Minimal recording embedder (mirrors the one in
@@ -382,89 +380,4 @@ mod store_prefix_path {
             vec!["plain bge fox".to_string(), "bge query".to_string()]
         );
     }
-}
-
-// ---- Real-model tests (#[ignore]d: download the ONNX model) ------------
-//
-// Migrated to the role-aware API (embed_query / embed_passage /
-// token_count_query / token_count_passage). Run with
-// `cargo test -- --ignored` when model-pipeline code changes.
-
-#[ignore]
-#[test]
-fn test_integration_whitespace_only() {
-    let mut engine = EmbeddingEngine::new(EMBED_MODEL_ID).expect("load model");
-    let embedding = engine
-        .embed_passage("   \t\n  ")
-        .expect("embed whitespace text");
-
-    // Whitespace-only input should produce a valid embedding
-    assert_eq!(embedding.len(), EMBEDDING_DIMS);
-    assert!(embedding.iter().all(|&x| x.is_finite()));
-}
-
-#[ignore]
-#[test]
-fn test_integration_simple_text() {
-    let mut engine = EmbeddingEngine::new(EMBED_MODEL_ID).expect("load model");
-    let embedding = engine.embed_passage("hello world").expect("embed text");
-
-    assert_eq!(embedding.len(), EMBEDDING_DIMS);
-
-    let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
-    assert!(
-        (norm - 1.0).abs() < 0.01,
-        "Embedding should be L2-normalized"
-    );
-
-    assert!(embedding.iter().all(|&x| x.is_finite()));
-}
-
-#[ignore]
-#[test]
-fn test_integration_empty_string() {
-    let mut engine = EmbeddingEngine::new(EMBED_MODEL_ID).expect("load model");
-    // Empty input keeps today's behaviour under BOTH roles: a zero vector,
-    // the empty check running BEFORE any prefix is applied.
-    let embedding = engine.embed_passage("").expect("embed empty text");
-    assert_eq!(embedding.len(), EMBEDDING_DIMS);
-    assert_eq!(embedding, vec![0.0f32; EMBEDDING_DIMS]);
-
-    let embedding = engine.embed_query("").expect("embed empty text (query)");
-    assert_eq!(embedding, vec![0.0f32; EMBEDDING_DIMS]);
-}
-
-/// Decision 5 (issue #217): the e5 model card specifies mean pooling over
-/// `last_hidden_state` followed by L2 normalisation, the same pipeline as
-/// bge. This real-model test asserts the e5 output has L2 norm ≈ 1.0 so
-/// `classify_embedding`'s Real band [0.99, 1.01] still holds for e5
-/// vectors (the Mock > 2.0 band is unaffected). The passage prefix comes
-/// from the profile via `embed_passage` — no hand-written prefix here.
-/// Ignored because it downloads the ~470 MB e5 model.
-#[ignore]
-#[test]
-fn test_integration_e5_output_norm_is_one() {
-    let profile = profile_for("intfloat/multilingual-e5-small").expect("e5 profile");
-    let mut engine = EmbeddingEngine::new(profile.model_id).expect("load e5 model");
-
-    // Embed a short passage with the e5 passage prefix (the role that
-    // stored content uses) and assert the L2 normalisation holds.
-    let embedding = engine
-        .embed_passage("The quick brown fox jumps over the lazy dog.")
-        .expect("embed e5 text");
-    assert_eq!(
-        embedding.len(),
-        EMBEDDING_DIMS,
-        "e5 must produce 384-dim vectors"
-    );
-
-    let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
-    assert!(
-        (norm - 1.0).abs() < 0.01,
-        "e5 output must be L2-normalised (norm ≈ 1.0) so the Real band [0.99, 1.01] in classify_embedding holds; got {norm}"
-    );
-    assert!(
-        embedding.iter().all(|&x| x.is_finite()),
-        "e5 output must be all-finite"
-    );
 }

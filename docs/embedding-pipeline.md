@@ -59,11 +59,11 @@ ort = { version "=2.0.0-rc.9", features = ["download-binaries"] }
 
 ### `&mut self` Requirement
 
-The `EmbeddingEngine::embed()` method requires `&mut self` because ONNX internally mutates tensor state for inference:
+The `EmbeddingEngine::embed_passage()` / `embed_query()` methods require `&mut self` because ONNX internally mutates tensor state for inference:
 
 ```rust
 impl EmbeddingEngine {
-    pub fn embed(&mut self, text: &str) -> Result<Vec<f32>, Error> {
+    pub fn embed_passage(&mut self, text: &str) -> Result<Vec<f32>, Error> {
         // ONNX tensor allocation mutates internal state
         let outputs = self.session.run(inputs)?;
         // ...

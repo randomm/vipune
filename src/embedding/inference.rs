@@ -8,11 +8,14 @@
 use ort::inputs;
 use ort::value::Tensor;
 
-use super::engine::{EmbeddingEngine, EMBEDDING_DIMS};
+use super::engine::{EMBEDDING_DIMS, EmbeddingEngine};
 use crate::errors::Error;
 
 /// Tokenise `input`, run the model, and pool + L2-normalize the output.
-pub(crate) fn encode_and_infer(engine: &mut EmbeddingEngine, input: &str) -> Result<Vec<f32>, Error> {
+pub(crate) fn encode_and_infer(
+    engine: &mut EmbeddingEngine,
+    input: &str,
+) -> Result<Vec<f32>, Error> {
     let encoding = engine.tokenizer.encode(input, true)?;
     let input_ids = encoding.get_ids();
     let attention_mask = encoding.get_attention_mask();
@@ -32,8 +35,7 @@ pub(crate) fn encode_and_infer(engine: &mut EmbeddingEngine, input: &str) -> Res
     // Only include token_type_ids if the model requires it
     let outputs = if engine.requires_token_type_ids {
         let token_type_ids_vec: Vec<i64> = vec![0i64; seq_len]; // Single sentence, all zeros
-        let token_type_ids_tensor =
-            Tensor::from_array(([1usize, seq_len], token_type_ids_vec))?;
+        let token_type_ids_tensor = Tensor::from_array(([1usize, seq_len], token_type_ids_vec))?;
         let inputs = inputs![
             "input_ids" => input_ids_tensor,
             "attention_mask" => attention_mask_tensor,

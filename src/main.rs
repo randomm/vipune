@@ -546,29 +546,6 @@ mod tests {
         );
     }
 
-    /// Regression (issue #220): `vipune validate` uses the passage role for
-    /// its token count — the handler delegates to `engine.token_count_passage`
-    /// (not the removed role-less `token_count`), so under e5 a text whose
-    /// raw count is ≤512 but whose `passage: <text>` count is >512 is
-    /// reported as over-limit.
-    ///
-    /// Model-free: pins the delegation contract at the profile level — the
-    /// e5 profile declares the `passage: ` prefix the passage role applies.
-    /// (The actual `token_count_passage` call requires a loaded engine and is
-    /// covered by the `#[ignore]`d real-model tests.)
-    #[test]
-    fn test_validate_delegates_to_passage_role_engine_method() {
-        let e5_profile = crate::embedding_profiles::profile_for(
-            "intfloat/multilingual-e5-small",
-        )
-        .expect("e5 profile");
-        let prefix = crate::embedding_profiles::EmbeddingRole::Passage.prefix(e5_profile);
-        assert_eq!(
-            prefix, "passage: ",
-            "e5 must declare the 'passage: ' prefix (validate uses the passage role)"
-        );
-    }
-
     #[test]
     fn test_cli_parse_with_db_path() {
         let cli = Cli::parse_from(["vipune", "--db-path", "/custom/path.db", "add", "test"]);

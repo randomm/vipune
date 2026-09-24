@@ -3,10 +3,8 @@
 //! All tests here are `#[ignore]`d: they download the ONNX model. Run
 //! with `cargo test -- --ignored` when model-pipeline code changes.
 
-use crate::embedding::{
-    EMBED_MODEL_ID, EMBEDDING_DIMS, EmbeddingEngine, MAX_EMBEDDING_TOKENS,
-};
-use crate::embedding_profiles::{EmbeddingRole, profile_for};
+use crate::embedding::{EMBED_MODEL_ID, EMBEDDING_DIMS, EmbeddingEngine, MAX_EMBEDDING_TOKENS};
+use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
 
 use super::model_free::store_prefix_path::store_with_recorded_identity;
@@ -30,7 +28,7 @@ fn test_integration_long_text_rejection() {
     // Build text that reliably exceeds 512 tokens by counting on the full text
     let long_text = build_text_up_to_tokens(&engine, 600);
     let actual_count = engine
-        .token_count_passage(&long_text)
+        .token_count(EmbeddingRole::Passage, &long_text)
         .expect("count tokens");
     assert!(
         actual_count > MAX_EMBEDDING_TOKENS,
@@ -65,7 +63,9 @@ fn build_text_up_to_tokens(engine: &EmbeddingEngine, target: usize) -> String {
     // and then fine-tune. Start with a generous estimate.
     let words = target;
     let text = "word ".repeat(words);
-    let count = engine.token_count_passage(&text).expect("count tokens");
+    let count = engine
+        .token_count(EmbeddingRole::Passage, &text)
+        .expect("count tokens");
 
     if count <= target {
         return text.trim().to_string();
@@ -77,7 +77,7 @@ fn build_text_up_to_tokens(engine: &EmbeddingEngine, target: usize) -> String {
         let mid = lo + (hi - lo).div_ceil(2);
         let candidate = "word ".repeat(mid);
         let c = engine
-            .token_count_passage(&candidate)
+            .token_count(EmbeddingRole::Passage, &candidate)
             .expect("count tokens");
         if c <= target {
             lo = mid;
@@ -97,7 +97,9 @@ fn run_boundary_test(
     min_tokens: usize,
 ) {
     let text = build_text_up_to_tokens(engine, target);
-    let actual_count = engine.token_count_passage(&text).expect("count tokens");
+    let actual_count = engine
+        .token_count(EmbeddingRole::Passage, &text)
+        .expect("count tokens");
     assert!(
         actual_count >= min_tokens,
         "Expected >= {} tokens, got {}",
@@ -143,7 +145,7 @@ fn test_integration_boundary_512_tokens() {
 fn build_largest_at_most(engine: &mut EmbeddingEngine, limit: usize) -> (String, usize) {
     let count_tokens = |n: usize| {
         engine
-            .token_count_passage("word ".repeat(n).trim())
+            .token_count(EmbeddingRole::Passage, "word ".repeat(n).trim())
             .expect("count tokens")
     };
     // Binary search for the largest n such that count(n) <= limit
@@ -210,13 +212,17 @@ fn test_token_count_method() {
     let engine = EmbeddingEngine::new(EMBED_MODEL_ID).expect("load model");
 
     let text = "hello world";
-    let passage_count = engine.token_count_passage(text).expect("count tokens");
+    let passage_count = engine
+        .token_count(EmbeddingRole::Passage, text)
+        .expect("count tokens");
     assert!(passage_count > 0);
     assert!(passage_count <= MAX_EMBEDDING_TOKENS);
 
-    // Role-aware counters must agree for bge (empty prefixes), and the
-    // query counter must also work.
-    let query_count = engine.token_count_query(text).expect("count tokens");
+    // The counter must agree for bge under BOTH roles (empty prefixes), so a
+    // query-role count of the same text must equal the passage count.
+    let query_count = engine
+        .token_count(EmbeddingRole::Query, text)
+        .expect("count tokens");
     assert_eq!(
         passage_count, query_count,
         "bge prefixes are empty: counts must agree"
@@ -234,8 +240,9 @@ fn test_token_count_method() {
 /// fresh-vector path is asserted against it.
 #[ignore]
 #[test]
-fn test_e5_embed_passage_equals_v013_get_embedding_output() {
-    let profile = profile_for("intfloat/multilingual-e5-small").expect("e5 profile");
+fn test_e5_embed_passage_matches_v013_get_embedding_input() {
+    let profile = crate::embedding_profiles::profile_for("intfloat/multilingual-e5-small")
+        .expect("e5 profile");
     let mut engine = EmbeddingEngine::new(profile.model_id).expect("load e5 model");
 
     // The v0.13.0 engine input for (text, Passage) was exactly "passage: x":

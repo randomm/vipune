@@ -10,6 +10,7 @@
 
 use crate::embedding::EmbeddingEngine;
 use crate::embedding::MAX_EMBEDDING_TOKENS;
+use crate::embedding_profiles::EmbeddingRole;
 use crate::sqlite::Database;
 use crate::sqlite::Error;
 use crate::sqlite::embedding::classify_embedding;
@@ -76,7 +77,7 @@ pub fn over_limit_row_ids(
             // The role-aware counter applies the profile's passage prefix —
             // the engine is the single prefix site.
             let count = engine
-                .token_count_passage(&content)
+                .token_count(EmbeddingRole::Passage, &content)
                 .map_err(|e| Error::InvalidInput(format!("token count failed: {e}")))?;
             if count > MAX_EMBEDDING_TOKENS {
                 offending.push(OverLimitRow { id });
