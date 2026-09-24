@@ -9,11 +9,14 @@ pub mod hash;
 pub mod identity;
 pub mod import;
 pub mod list;
+pub mod migration_types;
 pub mod migrations;
 pub mod query_mod;
 pub mod search;
 pub mod supersede;
 pub mod update;
+
+pub use migration_types::{MigrationReport, MigrationRowFailure};
 
 #[cfg(test)]
 mod tests;
@@ -93,6 +96,14 @@ pub enum Error {
     NotFound(String),
     /// Invalid input provided.
     InvalidInput(String),
+    /// Pre-flight token scan found rows exceeding the embedding token limit.
+    /// Carries the offending memory ids structurally so callers can act
+    /// without parsing a message.
+    MigrationRefused { offending: Vec<String> },
+    /// The re-embed pass ran but at least one row failed to embed.
+    /// The migration marker is left in place and the old identity is kept;
+    /// the `report` carries the per-row failure details.
+    MigrationIncomplete { report: MigrationReport },
 }
 
 impl std::fmt::Display for Error {
@@ -121,6 +132,19 @@ impl std::fmt::Display for Error {
             Error::InvalidLimit(msg) => write!(f, "Invalid limit: {}", msg),
             Error::NotFound(msg) => write!(f, "Not found: {}", msg),
             Error::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
+            Error::MigrationRefused { offending } => write!(
+                f,
+                "Migration refused: {} row(s) exceed the token limit: {}",
+                offending.len(),
+                offending.join(", ")
+            ),
+            Error::MigrationIncomplete { report } => write!(
+                f,
+                "Migration incomplete: {} row(s) failed ({} reindexed, {} skipped)",
+                report.failures.len(),
+                report.reindexed,
+                report.skipped
+            ),
         }
     }
 }
