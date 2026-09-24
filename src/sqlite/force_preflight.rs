@@ -41,7 +41,6 @@ use crate::sqlite::Error;
 /// # Errors
 ///
 /// Returns `Error::Sqlite` if a row's content cannot be token-counted.
-#[allow(dead_code)]
 pub fn force_reembed_preflight<C>(
     db: &Database,
     projects: &[String],
@@ -67,7 +66,6 @@ where
 
 /// Pre-flight convenience wrapper that token-counts via the engine's
 /// tokenizer (no embedding work is done).
-#[allow(dead_code)]
 pub fn force_reembed_preflight_with_engine(
     db: &Database,
     engine: &EmbeddingEngine,

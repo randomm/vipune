@@ -4,10 +4,10 @@
 
 pub mod embedding;
 pub mod export_scan;
-pub(crate) mod force_preflight;
+pub mod force_preflight;
 pub mod fts;
 pub mod hash;
-pub(crate) mod identity;
+pub mod identity;
 pub mod import;
 pub mod list;
 pub mod migrations;

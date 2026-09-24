@@ -72,11 +72,10 @@ pub(crate) fn base64_encode(input: &[u8]) -> String {
 /// Inverse of [`base64_encode`] (used by the round-trip tests). Rejects
 /// padding in the wrong position and any character outside the alphabet.
 ///
-/// `#[allow(dead_code)]`: in the library target the only consumer is the
-/// `#[cfg(test)]` round-trip tests in `export_tests.rs` (the import command
-/// uses the `base64` crate), so the binary-only visibility leaves the lib
-/// build with no production caller.
-#[allow(dead_code)] // production caller (import) uses the `base64` crate; lib target sees only tests
+/// Test-only helper: the `export` command never decodes (import uses the
+/// `base64` crate), so the `#[cfg(test)]` visibility keeps it out of the
+/// production build instead of carrying a dead-code suppression.
+#[cfg(test)]
 pub(crate) fn base64_decode(input: &str) -> Result<Vec<u8>, Error> {
     fn value(c: u8) -> Option<u32> {
         match c {

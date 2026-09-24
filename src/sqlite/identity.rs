@@ -51,7 +51,6 @@ impl ModelIdentity {
 }
 
 /// Read the recorded identity. `None` row ⇒ the bge default.
-#[allow(dead_code)]
 pub fn read_identity(conn: &Connection) -> Result<Option<ModelIdentity>, Error> {
     match conn.query_row(
         "SELECT model_id, model_revision FROM model_identity WHERE id = 1",
@@ -68,7 +67,6 @@ pub fn read_identity(conn: &Connection) -> Result<Option<ModelIdentity>, Error> 
 }
 
 /// Read the migration marker, if one is in flight.
-#[allow(dead_code)]
 pub fn read_marker(conn: &Connection) -> Result<Option<String>, Error> {
     match conn.query_row(
         "SELECT migration_marker FROM model_identity WHERE id = 1 AND migration_marker IS NOT NULL",
@@ -94,7 +92,6 @@ pub(crate) fn migration_marker_for(identity: &ModelIdentity) -> String {
 /// behind and all embedding operations refuse until `reindex --force`
 /// finishes. The upsert also stages the target identity in the same row so a
 /// marker-present database always names the interrupted target.
-#[allow(dead_code)]
 pub fn write_marker(conn: &Connection, target: &ModelIdentity) -> Result<(), Error> {
     let marker = migration_marker_for(target);
     conn.execute(
@@ -115,7 +112,6 @@ pub fn write_marker(conn: &Connection, target: &ModelIdentity) -> Result<(), Err
 /// marker updates are atomic: a crash before the commit leaves the previous
 /// state intact (either the old identity with no marker, or the marker still
 /// set with the old identity), never a half-migrated state.
-#[allow(dead_code)]
 pub fn record_identity_and_clear_marker(
     conn: &Connection,
     identity: &ModelIdentity,
@@ -143,14 +139,12 @@ pub fn record_identity_and_clear_marker(
 }
 
 /// True while a migration marker is present (an interrupted `reindex --force`).
-#[allow(dead_code)]
 pub fn is_migrating(conn: &Connection) -> Result<bool, Error> {
     Ok(read_marker(conn)?.is_some())
 }
 
 /// The identity the store currently has: the recorded identity, or the bge
 /// default when no row is recorded.
-#[allow(dead_code)]
 pub fn current_identity(conn: &Connection) -> Result<ModelIdentity, Error> {
     Ok(read_identity(conn)?.unwrap_or_else(ModelIdentity::default_identity))
 }
@@ -162,7 +156,6 @@ pub fn current_identity(conn: &Connection) -> Result<ModelIdentity, Error> {
 /// built-in profile resolves to the id itself with no revision recorded,
 /// which makes any store with a recorded row mismatch (refused) rather than
 /// silently "matching". Config validation rejects unknown ids anyway.
-#[allow(dead_code)]
 pub fn configured_identity(configured_model_id: &str) -> ModelIdentity {
     match profile_for(configured_model_id) {
         Ok(profile) => ModelIdentity {
@@ -181,7 +174,6 @@ pub fn configured_identity(configured_model_id: &str) -> ModelIdentity {
 /// Returns `(identity, migration_marker)` where `identity` is `None` when no
 /// row exists (callers compare against [`ModelIdentity::default_identity`])
 /// and `migration_marker` is the "migrating to ..." text if one is present.
-#[allow(dead_code)]
 pub fn read_identity_and_marker(
     conn: &Connection,
 ) -> Result<(Option<ModelIdentity>, Option<String>), Error> {
@@ -220,7 +212,6 @@ pub fn read_identity_and_marker(
 ///
 /// `Error::Config` with the refusal message; `Error::SqliteModule` if the
 /// identity table cannot be read.
-#[allow(dead_code)]
 pub fn assert_identity_ok(
     conn: &Connection,
     configured_model_id: &str,
@@ -311,7 +302,6 @@ where
 ///
 /// Error if the marker write fails, the re-embed pass has any failures, or
 /// the final identity commit fails.
-#[allow(dead_code)]
 pub fn force_migrate_database<F>(
     db: &Database,
     target: &ModelIdentity,
