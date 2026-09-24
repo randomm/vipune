@@ -1,4 +1,13 @@
+//! In-crate fake-embedder tests for the migration core (issue #221).
+//!
+//! All tests use a fake embedder (no model download). The fake is
+//! deterministic: it returns a 384-dim L2-normalised vector derived from
+//! the content, so re-running the pass on the same content is idempotent at
+//! the vector level. It fails on content starting with "FAIL:" to simulate
+//! per-row failures.
+
 use super::*;
+use crate::embedding::EmbeddingEngine;
 use crate::sqlite::identity;
 use tempfile::TempDir;
 
@@ -8,9 +17,9 @@ fn real_vec() -> Vec<f32> {
     vec![v; 384]
 }
 
-/// Deterministic fake embedder: returns a 384-dim f32 vector derived
-/// from the content so re-embedding the same content is idempotent.
-/// Fails on content starting with "FAIL:" to simulate per-row failures.
+/// Deterministic fake embedder: returns a 384-dim f32 vector derived from
+/// the content so re-embedding the same content is idempotent. Fails on
+/// content starting with "FAIL:" to simulate per-row failures.
 fn fake_embed(content: &str) -> Result<Vec<f32>, SqliteError> {
     if content.starts_with("FAIL:") {
         return Err(SqliteError::Sqlite("simulated embed failure".to_string()));
@@ -26,11 +35,6 @@ fn fake_embed(content: &str) -> Result<Vec<f32>, SqliteError> {
         }
     }
     Ok(vec)
-}
-
-/// Fake token counter: whitespace word count (conservative lower bound).
-fn fake_token_count(content: &str) -> Result<usize, SqliteError> {
-    Ok(content.split_whitespace().count())
 }
 
 fn test_config(db_path: &Path, model: &str) -> crate::config::Config {
@@ -85,10 +89,9 @@ fn test_migrate_success_records_identity_clears_marker() {
 
     let config = test_config(&db_path, "intfloat/multilingual-e5-small");
     let mut embed = |content: &str| fake_embed(content);
-    let mut tc = |content: &str| fake_token_count(content);
 
-    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut tc)
-        .expect("migration must succeed");
+    let report =
+        migrate_model_with_embedder(&mut db, &config, &mut embed).expect("migration must succeed");
 
     assert_eq!(report.reindexed, 2, "both rows should be reindexed");
     assert_eq!(report.skipped, 0);
@@ -120,9 +123,8 @@ fn test_migrate_unknown_model_fails_before_any_write() {
 
     let config = test_config(&db_path, "not/a-real-model");
     let mut embed = |content: &str| fake_embed(content);
-    let mut tc = |content: &str| fake_token_count(content);
 
-    let result = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut tc);
+    let result = migrate_model_with_embedder(&mut db, &config, &mut embed);
     assert!(result.is_err(), "unknown model must fail");
 
     // No marker written, no identity recorded.
@@ -137,13 +139,16 @@ fn test_migrate_unknown_model_fails_before_any_write() {
     );
 }
 
+/// Pre-flight refusal (issue #221): a row over the token limit yields
+/// `MigrationRefused` listing the offending id, and the call writes nothing
+/// — no marker, no row changes (embedding BLOBs byte-identical).
 #[test]
-fn test_migrate_preflight_refusal_lists_offending_ids_and_writes_nothing() {
+fn test_migrate_preflight_refusal_lists_offending_id_and_writes_nothing() {
     let (_dir, db_path) = make_db_dir();
-    let mut db = Database::open(&db_path).unwrap();
+    let db = Database::open(&db_path).unwrap();
 
-    // A row well over 512 words (hence well over 512 tokens).
-    let long_content: String = (0..600)
+    // A row well over 512 tokens under the real e5 tokenizer, plus a short row.
+    let long_content: String = (0..700)
         .map(|i| format!("word{i}"))
         .collect::<Vec<_>>()
         .join(" ");
@@ -154,33 +159,24 @@ fn test_migrate_preflight_refusal_lists_offending_ids_and_writes_nothing() {
         .insert("proj", "short content", &real_vec(), None, "fact", "active")
         .unwrap();
 
-    let blob_before_long = get_embedding_blob(&db, &long_id);
-    let blob_before_short = get_embedding_blob(&db, &short_id);
+    let long_blob_before = get_embedding_blob(&db, &long_id);
+    let short_blob_before = get_embedding_blob(&db, &short_id);
 
-    let config = test_config(&db_path, "intfloat/multilingual-e5-small");
-    let mut embed = |content: &str| fake_embed(content);
-    let mut tc = |content: &str| fake_token_count(content);
+    let engine = EmbeddingEngine::new("intfloat/multilingual-e5-small").unwrap();
+    let projects = db.list_all_project_ids().unwrap();
+    let offending = preflight_over_limit(&db, &projects, &engine).unwrap();
 
-    let result = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut tc);
-    let err = result.expect_err("pre-flight must refuse");
+    assert_eq!(offending.len(), 1, "only the long row should be reported");
+    assert_eq!(offending[0], long_id);
 
-    match err {
-        SqliteError::MigrationRefused { offending } => {
-            assert_eq!(offending.len(), 1, "only the long row should be reported");
-            assert_eq!(offending[0], long_id);
-        }
-        other => panic!("expected MigrationRefused, got {other:?}"),
-    }
-
-    // No marker written.
+    // No marker written; BLOBs byte-identical (nothing was written).
     assert_eq!(
         identity::read_marker(db.conn()).unwrap(),
         None,
         "no marker on pre-flight refusal"
     );
-    // BLOBs byte-identical.
-    assert_eq!(get_embedding_blob(&db, &long_id), blob_before_long);
-    assert_eq!(get_embedding_blob(&db, &short_id), blob_before_short);
+    assert_eq!(get_embedding_blob(&db, &long_id), long_blob_before);
+    assert_eq!(get_embedding_blob(&db, &short_id), short_blob_before);
 }
 
 #[test]
@@ -188,7 +184,7 @@ fn test_migrate_per_row_failure_keeps_marker_and_old_identity() {
     let (_dir, db_path) = make_db_dir();
     let mut db = Database::open(&db_path).unwrap();
 
-    // One good row, one row that will fail.
+    // One good row, one row that will fail to embed.
     db.insert("proj", "good content", &real_vec(), None, "fact", "active")
         .unwrap();
     let fail_id = db
@@ -202,7 +198,7 @@ fn test_migrate_per_row_failure_keeps_marker_and_old_identity() {
         )
         .unwrap();
 
-    // Record an old identity first (to verify it's preserved).
+    // Record an old identity first (to verify it is preserved).
     let old_identity = ModelIdentity {
         model_id: "BAAI/bge-small-en-v1.5".to_string(),
         revision: "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a".to_string(),
@@ -217,9 +213,8 @@ fn test_migrate_per_row_failure_keeps_marker_and_old_identity() {
 
     let config = test_config(&db_path, "intfloat/multilingual-e5-small");
     let mut embed = |content: &str| fake_embed(content);
-    let mut tc = |content: &str| fake_token_count(content);
 
-    let result = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut tc);
+    let result = migrate_model_with_embedder(&mut db, &config, &mut embed);
     let err = result.expect_err("must fail when a row fails to embed");
 
     match err {
@@ -278,10 +273,9 @@ fn test_migrate_rerun_after_interruption_performs_full_pass() {
 
     let config = test_config(&db_path, "intfloat/multilingual-e5-small");
     let mut embed = |content: &str| fake_embed(content);
-    let mut tc = |content: &str| fake_token_count(content);
 
-    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut tc)
-        .expect("re-run must succeed");
+    let report =
+        migrate_model_with_embedder(&mut db, &config, &mut embed).expect("re-run must succeed");
 
     // Full pass: all 3 rows re-embedded (not just the unprocessed remainder).
     assert_eq!(report.reindexed, 3, "full pass must re-embed all rows");
@@ -306,9 +300,8 @@ fn test_migrate_skips_corrupted_rows_and_still_clears_marker() {
 
     let config = test_config(&db_path, "intfloat/multilingual-e5-small");
     let mut embed = |content: &str| fake_embed(content);
-    let mut tc = |content: &str| fake_token_count(content);
 
-    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut tc)
+    let report = migrate_model_with_embedder(&mut db, &config, &mut embed)
         .expect("migration must succeed even with corrupted rows");
 
     assert_eq!(report.reindexed, 1);
@@ -331,7 +324,9 @@ fn test_migrate_skips_corrupted_rows_and_still_clears_marker() {
 
 #[test]
 fn test_migrate_fresh_store_with_no_identity_row() {
-    // A fresh store (no model_identity row at all) must be migratable.
+    // A fresh store (no model_identity row at all) must be migratable: the
+    // marker write inserts a row with NULL model_id + marker, and the final
+    // record replaces it.
     let (_dir, db_path) = make_db_dir();
     let mut db = Database::open(&db_path).unwrap();
     db.insert("proj", "content", &real_vec(), None, "fact", "active")
@@ -339,9 +334,8 @@ fn test_migrate_fresh_store_with_no_identity_row() {
 
     let config = test_config(&db_path, "intfloat/multilingual-e5-small");
     let mut embed = |content: &str| fake_embed(content);
-    let mut tc = |content: &str| fake_token_count(content);
 
-    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut tc)
+    let report = migrate_model_with_embedder(&mut db, &config, &mut embed)
         .expect("migration on a fresh store must succeed");
     assert_eq!(report.reindexed, 1);
 
@@ -355,8 +349,8 @@ fn test_migrate_fresh_store_with_no_identity_row() {
 
 #[test]
 fn test_migrate_bge_default_profile_empty_prefix() {
-    // The bge profile has no prefix; the fake token count (word count)
-    // should still work correctly.
+    // The bge profile has an empty passage prefix; the pass must still
+    // succeed and record the bge identity.
     let (_dir, db_path) = make_db_dir();
     let mut db = Database::open(&db_path).unwrap();
     db.insert(
@@ -371,9 +365,8 @@ fn test_migrate_bge_default_profile_empty_prefix() {
 
     let config = test_config(&db_path, "BAAI/bge-small-en-v1.5");
     let mut embed = |content: &str| fake_embed(content);
-    let mut tc = |content: &str| fake_token_count(content);
 
-    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut tc)
+    let report = migrate_model_with_embedder(&mut db, &config, &mut embed)
         .expect("bge migration must succeed");
     assert_eq!(report.reindexed, 1);
 
@@ -431,34 +424,10 @@ fn test_migration_marker_names_target() {
 }
 
 #[test]
-fn test_preflight_exactly_at_limit_is_allowed() {
-    // A row with exactly MAX_EMBEDDING_TOKENS "tokens" (word count)
-    // must be allowed (the check is strict >, not >=).
-    let (_dir, db_path) = make_db_dir();
-    let mut db = Database::open(&db_path).unwrap();
-
-    // Exactly 512 words.
-    let exact_content: String = (0..512)
-        .map(|i| format!("w{i}"))
-        .collect::<Vec<_>>()
-        .join(" ");
-    db.insert("proj", &exact_content, &real_vec(), None, "fact", "active")
-        .unwrap();
-
-    let config = test_config(&db_path, "intfloat/multilingual-e5-small");
-    let mut embed = |content: &str| fake_embed(content);
-    let mut tc = |content: &str| fake_token_count(content);
-
-    // Must succeed (512 is not > 512).
-    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut tc)
-        .expect("exactly-at-limit row must be allowed");
-    assert_eq!(report.reindexed, 1);
-}
-
-#[test]
 fn test_migrate_busy_database_fails_fast() {
-    // Open a second connection that holds a write lock, then attempt
-    // to migrate — the busy_timeout is 0 so it must fail immediately.
+    // Open a connection that holds a write lock, then attempt to open the
+    // database for migration — with the busy timeout at zero, the open must
+    // fail immediately ("database is locked") rather than waiting.
     let (_dir, db_path) = make_db_dir();
 
     // Hold a write lock on the database via a raw connection.
@@ -468,12 +437,11 @@ fn test_migrate_busy_database_fails_fast() {
         conn
     }));
 
-    // Database::open will fail because the file is locked by the
-    // exclusive transaction above.
+    // The open must fail because the file is locked and busy_timeout=0.
     let db = Database::open(&db_path);
     assert!(
         db.is_err(),
-        "opening a locked database with busy_timeout=0 must fail"
+        "opening a locked database with busy_timeout=0 must fail fast"
     );
 
     // Drop the locker to release the lock (cleanup).

@@ -15,6 +15,7 @@ mod merge;
 mod promote;
 mod prune;
 mod reindex;
+#[cfg(test)]
 pub mod reindex_force;
 
 #[cfg(test)]
@@ -43,6 +44,9 @@ mod merge_tests;
 
 #[cfg(test)]
 mod prune_tests;
+
+#[cfg(test)]
+mod reindex_cli_tests;
 
 #[cfg(test)]
 mod reindex_prefix_tests;

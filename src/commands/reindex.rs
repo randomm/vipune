@@ -3,9 +3,8 @@
 //! Re-embeds rows classified as mock, leaves real rows byte-identical, skips unknown.
 //!
 //! `--force` (issue #217): model-switch migration path. A thin wrapper over
-//! the bin-only [`reindex_force::force_migrate_database`] orchestration —
-//! the same crash-safe lifecycle the public `vipune::migrate_model` entry
-//! point uses (issue #221):
+//! the library's [`crate::migration`] module — the same crash-safe lifecycle
+//! the public `vipune::migrate_model` entry point uses (issue #221):
 //!
 //! 1. Resolve the target profile (unknown id → error, no writes).
 //! 2. Pre-flight: token-count every stored row with the passage role.
@@ -24,10 +23,10 @@
 //! `is_migrating` before calling the library. Plain reindex (no `--force`)
 //! still re-embeds only Mock-classified rows.
 
-use crate::commands::reindex_force::{self, ReembedFailure};
 use crate::embedding::{EmbeddingEngine, MAX_EMBEDDING_TOKENS};
 use crate::embedding_profiles::{EmbeddingRole, profile_for};
 use crate::errors::Error;
+use crate::migration::migrate_model;
 use crate::output::{ReindexFailure, ReindexResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::embedding::classify_embedding;
@@ -75,7 +74,7 @@ pub fn handle_reindex(
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Open database
-    let mut db = Database::open(db_path).map_err(|e| {
+    let db = Database::open(db_path).map_err(|e| {
         let err_msg = e.to_string();
         if err_msg.contains("database is locked") {
             return Error::Config(
@@ -141,7 +140,7 @@ pub fn handle_reindex(
             );
             return Ok(ExitCode::from(1));
         }
-        return handle_reindex_force(&mut db, model_id, &all_project_ids, json);
+        return handle_reindex_force(db_path, model_id, &all_project_ids, json);
     }
 
     // Plain reindex: mock-only classification path.
@@ -193,20 +192,16 @@ pub fn handle_reindex(
 
 /// `--force` model-switch path (issue #217).
 ///
-/// Thin wrapper over the bin-only `reindex_force::force_migrate_database`
-/// orchestration — the same crash-safe lifecycle the public
-/// `vipune::migrate_model` entry point uses (issue #221):
+/// Thin wrapper over the library's `migrate_model` (issue #221):
 ///
-/// - Resolve the target profile.
-/// - Print the "Migrating from … to …" / "Resuming interrupted migration to …"
-///   banner (stays in the CLI, not the library).
-/// - Pre-flight: token-count every row with the engine's passage role.
-///   Any row over the limit → print the offending ids, exit 1, no writes.
-/// - Re-embed via `force_migrate_database`. On a per-row failure the marker
-///   stays and the exit code is non-zero; on a clean pass the identity is
-///   recorded and the marker cleared, and the exit code is zero.
+/// - Open a handle to read the current identity and migration state for the
+///   banner, then drop it.
+/// - Call `migrate_model` (which opens its own handle with `busy_timeout=0`).
+/// - On a per-row failure the marker stays and the exit code is non-zero;
+///   on a clean pass the identity is recorded and the marker cleared, and
+///   the exit code is zero.
 fn handle_reindex_force(
-    db: &mut Database,
+    db_path: &Path,
     model_id: &str,
     projects: &[String],
     json: bool,
@@ -222,12 +217,25 @@ fn handle_reindex_force(
     // The passage prefix, for the pre-flight refusal message.
     let passage_prefix = EmbeddingRole::Passage.prefix(profile).to_string();
 
-    // Pre-check: if the database is already in a migrating state, the marker
-    // is already set. Re-running --force is safe (full idempotent pass), so
-    // proceed. But log the current identity and migration state for the
-    // user's awareness.
-    let current = identity::current_identity(db.conn()).map_err(Error::from)?;
-    let migrating = identity::is_migrating(db.conn()).map_err(Error::from)?;
+    // Read the current identity and migration state for the banner, then drop
+    // the handle so `migrate_model` can open its own connection without a
+    // lock conflict.
+    let (current, migrating) = {
+        let db = Database::open(db_path).map_err(|e| {
+            let err_msg = e.to_string();
+            if err_msg.contains("database is locked") {
+                return Error::Config(
+                    "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
+                );
+            }
+            Error::Config(err_msg)
+        })?;
+        db.set_busy_timeout(Duration::ZERO)?;
+        let current = identity::current_identity(db.conn()).map_err(Error::from)?;
+        let migrating = identity::is_migrating(db.conn()).map_err(Error::from)?;
+        (current, migrating)
+    };
+
     if !json {
         if migrating {
             println!("Resuming interrupted migration to {}...", target.display());
@@ -240,52 +248,59 @@ fn handle_reindex_force(
         }
     }
 
-    // Initialise the embedding engine (downloads model if needed)
-    let mut engine = EmbeddingEngine::new(model_id)?;
-
-    // Pre-flight: token-count every row with the engine's passage role
-    // (the engine is the single prefix site). Runs BEFORE any write so an
-    // over-limit row refuses the start with no marker and no row changes.
-    let offending = preflight_over_limit(db, &engine, projects)?;
-    if !offending.is_empty() {
-        eprintln!(
-            "Error: reindex --force refused to start: {} row(s) exceed the {}-token limit once the '{}' passage prefix is prepended. Fix or remove these memories, then re-run `vipune reindex --force`:",
-            offending.len(),
-            MAX_EMBEDDING_TOKENS,
-            passage_prefix.trim(),
-        );
-        for id in &offending {
-            eprintln!("  {id}");
-        }
-        eprintln!("No migration marker was written and no rows were changed.");
-        return Ok(ExitCode::from(1));
-    }
-
-    // Embed closure: delegates to the engine's passage-role method. The raw
-    // stored content never carries a prefix; the engine applies the target
-    // profile's passage prefix exactly once (single prefix site).
-    let embed = |content: &str| -> Result<Vec<f32>, crate::sqlite::Error> {
-        engine
-            .embed_passage(content)
-            .map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
+    // The library's config type mirrors the bin's field-for-field (see the
+    // main.rs mapping test); only the model id matters to the migration.
+    let lib_config = crate::config::Config {
+        embedding_model: model_id.to_string(),
+        ..Default::default()
     };
 
-    // Single lifecycle owner (issue #217): marker once, re-embed every row
-    // of every project, then identity + clear marker once — only on a fully
-    // clean pass. A failed pass leaves the marker in place.
-    // `force_migrate_database` returns Err(InvalidInput) on a per-row
-    // failure (marker stays); Ok on a clean pass with the failure list
-    // (always empty when Ok).
-    let (reindexed, skipped, failed) =
-        reindex_force::force_migrate_database(db, &target, projects, embed)
-            .map_err(|e| Error::SqliteModule(e.to_string()))?;
-    let failed: Vec<ReindexFailure> = failed
-        .into_iter()
-        .map(|f: ReembedFailure| ReindexFailure {
-            id: f.id,
-            error: f.error,
-        })
-        .collect();
+    // `migrate_model` opens its own handle with busy_timeout=0 and runs the
+    // full lifecycle: pre-flight token scan (no writes when refused),
+    // marker-first write, per-project re-embed, then identity + clear marker
+    // in one transaction only on a fully clean pass. The embed closure is
+    // built internally by `migrate_model` via `EmbeddingEngine::embed_passage`.
+    let result = migrate_model(db_path, &lib_config);
+
+    let (reindexed, skipped, failed) = match result {
+        Ok(report) => {
+            let failed: Vec<ReindexFailure> = report
+                .failures
+                .into_iter()
+                .map(|f| ReindexFailure {
+                    id: f.id,
+                    error: f.error,
+                })
+                .collect();
+            (report.reindexed, report.skipped, failed)
+        }
+        Err(crate::errors::Error::MigrationRefused { offending }) => {
+            eprintln!(
+                "Error: reindex --force refused to start: {} row(s) exceed the {}-token limit once the '{}' passage prefix is prepended. Fix or remove these memories, then re-run `vipune reindex --force`:",
+                offending.len(),
+                MAX_EMBEDDING_TOKENS,
+                passage_prefix.trim(),
+            );
+            for id in &offending {
+                eprintln!("  {id}");
+            }
+            eprintln!("No migration marker was written and no rows were changed.");
+            return Ok(ExitCode::from(1));
+        }
+        Err(crate::errors::Error::MigrationIncomplete { report }) => {
+            let failed: Vec<ReindexFailure> = report
+                .failures
+                .into_iter()
+                .map(|f| ReindexFailure {
+                    id: f.id,
+                    error: f.error,
+                })
+                .collect();
+            (report.reindexed, report.skipped, failed)
+        }
+        Err(e) => return Err(e),
+    };
+
     let total_failed = failed.len();
     let responses = vec![ReindexResponse {
         project_id: total_projects_scope(projects),
@@ -296,7 +311,7 @@ fn handle_reindex_force(
 
     if total_failed > 0 {
         // Any failure means the re-embed pass did not complete; the marker
-        // stays (force_migrate_database refuses to record the new identity
+        // stays (the migration module refuses to record the new identity
         // when the pass is incomplete) so operations refuse until a clean
         // re-run finishes.
         eprintln!(
@@ -333,30 +348,6 @@ fn handle_reindex_force(
         total_failed,
     )?;
     Ok(ExitCode::SUCCESS)
-}
-
-/// Token-count every stored row in `projects` with the engine's passage role
-/// and return the ids of rows that exceed `MAX_EMBEDDING_TOKENS`.
-///
-/// Runs BEFORE the migration marker is written (pre-flight, no writes).
-fn preflight_over_limit(
-    db: &Database,
-    engine: &EmbeddingEngine,
-    projects: &[String],
-) -> Result<Vec<String>, Error> {
-    let mut offending: Vec<String> = Vec::new();
-    for project_id in projects {
-        let rows = db.list_all_rows_for_project(project_id)?;
-        for (id, content, _embedding) in rows {
-            let count = engine
-                .token_count(EmbeddingRole::Passage, &content)
-                .map_err(Error::from)?;
-            if count > MAX_EMBEDDING_TOKENS {
-                offending.push(id);
-            }
-        }
-    }
-    Ok(offending)
 }
 
 /// Print the per-project JSON / human summary shared by plain and force paths.

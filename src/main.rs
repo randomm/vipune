@@ -9,6 +9,7 @@ mod errors;
 mod hook;
 mod memory;
 pub mod memory_types; // Re-export for library consumers: IngestPolicy, BatchIngestItemResult, BatchIngestResult
+mod migration;
 mod output;
 mod project;
 mod rrf;
