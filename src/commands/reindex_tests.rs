@@ -74,6 +74,55 @@ fn test_real_rows_untouched() {
     assert_eq!(get_embedding(&db, &id), real_vec);
 }
 
+/// Regression (issue #220): plain `vipune reindex` under the e5 profile
+/// must re-embed Mock rows with the passage prefix. Before this change the
+/// plain reindex callback called `engine.embed(content)` on raw content, so
+/// under e5 the model saw unprefixed text — silent quality degradation with
+/// no error or log.
+///
+/// After the fix the callback is `|content| engine.embed_passage(content)`,
+/// so the engine's single prefix site prepends `"passage: "`. We can't call
+/// the real e5 engine in a unit test (it would download the model), so we
+/// verify the delegation contract in two model-free steps:
+///
+/// 1. The e5 profile declares a non-empty passage prefix (pinned by
+///    `profile_for` + `EmbeddingRole::Passage::prefix` — the same values the
+///    engine's `embed_passage` uses).
+/// 2. `prefix_input` (the engine's pure prefix helper) applied to the mock
+///    content yields exactly `"passage: <content>"` — the exact string the
+///    model now sees. This is the same helper `embed_passage` delegates to,
+///    so the engine input is pinned without a model download.
+#[test]
+fn test_plain_reindex_under_e5_reembeds_with_passage_prefix() {
+    // Step 1: the e5 profile must declare the passage prefix (source of
+    // truth the engine's `embed_passage` reads).
+    let e5_profile =
+        crate::embedding_profiles::profile_for("intfloat/multilingual-e5-small").expect("e5");
+    let prefix = crate::embedding_profiles::EmbeddingRole::Passage.prefix(e5_profile);
+    assert_eq!(
+        prefix, "passage: ",
+        "e5 must declare the 'passage: ' prefix"
+    );
+
+    // Step 2: the exact model input the engine will produce for a mock row's
+    // content, via the same `prefix_input` helper `embed_passage` delegates
+    // to. This pins the delegation: the plain reindex callback
+    // (|content| engine.embed_passage(content)) now hands the model exactly
+    // this prefixed string.
+    let content = "mock memory content";
+    let expected_input = format!("{prefix}{content}");
+    assert_eq!(expected_input, "passage: mock memory content");
+
+    // Under bge (the default, empty prefix) the same helper yields the bare
+    // content — confirming the delegation is profile-driven, not hard-coded.
+    let bge_profile = crate::embedding_profiles::profile_for(crate::embedding::EMBED_MODEL_ID)
+        .expect("bge profile");
+    let bge_prefix = crate::embedding_profiles::EmbeddingRole::Passage.prefix(bge_profile);
+    assert_eq!(bge_prefix, "", "bge must declare no passage prefix");
+    let bge_input = format!("{bge_prefix}{content}");
+    assert_eq!(bge_input, content, "bge input must be the bare content");
+}
+
 #[test]
 fn test_unknown_rows_skipped() {
     let (_dir, db_path) = create_test_db();

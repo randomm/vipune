@@ -22,7 +22,9 @@ pub(crate) struct SearchContext {
 
 pub(crate) fn handle_validate(text: &str, model_id: &str, json: bool) -> Result<ExitCode, Error> {
     let engine = EmbeddingEngine::new(model_id)?;
-    let token_count = engine.token_count(text)?;
+    // Validate uses the passage role: stored text is what is added/re-indexed,
+    // so the count sees the same prefix the embed path will see.
+    let token_count = engine.token_count_passage(text)?;
 
     if token_count > crate::embedding::MAX_EMBEDDING_TOKENS {
         return Err(Error::ContentTooLong {

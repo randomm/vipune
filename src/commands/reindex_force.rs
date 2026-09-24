@@ -68,15 +68,15 @@ pub fn over_limit_row_ids(
     db: &Database,
     engine: &EmbeddingEngine,
     projects: &[String],
-    passage_prefix: &str,
 ) -> Result<Vec<OverLimitRow>, Error> {
     let mut offending: Vec<OverLimitRow> = Vec::new();
     for project_id in projects {
         let rows = db.list_all_rows_for_project(project_id)?;
         for (id, content, _embedding) in rows {
-            let prefixed = format!("{passage_prefix}{content}");
+            // The role-aware counter applies the profile's passage prefix —
+            // the engine is the single prefix site.
             let count = engine
-                .token_count(&prefixed)
+                .token_count_passage(&content)
                 .map_err(|e| Error::InvalidInput(format!("token count failed: {e}")))?;
             if count > MAX_EMBEDDING_TOKENS {
                 offending.push(OverLimitRow { id });

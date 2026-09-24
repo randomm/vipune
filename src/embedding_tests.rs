@@ -5,7 +5,7 @@
 #![cfg(test)]
 
 use crate::embedding::{
-    EmbeddingEngine, EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, MAX_EMBEDDING_TOKENS,
+    EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine, MAX_EMBEDDING_TOKENS,
     l2_normalize,
 };
 use crate::embedding_profiles::{EmbeddingRole, profile_for};
@@ -169,7 +169,10 @@ fn prefix_input_applies_e5_prefixes_exactly() {
 
     assert_eq!(passage, "passage: ");
     assert_eq!(query, "query: ");
-    assert_eq!(format!("{passage}The quick brown fox"), "passage: The quick brown fox");
+    assert_eq!(
+        format!("{passage}The quick brown fox"),
+        "passage: The quick brown fox"
+    );
     assert_eq!(format!("{query}brown fox?"), "query: brown fox?");
     // A bare text (empty prefix, bge) must be untouched.
     let bge = profile_for(EMBED_MODEL_ID).expect("bge profile");
@@ -195,7 +198,9 @@ fn prefix_input_applies_e5_prefixes_exactly() {
 #[test]
 fn test_integration_whitespace_only() {
     let mut engine = EmbeddingEngine::new(EMBED_MODEL_ID).expect("load model");
-    let embedding = engine.embed_passage("   \t\n  ").expect("embed whitespace text");
+    let embedding = engine
+        .embed_passage("   \t\n  ")
+        .expect("embed whitespace text");
 
     // Whitespace-only input should produce a valid embedding
     assert_eq!(embedding.len(), EMBEDDING_DIMS);
@@ -251,7 +256,11 @@ fn test_integration_e5_output_norm_is_one() {
     let embedding = engine
         .embed_passage("The quick brown fox jumps over the lazy dog.")
         .expect("embed e5 text");
-    assert_eq!(embedding.len(), EMBEDDING_DIMS, "e5 must produce 384-dim vectors");
+    assert_eq!(
+        embedding.len(),
+        EMBEDDING_DIMS,
+        "e5 must produce 384-dim vectors"
+    );
 
     let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
     assert!(
@@ -281,12 +290,18 @@ fn test_e5_embed_passage_equals_v013_get_embedding_output() {
     // yields exactly that string, then that embedding it is well-formed.
     let text = "The quick brown fox jumps over the lazy dog.";
     let input = engine.prefix_input(EmbeddingRole::Passage, text);
-    assert_eq!(input, "passage: The quick brown fox jumps over the lazy dog.");
+    assert_eq!(
+        input,
+        "passage: The quick brown fox jumps over the lazy dog."
+    );
 
     let embedding = engine.embed_passage(text).expect("embed e5 text");
     assert_eq!(embedding.len(), EMBEDDING_DIMS);
     let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
-    assert!((norm - 1.0).abs() < 0.01, "e5 output must be L2-normalised; got {norm}");
+    assert!(
+        (norm - 1.0).abs() < 0.01,
+        "e5 output must be L2-normalised; got {norm}"
+    );
 }
 
 #[ignore]
@@ -296,7 +311,9 @@ fn test_integration_long_text_rejection() {
 
     // Build text that reliably exceeds 512 tokens by counting on the full text
     let long_text = build_text_up_to_tokens(&engine, 600);
-    let actual_count = engine.token_count_passage(&long_text).expect("count tokens");
+    let actual_count = engine
+        .token_count_passage(&long_text)
+        .expect("count tokens");
     assert!(
         actual_count > MAX_EMBEDDING_TOKENS,
         "Test setup: need >512 tokens, got {}",
@@ -341,7 +358,9 @@ fn build_text_up_to_tokens(engine: &EmbeddingEngine, target: usize) -> String {
     while lo < hi {
         let mid = lo + (hi - lo).div_ceil(2);
         let candidate = "word ".repeat(mid);
-        let c = engine.token_count_passage(&candidate).expect("count tokens");
+        let c = engine
+            .token_count_passage(&candidate)
+            .expect("count tokens");
         if c <= target {
             lo = mid;
         } else {
@@ -453,7 +472,9 @@ fn test_integration_boundary_511_tokens() {
         MAX_EMBEDDING_TOKENS,
         count
     );
-    let embedding = engine.embed_passage(&text).expect("embed one-token-under text");
+    let embedding = engine
+        .embed_passage(&text)
+        .expect("embed one-token-under text");
     assert_eq!(embedding.len(), EMBEDDING_DIMS);
 }
 
@@ -478,5 +499,8 @@ fn test_token_count_method() {
     // Role-aware counters must agree for bge (empty prefixes), and the
     // query counter must also work.
     let query_count = engine.token_count_query(text).expect("count tokens");
-    assert_eq!(passage_count, query_count, "bge prefixes are empty: counts must agree");
+    assert_eq!(
+        passage_count, query_count,
+        "bge prefixes are empty: counts must agree"
+    );
 }
