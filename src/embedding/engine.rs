@@ -209,7 +209,11 @@ impl EmbeddingEngine {
     /// token-count methods all route through it, so the prefixed input the
     /// model sees is exactly `prefix + text` (the bare text when the profile
     /// declares no prefix, e.g. bge).
-    pub fn prefix_input(&self, role: EmbeddingRole, text: &str) -> String {
+    ///
+    /// Crate-visible (not public) so library callers cannot bypass the
+    /// empty-input short-circuit and the `ContentTooLong` check in
+    /// `embed_role`.
+    pub(crate) fn prefix_input(&self, role: EmbeddingRole, text: &str) -> String {
         let prefix = role.prefix(self.profile);
         if prefix.is_empty() {
             text.to_string()
