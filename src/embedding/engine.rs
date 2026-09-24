@@ -199,10 +199,6 @@ impl EmbeddingEngine {
     ///
     /// Counterpart of [`Self::embed_passage`] for the query role (the role-
     /// less `embed` has been removed).
-    ///
-    /// Library API: used by external callers of the public `EmbeddingEngine`
-    /// (the binary's own search path goes through `MemoryStore`).
-    #[allow(dead_code)]
     pub fn embed_query(&mut self, text: &str) -> Result<Vec<f32>, Error> {
         self.embed_role(text, EmbeddingRole::Query)
     }
@@ -223,9 +219,8 @@ impl EmbeddingEngine {
     }
 
     /// Shared prefix-aware embed path (crate-internal: called from
-    /// `embed_passage` / `embed_query` and the `MemoryStore` test-embedder
-    /// dispatch). Prepends the role's profile prefix, enforces the token
-    /// limit on the prefixed text, then runs the model.
+    /// `embed_passage` / `embed_query`). Prepends the role's profile prefix,
+    /// enforces the token limit on the prefixed text, then runs the model.
     ///
     /// Returns exactly 384-dimensional f32 vector, L2-normalized.
     ///
@@ -239,11 +234,7 @@ impl EmbeddingEngine {
     ///
     /// Texts whose *prefixed* form exceeds 512 tokens are rejected with a
     /// ContentTooLong error instead of being silently truncated.
-    pub(crate) fn embed_role(
-        &mut self,
-        text: &str,
-        role: EmbeddingRole,
-    ) -> Result<Vec<f32>, Error> {
+    fn embed_role(&mut self, text: &str, role: EmbeddingRole) -> Result<Vec<f32>, Error> {
         if text.is_empty() {
             return Ok(vec![0.0f32; EMBEDDING_DIMS]);
         }

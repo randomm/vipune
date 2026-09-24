@@ -509,7 +509,11 @@ impl MemoryStore {
             }
         }
 
-        // Production: the engine's role-aware method is the single prefix site.
-        self.embedder()?.embed_role(content, role)
+        // Production: the engine's role-aware public method is the single
+        // prefix site.
+        match role {
+            EmbeddingRole::Query => self.embedder()?.embed_query(content),
+            EmbeddingRole::Passage => self.embedder()?.embed_passage(content),
+        }
     }
 }
