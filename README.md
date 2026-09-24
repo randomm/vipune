@@ -182,7 +182,13 @@ To migrate an existing database to a different model:
 vipune reindex --force
 ```
 
-This re-embeds **every** stored memory with the newly configured model (a plain `vipune reindex` would re-embed nothing, since existing vectors already look real). The migration is crash-safe: it records a `migrating to <id>@<revision>` marker before re-embedding and clears it only in the same transaction that records the new identity. If the run is interrupted, the marker stays and operations refuse until you re-run `vipune reindex --force`, which performs a full idempotent pass from the beginning.
+This re-embeds **every** stored memory with the newly configured model (a plain `vipune reindex` would re-embed nothing, since existing vectors already look real). The migration is crash-safe and pre-checked:
+
+1. **Pre-flight** — `reindex --force` first token-counts every stored row with the target model's passage prefix. If any row would exceed the 512-token limit once prefixed, it refuses to start, writes nothing, and lists the offending memory ids. The migration marker is only ever written in a state the re-embed pass can complete.
+2. **Marker-first** — it records a `migrating to <id>@<revision>` marker before re-embedding.
+3. **Re-embed + record** — it re-embeds every row, then in one transaction records the new identity and clears the marker.
+
+If the run is interrupted, the marker stays and operations refuse until you re-run `vipune reindex --force`, which performs a full idempotent pass from the beginning.
 
 ## Air-gapped / Offline Usage
 

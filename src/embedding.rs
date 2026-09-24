@@ -368,6 +368,24 @@ mod tests {
             "CI HuggingFace cache key must reference a prefix of the pinned revision {} — otherwise CI may serve a stale model cache",
             EMBED_MODEL_REVISION
         );
+
+        // Both built-in profiles must be pinned in the CI cache (issue #217):
+        // the second cache key (HF_CACHE_KEY_E5) must reference the e5
+        // profile's revision prefix, and the README must document the e5
+        // revision so offline users pre-fetch the right one.
+        let e5 = crate::embedding_profiles::profile_for("intfloat/multilingual-e5-small")
+            .expect("e5 profile");
+        let e5_prefix: String = e5.revision.chars().take(7).collect();
+        assert!(
+            ci.contains(&e5_prefix),
+            "CI HuggingFace cache key for the e5 profile must reference a prefix of the pinned e5 revision {} — otherwise CI may serve a stale e5 model cache",
+            e5.revision
+        );
+        assert!(
+            readme.contains(&format!("--revision {}", e5.revision)),
+            "README air-gapped instructions must use `--revision {}` for the e5 profile — drift between docs and code",
+            e5.revision
+        );
     }
 
     #[test]
@@ -432,6 +450,37 @@ mod tests {
 
         assert_eq!(embedding.len(), 384);
         assert_eq!(embedding, vec![0.0f32; 384]);
+    }
+
+    /// Decision 5 (issue #217): the e5 model card specifies mean pooling over
+    /// `last_hidden_state` followed by L2 normalisation, the same pipeline as
+    /// bge. This real-model test asserts the e5 output has L2 norm ≈ 1.0 so
+    /// `classify_embedding`'s Real band [0.99, 1.01] still holds for e5
+    /// vectors (the Mock > 2.0 band is unaffected). Ignored because it
+    /// downloads the ~470 MB e5 model.
+    #[ignore]
+    #[test]
+    fn test_integration_e5_output_norm_is_one() {
+        use crate::embedding_profiles::profile_for;
+
+        let profile = profile_for("intfloat/multilingual-e5-small").expect("e5 profile");
+        let mut engine = EmbeddingEngine::new(profile.model_id).expect("load e5 model");
+
+        // Embed a short passage with the e5 passage prefix (the role that
+        // stored content uses) and assert the L2 normalisation holds.
+        let text = "passage: The quick brown fox jumps over the lazy dog.";
+        let embedding = engine.embed(text).expect("embed e5 text");
+        assert_eq!(embedding.len(), 384, "e5 must produce 384-dim vectors");
+
+        let norm: f32 = embedding.iter().map(|&x| x * x).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 0.01,
+            "e5 output must be L2-normalised (norm ≈ 1.0) so the Real band [0.99, 1.01] in classify_embedding holds; got {norm}"
+        );
+        assert!(
+            embedding.iter().all(|&x| x.is_finite()),
+            "e5 output must be all-finite"
+        );
     }
 
     #[ignore]

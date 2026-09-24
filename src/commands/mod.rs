@@ -226,8 +226,12 @@ pub enum Commands {
 
         /// Force a full model-switch migration: re-embed every row with the
         /// configured embedding profile, regardless of Mock/Real classification.
-        /// Writes a migration marker first; records the new model identity and
-        /// clears the marker in one transaction after a clean re-embed pass.
+        /// Before writing the migration marker, it pre-checks that no row exceeds
+        /// the 512-token limit once the profile's passage prefix is prepended
+        /// (refusing to start and listing the offending ids if so). After a
+        /// clean re-embed pass it records the new model identity and clears the
+        /// marker in one transaction. Re-run after an interruption to complete
+        /// the migration with a full idempotent pass.
         #[arg(long)]
         force: bool,
     },
