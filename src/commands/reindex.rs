@@ -12,7 +12,7 @@
 
 use crate::commands::reindex_force::{self, ReembedFailure};
 use crate::embedding::{EmbeddingEngine, MAX_EMBEDDING_TOKENS};
-use crate::embedding_profiles::{EmbeddingRole, profile_for};
+use crate::embedding_profiles::profile_for;
 use crate::errors::Error;
 use crate::output::{ReindexFailure, ReindexResponse, print_json};
 use crate::sqlite::Database;
@@ -142,9 +142,11 @@ pub fn handle_reindex(
             println!("Project {}: reindexing...", project_id);
         }
 
+        // The passage role applies the profile's prefix (e.g. `passage: `
+        // under e5) — the engine is the single prefix site.
         let mut embed_callback = |content: &str| {
             engine
-                .embed(content)
+                .embed_passage(content)
                 .map_err(|e| Error::Inference(e.to_string()))
         };
         let (reindexed, skipped, failed) =
@@ -204,7 +206,10 @@ fn handle_reindex_force(
         model_id: profile.model_id.to_string(),
         revision: profile.revision.to_string(),
     };
-    let passage_prefix = EmbeddingRole::Passage.prefix(profile).to_string();
+    // The passage prefix, for the error message below.
+    let passage_prefix = crate::embedding_profiles::EmbeddingRole::Passage
+        .prefix(profile)
+        .to_string();
 
     // Pre-check: if the database is already in a migrating state, the marker
     // is already set. Re-running --force is safe (full idempotent pass), so
@@ -233,7 +238,7 @@ fn handle_reindex_force(
     // report the offending ids, refuse to start, and write nothing — the
     // marker must only ever be written in a state the re-embed pass can
     // complete.
-    let offending = reindex_force::over_limit_row_ids(db, &engine, projects, &passage_prefix)?;
+    let offending = reindex_force::over_limit_row_ids(db, &engine, projects)?;
     if !offending.is_empty() {
         eprintln!(
             "Error: reindex --force refused to start: {} row(s) exceed the {}-token limit once the '{}' passage prefix is prepended. Fix or remove these memories, then re-run `vipune reindex --force`:",
@@ -248,15 +253,13 @@ fn handle_reindex_force(
         return Ok(ExitCode::from(1));
     }
 
-    // The embed closure applies the target profile's passage prefix exactly
-    // once per row: the raw stored content never carries a prefix (prefixes
-    // exist only at embed time), so a stored row must never be double-prefixed
-    // (see the no-double-prefixing edge case).
-    let prefix = passage_prefix.clone();
+    // The embed closure delegates to the engine's passage-role method: the
+    // raw stored content never carries a prefix, and the engine applies the
+    // target profile's passage prefix exactly once (the single prefix site —
+    // no double-prefixing, see the no-double-prefixing edge case).
     let embed = |content: &str| -> Result<Vec<f32>, crate::sqlite::Error> {
-        let prefixed = format!("{prefix}{content}");
         engine
-            .embed(&prefixed)
+            .embed_passage(content)
             .map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
     };
 

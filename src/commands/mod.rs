@@ -45,6 +45,9 @@ mod merge_tests;
 mod prune_tests;
 
 #[cfg(test)]
+mod reindex_prefix_tests;
+
+#[cfg(test)]
 mod reindex_tests;
 
 use crate::config;

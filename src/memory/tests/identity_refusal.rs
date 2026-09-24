@@ -62,7 +62,7 @@ fn prepared_store(
     (dir, store)
 }
 
-fn e5_model_id() -> &'static str {
+pub(crate) fn e5_model_id() -> &'static str {
     "intfloat/multilingual-e5-small"
 }
 
@@ -261,7 +261,7 @@ fn recording_embedder(
     })
 }
 
-fn e5_store_with_real_prefix_contract() -> (tempfile::TempDir, MemoryStore) {
+pub(crate) fn e5_store_with_real_prefix_contract() -> (tempfile::TempDir, MemoryStore) {
     let (dir, store) = prepared_store(e5_model_id(), |_| {});
     // Record the e5 identity so the identity check passes and add/search
     // actually run through the (test) embedder path.

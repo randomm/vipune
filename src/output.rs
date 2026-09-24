@@ -183,7 +183,7 @@ pub struct ReindexResponse {
 }
 
 /// A single failed row during reindex.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct ReindexFailure {
     /// Memory ID that failed.
     pub id: String,

@@ -7,7 +7,7 @@
 //! - a `1536` literal (the byte size) in a non-test file — byte-size
 //!   arithmetic must go through `EMBEDDING_DIMS * 4`, never a hand-written
 //!   1536;
-//! - a `const EMBEDDING_DIMS` re-declaration outside `src/embedding.rs`
+//! - a `const EMBEDDING_DIMS` re-declaration outside `src/embedding/`
 //!   (private shadowing was the specific pattern that hid in
 //!   `src/sqlite/embedding.rs` and `src/commands/{export,import}.rs`).
 //!
@@ -34,14 +34,15 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The single file that may declare `EMBEDDING_DIMS` as a `const`.
+/// The single directory whose files may declare `EMBEDDING_DIMS` as a
+/// `const`: `src/embedding/` (the engine split of the former
+/// `src/embedding.rs`; the re-export in `src/embedding/mod.rs` keeps the
+/// public `crate::embedding::EMBEDDING_DIMS` path unchanged).
 fn is_embedding_rs(path: &Path) -> bool {
-    path.file_name().and_then(|n| n.to_str()) == Some("embedding.rs")
-        && path
-            .parent()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            == Some("src")
+    path.parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some("embedding")
 }
 
 /// Whether `line` is a comment line (a `//` comment, including the `//!` and
@@ -125,7 +126,7 @@ fn no_private_embedding_dims_or_1536_literals_survive_in_src() {
             }
 
             // 1) No private re-declaration of EMBEDDING_DIMS outside
-            //    src/embedding.rs.
+            //    src/embedding/.
             if trimmed.contains("const EMBEDDING_DIMS") && !is_embedding_rs(file) {
                 violations.push(format!(
                     "{rel}:{line_no}: private `const EMBEDDING_DIMS` re-declaration: {trimmed}"

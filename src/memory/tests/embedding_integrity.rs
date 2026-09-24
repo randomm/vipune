@@ -135,7 +135,7 @@ fn test_stored_embedding_matches_embedder() {
     let fresh_embedding = store
         .embedder()
         .expect("embedder available")
-        .embed(content)
+        .embed_passage(content)
         .expect("embed");
 
     // Compare byte-for-byte (same model, same input => identical output)

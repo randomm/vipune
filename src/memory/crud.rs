@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 use crate::embedding::l2_normalize; // test-only; pure function, pragmatic coupling
-use crate::embedding_profiles::{EmbeddingRole, profile_for};
+use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, ConflictMemory, IngestPolicy};
@@ -464,10 +464,10 @@ impl MemoryStore {
     /// The role selects the model profile's prefix (see
     /// [`crate::embedding_profiles::EmbeddingRole`]): stored content (add /
     /// update / re-index) uses the passage prefix, search uses the query
-    /// prefix. The prefix is prepended *before* `EmbeddingEngine::embed` (or
-    /// the test embedder, in test builds) so the 512-token `ContentTooLong`
-    /// check sees the prefixed text; the prefix never touches the stored
-    /// content, FTS index, or output.
+    /// prefix. The engine's role-aware method (`embed_query` /
+    /// `embed_passage`) applies the prefix — the single production prefix
+    /// site — so the 512-token `ContentTooLong` check sees the prefixed text;
+    /// the prefix never touches the stored content, FTS index, or output.
     ///
     /// Before embedding, the store refuses if its model identity (recorded
     /// row, or the bge default when unrecorded) does not match the configured
@@ -489,29 +489,31 @@ impl MemoryStore {
         // while a `reindex --force` migration is in flight.
         self.assert_embedding_allowed()?;
 
-        // Resolve the profile for this store's configured model. Unknown ids
-        // are rejected here too — the chokepoint must never fall through to
-        // an unpinned download.
-        let profile = profile_for(&self.model_id)?;
-        let prefix = role.prefix(profile);
-
-        // No prefix (bge): the engine input is the raw content; otherwise
-        // the prefix is applied BEFORE the embedder is consulted.
-        let input: String = if prefix.is_empty() {
-            content.to_string()
-        } else {
-            format!("{prefix}{content}")
-        };
-
-        // Single dispatch site: the test embedder (test builds) or the real
-        // engine (production) — both see exactly `input`.
+        // In test builds the injected `test_embedder` (if present) is
+        // consulted instead of the real engine — the single test-only
+        // prefix site. It receives exactly `prefix + content` (the raw
+        // content, unprefixed, for bge) so existing recording tests keep
+        // passing. We resolve the profile directly from `model_id` (no
+        // engine construction) to avoid a model download in test builds.
         #[cfg(test)]
         {
             if let Some(f) = &self.test_embedder {
+                let profile = crate::embedding_profiles::profile_for(&self.model_id)?;
+                let prefix = role.prefix(profile);
+                let input = if prefix.is_empty() {
+                    content.to_string()
+                } else {
+                    format!("{prefix}{content}")
+                };
                 return f(&input);
             }
         }
 
-        self.embedder()?.embed(&input)
+        // Production: the engine's role-aware public method is the single
+        // prefix site.
+        match role {
+            EmbeddingRole::Query => self.embedder()?.embed_query(content),
+            EmbeddingRole::Passage => self.embedder()?.embed_passage(content),
+        }
     }
 }

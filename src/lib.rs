@@ -38,6 +38,18 @@
 //!
 //! Methods that generate embeddings (`add`, `search`, `update`) require `&mut self`
 //! because the embedding engine internally mutates state for ONNX tensor allocations.
+//!
+//! # Direct embedding (library)
+//!
+//! `EmbeddingEngine` is also available for callers that embed directly
+//! (bypassing `MemoryStore`). It is **prefix-aware**: use
+//! `embed_passage` for stored text and `embed_query` for search/classification
+//! text — the engine prepends the model profile's prefix (e5: `"query: "` /
+//! `"passage: "`; bge: none) before tokenisation, and the 512-token limit is
+//! enforced on the prefixed text. The engine performs **no** database
+//! model-identity check; if you keep vector caches outside vipune, key them
+//! by `vipune::current_identity`'s `ModelIdentity` (model id + revision) so a
+//! model switch invalidates them.
 
 pub mod config;
 pub mod embedding;
