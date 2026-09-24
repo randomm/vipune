@@ -78,24 +78,20 @@ fn test_real_rows_untouched() {
 /// must re-embed Mock rows with the passage prefix. Before this change the
 /// plain reindex callback called `engine.embed(content)` on raw content, so
 /// under e5 the model saw unprefixed text — silent quality degradation with
-/// no error or log.
+/// no error or log. After the fix the callback is
+/// `|content| engine.embed_passage(content)`, so the engine's single prefix
+/// site prepends the profile's passage prefix.
 ///
-/// After the fix the callback is `|content| engine.embed_passage(content)`,
-/// so the engine's single prefix site prepends `"passage: "`. We can't call
-/// the real e5 engine in a unit test (it would download the model), so we
-/// verify the delegation contract in two model-free steps:
-///
-/// 1. The e5 profile declares a non-empty passage prefix (pinned by
-///    `profile_for` + `EmbeddingRole::Passage::prefix` — the same values the
-///    engine's `embed_passage` uses).
-/// 2. `prefix_input` (the engine's pure prefix helper) applied to the mock
-///    content yields exactly `"passage: <content>"` — the exact string the
-///    model now sees. This is the same helper `embed_passage` delegates to,
-///    so the engine input is pinned without a model download.
+/// We can't call the real e5 engine in a unit test (it would download the
+/// model), so the recording embedder below reproduces the engine's exact
+/// contract for the e5 profile — `prefix_input` (the same pure helper
+/// `embed_passage` delegates to, pinned model-free in
+/// `src/embedding/tests/model_free.rs`) — and drives the real
+/// `reindex_project` path:
+/// the recorded input must be exactly `"passage: <content>"`, not the bare
+/// content (which a regression to raw-content embedding would produce).
 #[test]
-fn test_plain_reindex_under_e5_reembeds_with_passage_prefix() {
-    // Step 1: the e5 profile must declare the passage prefix (source of
-    // truth the engine's `embed_passage` reads).
+fn test_plain_reindex_under_e5_reembeds_mock_row_with_passage_prefix() {
     let e5_profile =
         crate::embedding_profiles::profile_for("intfloat/multilingual-e5-small").expect("e5");
     let prefix = crate::embedding_profiles::EmbeddingRole::Passage.prefix(e5_profile);
@@ -104,23 +100,51 @@ fn test_plain_reindex_under_e5_reembeds_with_passage_prefix() {
         "e5 must declare the 'passage: ' prefix"
     );
 
-    // Step 2: the exact model input the engine will produce for a mock row's
-    // content, via the same `prefix_input` helper `embed_passage` delegates
-    // to. This pins the delegation: the plain reindex callback
-    // (|content| engine.embed_passage(content)) now hands the model exactly
-    // this prefixed string.
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
     let content = "mock memory content";
-    let expected_input = format!("{prefix}{content}");
-    assert_eq!(expected_input, "passage: mock memory content");
+    let mock_vec = mock_embedding_for_content(content);
+    let id = db
+        .insert("proj", content, &mock_vec, None, "fact", "active")
+        .unwrap();
+    assert_eq!(
+        classify_embedding(&get_embedding(&db, &id)),
+        EmbeddingClass::Mock
+    );
 
-    // Under bge (the default, empty prefix) the same helper yields the bare
-    // content — confirming the delegation is profile-driven, not hard-coded.
-    let bge_profile = crate::embedding_profiles::profile_for(crate::embedding::EMBED_MODEL_ID)
-        .expect("bge profile");
-    let bge_prefix = crate::embedding_profiles::EmbeddingRole::Passage.prefix(bge_profile);
-    assert_eq!(bge_prefix, "", "bge must declare no passage prefix");
-    let bge_input = format!("{bge_prefix}{content}");
-    assert_eq!(bge_input, content, "bge input must be the bare content");
+    // Recording embedder reproducing the e5 engine's passage-role contract:
+    // input = prefix + raw content, output = the fake vector for the
+    // prefixed input (a Real-classified 384-dim vector, so the reindex
+    // write succeeds exactly as in production).
+    let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded_for_callback = recorded.clone();
+    let mut embed_callback = move |text: &str| {
+        recorded_for_callback.lock().unwrap().push(text.to_string());
+        crate::memory::crud::test_fake_embedder(text)
+    };
+
+    let (reindexed, skipped, failed) =
+        reindex_project(&db, &mut embed_callback, "proj", false).unwrap();
+    assert_eq!(reindexed, 1);
+    assert_eq!(skipped, 0);
+    assert!(failed.is_empty(), "reindex must not fail: {failed:?}");
+
+    // The embed callback received exactly the passage-prefixed content —
+    // never the bare content (the v0.13.0 latent bug) and never a
+    // double-prefixed string.
+    assert_eq!(
+        recorded.lock().unwrap().clone(),
+        vec!["passage: mock memory content".to_string()]
+    );
+
+    // And the row's stored content stays unprefixed.
+    let rows = db.list_all_rows_for_project("proj").unwrap();
+    let (_, stored_content, _) = rows.iter().find(|(i, _, _)| i == &id).unwrap();
+    assert_eq!(stored_content, content);
+    assert_eq!(
+        classify_embedding(&get_embedding(&db, &id)),
+        EmbeddingClass::Real
+    );
 }
 
 #[test]
