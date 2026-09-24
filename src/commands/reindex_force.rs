@@ -229,7 +229,7 @@ where
 /// Takes `&mut Database` (not `&Database`) because rusqlite 0.38's
 /// `Connection::transaction` takes `&mut self`; the caller (the `--force`
 /// handler) owns its `Database` for the migration's duration.
-pub fn record_identity_and_clear_marker(
+pub(crate) fn record_identity_and_clear_marker(
     db: &mut Database,
     identity: &ModelIdentity,
 ) -> Result<(), Error> {
@@ -263,7 +263,7 @@ pub fn record_identity_and_clear_marker(
 /// If no identity row exists yet, the row is inserted with a NULL
 /// `model_id` (and NULL `model_revision`) plus the marker; reads treat a
 /// NULL model id as "no recorded identity" (the bge default).
-pub fn write_marker(db: &Database, target: &ModelIdentity) -> Result<(), Error> {
+pub(crate) fn write_marker(db: &Database, target: &ModelIdentity) -> Result<(), Error> {
     let marker = migration_marker_for(target);
     db.conn()
         .execute(

@@ -181,7 +181,7 @@ pub fn handle_reindex(
 /// row's content is token-counted with the target profile's passage prefix
 /// BEFORE the marker is written, and a single row over the token limit
 /// refuses the start. This function then delegates the marker/identity
-/// lifecycle to [`identity::force_migrate_database`] — the single owner of
+/// lifecycle to [`reindex_force::force_migrate_database`] — the single owner of
 /// the per-database migration state — which writes the migration marker once
 /// before any row is touched, re-embeds every row of every project (with the
 /// passage prefix applied exactly once per row), and — only on a fully clean
