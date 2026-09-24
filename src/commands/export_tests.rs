@@ -401,12 +401,12 @@ fn test_export_corrupt_blob_row_does_not_abort() {
 fn test_export_header_records_recorded_identity() {
     let (_dir, db_path) = create_test_db();
     {
-        let db = Database::open(&db_path).unwrap();
+        let mut db = Database::open(&db_path).unwrap();
         let id = crate::sqlite::identity::ModelIdentity {
             model_id: "e5-model".to_string(),
             revision: "e5-rev".to_string(),
         };
-        crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id).unwrap();
+        crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
     }
     let db = Database::open(&db_path).unwrap();
     let conn = db.conn();

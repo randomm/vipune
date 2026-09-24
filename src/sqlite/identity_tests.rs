@@ -1,10 +1,9 @@
 //! Unit tests for `crate::sqlite::identity` (model identity, marker
-//! lifecycle, mismatch refusal, `reindex --force` migration).
+//! semantics, mismatch refusal, NULL-identity reads).
 //!
 //! Wired from `identity.rs` via `#[path = "identity_tests.rs"]`.
 
 use super::*;
-use crate::sqlite::Database;
 
 fn migrated_conn() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
@@ -36,67 +35,110 @@ fn test_no_row_means_none() {
     assert_eq!(read_marker(&conn).unwrap(), None);
 }
 
+/// A row with a NULL model_id (what the marker-first step of `reindex
+/// --force` writes on a store that had no recorded identity) must read as
+/// "no recorded identity" — the bge default — NOT as a bogus
+/// ""@<revision> identity.
 #[test]
-fn test_read_identity_roundtrip() {
+fn test_null_model_id_row_reads_as_no_identity() {
     let conn = migrated_conn();
-    let identity = e5_identity();
-    record_identity_and_clear_marker(&conn, &identity).unwrap();
-    assert_eq!(read_identity(&conn).unwrap(), Some(identity));
-    assert_eq!(read_marker(&conn).unwrap(), None);
-}
-
-#[test]
-fn test_write_marker_persists_marker_and_target() {
-    let conn = migrated_conn();
-    let target = e5_identity();
-    write_marker(&conn, &target).unwrap();
-    let marker = read_marker(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, NULL, NULL, 'migrating to x@y')",
+        [],
+    )
+    .unwrap();
     assert_eq!(
-        marker.as_deref(),
-        Some(
-            "migrating to intfloat/multilingual-e5-small@614241f622f53c4eeff9890bdc4f31cfecc418b3"
-        )
+        read_identity(&conn).unwrap(),
+        None,
+        "NULL model_id means no recorded identity (bge default)"
     );
-    // The marker row stages the interrupted target identity.
-    let staged = read_identity(&conn).unwrap();
-    assert_eq!(staged, Some(target));
-}
-
-#[test]
-fn test_record_identity_clears_marker() {
-    let conn = migrated_conn();
-    let target = e5_identity();
-    // Crash-recovery: a mid-run marker is cleared by the final
-    // record-and-clear step.
-    write_marker(&conn, &target).unwrap();
-    record_identity_and_clear_marker(&conn, &target).unwrap();
-    assert_eq!(read_identity(&conn).unwrap(), Some(target));
-    assert_eq!(read_marker(&conn).unwrap(), None);
-}
-
-#[test]
-fn test_marker_overwrites_existing_marker() {
-    let conn = migrated_conn();
-    let first = ModelIdentity {
-        model_id: "intfloat/multilingual-e5-small".to_string(),
-        revision: "rev-a".to_string(),
-    };
-    let second = ModelIdentity {
-        model_id: "BAAI/bge-small-en-v1.5".to_string(),
-        revision: "rev-b".to_string(),
-    };
-    write_marker(&conn, &first).unwrap();
-    write_marker(&conn, &second).unwrap();
-    let marker = read_marker(&conn).unwrap();
     assert_eq!(
-        marker.as_deref(),
-        Some("migrating to BAAI/bge-small-en-v1.5@rev-b")
+        read_marker(&conn).unwrap().as_deref(),
+        Some("migrating to x@y")
     );
-    // Still a single row.
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM model_identity", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(count, 1);
+    // The combined read agrees with the two single reads.
+    let (identity, marker) = read_identity_and_marker(&conn).unwrap();
+    assert_eq!(identity, None);
+    assert_eq!(marker.as_deref(), Some("migrating to x@y"));
+    // ...and the effective identity is the bge default.
+    assert_eq!(
+        current_identity(&conn).unwrap(),
+        ModelIdentity::default_identity()
+    );
+}
+
+/// Same NULL rule via the combined read on a fresh, row-less table.
+#[test]
+fn test_combined_read_no_row_is_none_none() {
+    let conn = migrated_conn();
+    assert_eq!(read_identity_and_marker(&conn).unwrap(), (None, None));
+}
+
+/// A row written by the marker-first step on a store that HAS a recorded
+/// identity leaves that identity untouched (only the marker is staged): the
+/// recorded identity stays old, the marker names the target.
+#[test]
+fn test_marker_only_write_leaves_recorded_identity_untouched() {
+    let conn = migrated_conn();
+    let old = ModelIdentity {
+        model_id: "old-model".to_string(),
+        revision: "old-rev".to_string(),
+    };
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, ?1, ?2, NULL)",
+        (&old.model_id, &old.revision),
+    )
+    .unwrap();
+    // Simulate the marker-first write (only the marker column is touched).
+    conn.execute(
+        "UPDATE model_identity SET migration_marker = ?1 WHERE id = 1",
+        ["migrating to new-model@new-rev"],
+    )
+    .unwrap();
+    assert_eq!(
+        read_identity(&conn).unwrap(),
+        Some(old.clone()),
+        "an interrupted migration must keep reporting the OLD identity"
+    );
+    assert_eq!(
+        read_marker(&conn).unwrap().as_deref(),
+        Some("migrating to new-model@new-rev"),
+        "the marker must name the interrupted TARGET"
+    );
+    // Refusal while the marker is present names the target, not the old id.
+    let err = assert_identity_ok(&conn, "old-model").unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("migrating"), "{msg}");
+    assert!(msg.contains("new-model@new-rev"), "{msg}");
+}
+
+/// The final record-and-clear step is the ONLY place the recorded identity
+/// is replaced: marker present + old identity → new identity + no marker.
+#[test]
+fn test_record_identity_replaces_old_and_clears_marker() {
+    let conn = migrated_conn();
+    let old = ModelIdentity {
+        model_id: "old-model".to_string(),
+        revision: "old-rev".to_string(),
+    };
+    let new = e5_identity();
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, ?1, ?2, 'migrating to x@y')",
+        (&old.model_id, &old.revision),
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE model_identity SET model_id = ?1, model_revision = ?2, migration_marker = NULL
+         WHERE id = 1",
+        (&new.model_id, &new.revision),
+    )
+    .unwrap();
+    assert_eq!(read_identity(&conn).unwrap(), Some(new.clone()));
+    assert_eq!(read_marker(&conn).unwrap(), None);
+    assert_eq!(current_identity(&conn).unwrap(), new);
 }
 
 // --- identity resolution ---
@@ -126,20 +168,6 @@ fn test_configured_identity_resolves_builtin_profiles() {
     assert_eq!(unknown.revision, "");
 }
 
-#[test]
-fn test_record_identity_overwrites_previous_identity() {
-    let conn = migrated_conn();
-    let first = ModelIdentity::default_identity();
-    record_identity_and_clear_marker(&conn, &first).unwrap();
-    let second = e5_identity();
-    record_identity_and_clear_marker(&conn, &second).unwrap();
-    assert_eq!(read_identity(&conn).unwrap(), Some(second));
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM model_identity", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(count, 1);
-}
-
 // --- assert_identity_ok (mismatch / marker refusal) ---
 
 #[test]
@@ -148,6 +176,23 @@ fn test_identity_ok_on_fresh_store_with_default_model() {
     // contract: existing stores behave exactly as before).
     let conn = migrated_conn();
     assert!(assert_identity_ok(&conn, EMBED_MODEL_ID).is_ok());
+}
+
+#[test]
+fn test_identity_ok_when_only_a_null_identity_marker_row_exists_with_matching_model() {
+    // A marker-only row (NULL identity) with the bge model configured: the
+    // identity is the bge default and matches, but the marker still refuses.
+    let conn = migrated_conn();
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, NULL, NULL, 'migrating to x@y')",
+        [],
+    )
+    .unwrap();
+    let err = assert_identity_ok(&conn, EMBED_MODEL_ID).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("migrating"), "{msg}");
+    assert!(msg.contains("x@y"), "{msg}");
 }
 
 #[test]
@@ -169,7 +214,12 @@ fn test_identity_refuses_on_recorded_mismatch() {
         model_id: "other-model".to_string(),
         revision: "rev-1".to_string(),
     };
-    record_identity_and_clear_marker(&conn, &recorded).unwrap();
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, ?1, ?2, NULL)",
+        (&recorded.model_id, &recorded.revision),
+    )
+    .unwrap();
     let err = assert_identity_ok(&conn, EMBED_MODEL_ID).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("other-model@rev-1"), "{msg}");
@@ -184,7 +234,12 @@ fn test_identity_refuses_revision_change_same_model_id() {
         model_id: EMBED_MODEL_ID.to_string(),
         revision: "some-other-revision".to_string(),
     };
-    record_identity_and_clear_marker(&conn, &recorded).unwrap();
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, ?1, ?2, NULL)",
+        (&recorded.model_id, &recorded.revision),
+    )
+    .unwrap();
     assert!(assert_identity_ok(&conn, EMBED_MODEL_ID).is_err());
 }
 
@@ -195,7 +250,12 @@ fn test_identity_refuses_while_marker_present() {
         model_id: "e5-model".to_string(),
         revision: "rev-2".to_string(),
     };
-    write_marker(&conn, &target).unwrap();
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, NULL, NULL, ?1)",
+        [format!("migrating to {}", target.display())],
+    )
+    .unwrap();
     let err = assert_identity_ok(&conn, EMBED_MODEL_ID).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("migrating"), "{msg}");
@@ -207,67 +267,39 @@ fn test_identity_refuses_while_marker_present() {
 fn test_identity_ok_after_matching_identity_recorded() {
     let conn = migrated_conn();
     let id = ModelIdentity::default_identity();
-    record_identity_and_clear_marker(&conn, &id).unwrap();
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, ?1, ?2, NULL)",
+        (&id.model_id, &id.revision),
+    )
+    .unwrap();
     assert!(assert_identity_ok(&conn, EMBED_MODEL_ID).is_ok());
 }
 
-// --- force_migrate_database (marker/identity lifecycle) ---
-
-/// Temp-path database with one project and one row, plus a target identity.
-fn migrate_db_with_row() -> (tempfile::TempDir, Database, ModelIdentity) {
-    let dir = tempfile::TempDir::new().unwrap();
-    let db = Database::open(&dir.path().join("test.db")).unwrap();
-    db.insert(
-        "proj",
-        "test content",
-        &vec![0.5; 384],
-        None,
-        "fact",
-        "active",
+/// A failed (interrupted) migration: the marker is in place, the recorded
+/// identity is still the OLD one, and the combined read reports both — the
+/// store can never report the new model while most vectors are old.
+#[test]
+fn test_interrupted_migration_reports_old_identity_and_marker_target() {
+    let conn = migrated_conn();
+    let old = ModelIdentity::default_identity();
+    let target = e5_identity();
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, ?1, ?2, ?3)",
+        (
+            &old.model_id,
+            &old.revision,
+            format!("migrating to {}", target.display()),
+        ),
     )
     .unwrap();
-    let target = ModelIdentity {
-        model_id: "test-model".to_string(),
-        revision: "test-rev".to_string(),
-    };
-    (dir, db, target)
-}
-
-/// The full success path; also keeps every intermediate function visible
-/// to the lib target's dead-code analysis.
-#[test]
-fn test_force_migrate_database_full_cycle() {
-    let (_dir, db, target) = migrate_db_with_row();
-    let (reindexed, skipped, failed) =
-        force_migrate_database(&db, &target, &["proj".to_string()], |_| Ok(vec![0.1; 384]))
-            .unwrap();
-    assert_eq!(reindexed, 1);
-    assert_eq!(skipped, 0);
-    assert!(failed.is_empty());
-
-    // Identity recorded, marker cleared.
-    assert_eq!(current_identity(db.conn()).unwrap(), target);
-    assert!(!is_migrating(db.conn()).unwrap());
-}
-
-/// A failed pass leaves the marker in place and never records the new
-/// identity through `record_identity_and_clear_marker` — so the store can
-/// never be left with a cleanly recorded identity while some project still
-/// holds old-model vectors (the silently mixed store the feature prevents).
-#[test]
-fn test_force_migrate_database_keeps_marker_records_nothing_on_failure() {
-    let (_dir, db, target) = migrate_db_with_row();
-    let result = force_migrate_database(&db, &target, &["proj".to_string()], |_content| {
-        Err(Error::Sqlite("boom".to_string()))
-    });
-    assert!(result.is_err(), "a failed pass must not return Ok");
-    // Marker stays, so operations refuse.
-    assert!(is_migrating(db.conn()).unwrap());
-    // The marker row stages the interrupted TARGET identity (written once by
-    // write_marker before the pass); the final identity is written only by
-    // record_identity_and_clear_marker, which a failed pass never reaches —
-    // and a marker-present store always refuses, so the state is
-    // unambiguous.
-    let staged = read_identity(db.conn()).unwrap();
-    assert_eq!(staged, Some(target.clone()), "marker row stages the target");
+    let (identity, marker) = read_identity_and_marker(&conn).unwrap();
+    assert_eq!(identity, Some(old.clone()), "identity is still the old one");
+    assert!(
+        marker.as_deref().is_some_and(|m| m.contains(&target.display())),
+        "marker names the target: {marker:?}"
+    );
+    assert_eq!(read_identity(&conn).unwrap(), Some(old));
+    assert!(is_migrating(&conn).unwrap());
 }

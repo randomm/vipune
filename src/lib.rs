@@ -73,39 +73,10 @@ pub use sqlite::Database;
 pub use sqlite::Memory;
 pub use sqlite::embedding::EmbeddingClass;
 pub use sqlite::embedding::classify_embedding;
-/// The `reindex --force` model-switch pre-flight: token-counts every row of
-/// every project with the target profile's passage prefix and returns the
-/// ids of rows that would exceed the token limit once embedded (the marker
-/// must only ever be written in a state the re-embed pass can complete).
-pub use sqlite::force_preflight::force_reembed_preflight;
-/// [`force_reembed_preflight`] pre-flight convenience wrapper that
-/// token-counts via the configured [`EmbeddingEngine`]'s tokenizer (no
-/// embedding work is done).
-pub use sqlite::force_preflight::force_reembed_preflight_with_engine;
-pub use sqlite::identity::ModelIdentity;
-/// Mismatch / in-flight-migration refusal for the embedding chokepoints:
-/// returns an error when a migration marker is present or the recorded
-/// identity differs from the configured model's identity.
-pub use sqlite::identity::assert_identity_ok;
-/// The model identity the store currently has: the recorded identity, or the
-/// bge default when no identity row is recorded.
-pub use sqlite::identity::current_identity;
-/// Run the `reindex --force` model-switch migration for the entire database:
-/// writes the migration marker once, re-embeds every row of every project,
-/// then records the new identity and clears the marker in one transaction.
-pub use sqlite::identity::force_migrate_database;
-/// True while a migration marker is present (an interrupted
-/// `reindex --force` that has not been completed).
-pub use sqlite::identity::is_migrating;
-/// The recorded model identity, if any (`None` means the store predates
-/// identity tracking and is treated as the bge default).
-pub use sqlite::identity::read_identity;
-/// Record the new model identity and clear the migration marker in ONE
-/// transaction — the only sanctioned exit from the "migrating" state.
-pub use sqlite::identity::record_identity_and_clear_marker;
-/// Write the migration marker for a target identity before any row of the
-/// re-embed pass is touched (marker-first crash safety).
-pub use sqlite::identity::write_marker;
+/// Model identity tracking (issue #217): the recorded (model id, revision)
+/// pair a database's vectors were produced with, plus the mismatch /
+/// in-flight-migration refusal shared by the embedding chokepoints.
+pub use sqlite::identity::{ModelIdentity, assert_identity_ok, current_identity, is_migrating, read_identity};
 
 #[cfg(test)]
 mod integration_tests {

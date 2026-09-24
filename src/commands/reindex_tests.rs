@@ -415,65 +415,23 @@ fn test_force_refused_without_all_projects() {
     assert!(identity::read_identity(db2.conn()).unwrap().is_none());
 }
 
-#[test]
-fn test_force_with_all_projects_migrates_entire_database() {
-    // Per-database migration lifecycle through the same helpers the handler
-    // uses: marker written once before the pass, then identity recorded +
-    // marker cleared only after every project is re-embedded. (The handler
-    // itself constructs a real EmbeddingEngine, which would download the
-    // model, so the wiring is verified here with a fake embedder; the
-    // handler's refusal path is covered by
-    // test_force_refused_without_all_projects above.)
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
-    db.insert(
-        "a",
-        "alpha",
-        &test_fake_embedder("a").unwrap(),
-        None,
-        "fact",
-        "active",
-    )
-    .unwrap();
-    db.insert(
-        "b",
-        "beta",
-        &test_fake_embedder("b").unwrap(),
-        None,
-        "fact",
-        "active",
-    )
-    .unwrap();
-
-    let target = identity::ModelIdentity {
-        model_id: "BAAI/bge-small-en-v1.5".to_string(),
-        revision: crate::embedding::EMBED_MODEL_REVISION.to_string(),
-    };
-    identity::write_marker(db.conn(), &target).unwrap();
-    let _ = identity::force_reembed_project(&db, "a", |_| Ok(vec![0.1; 384])).unwrap();
-    let _ = identity::force_reembed_project(&db, "b", |_| Ok(vec![0.1; 384])).unwrap();
-    identity::record_identity_and_clear_marker(db.conn(), &target).unwrap();
-
-    assert_eq!(identity::current_identity(db.conn()).unwrap(), target);
-    assert!(!identity::is_migrating(db.conn()).unwrap());
-}
-
 // ── reindex --force: model-switch migration path (issue #217) ──
 //
-// The --force path is exercised via `reindex_project_force` (the pure
-// row-re-embed loop, marker/identity writes factored out) plus the
-// identity marker helpers in `crate::sqlite::identity`. Together these
-// cover the contract: force re-embeds every row (including Real), writes
-// the marker first, and records identity + clears the marker atomically.
+// The --force path is exercised through the bin-only orchestration in
+// `crate::commands::reindex_force` (marker write, per-project re-embed pass,
+// record-and-clear) plus the read side in `crate::sqlite::identity`. These
+// cover the contract: force re-embeds every row (including Real), writes the
+// marker first (leaving the recorded identity untouched), and records the
+// identity + clears the marker in one transaction only on a clean pass.
 
-use crate::sqlite::force_preflight;
+use crate::commands::reindex_force::{self, ReembedFailure};
 use crate::sqlite::identity;
 
 fn force_reindex_project_with_fake_embedder(
-    db: &Database,
+    db: &mut Database,
     project_id: &str,
-) -> Result<(usize, usize, Vec<String>), crate::sqlite::Error> {
-    identity::force_reembed_project(db, project_id, |content| {
+) -> Result<(usize, usize, Vec<ReembedFailure>), crate::sqlite::Error> {
+    reindex_force::force_reembed_project(db, project_id, |content| {
         test_fake_embedder(content).map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
     })
 }
@@ -481,7 +439,7 @@ fn force_reindex_project_with_fake_embedder(
 #[test]
 fn test_force_reembeds_all_rows_including_real() {
     let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
+    let mut db = Database::open(&db_path).unwrap();
     let real_vec = test_fake_embedder("real memory").unwrap();
     let id = db
         .insert("proj", "real memory", &real_vec, None, "fact", "active")
@@ -503,7 +461,7 @@ fn test_force_reembeds_all_rows_including_real() {
         .unwrap();
 
     let (reindexed, skipped, failed) =
-        force_reindex_project_with_fake_embedder(&db, "proj").unwrap();
+        force_reindex_project_with_fake_embedder(&mut db, "proj").unwrap();
 
     // Force re-embeds every Mock and Real row (including Real-classified
     // vectors that plain reindex would skip); only Unknown (corrupted) rows skip.
@@ -529,19 +487,19 @@ fn test_force_reembeds_all_rows_including_real() {
 #[test]
 fn test_force_idempotent_rerun() {
     let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
+    let mut db = Database::open(&db_path).unwrap();
     let mock_vec = mock_embedding_for_content("A");
     let id = db
         .insert("proj", "A", &mock_vec, None, "fact", "active")
         .unwrap();
 
-    let (r1, _, _) = force_reindex_project_with_fake_embedder(&db, "proj").unwrap();
+    let (r1, _, _) = force_reindex_project_with_fake_embedder(&mut db, "proj").unwrap();
     assert_eq!(r1, 1);
     let emb1 = get_embedding(&db, &id);
 
     // Simulate an interrupted run: marker written, some rows re-embedded,
     // then re-run. Force path re-embeds every row from the start.
-    let (r2, _, _) = force_reindex_project_with_fake_embedder(&db, "proj").unwrap();
+    let (r2, _, _) = force_reindex_project_with_fake_embedder(&mut db, "proj").unwrap();
     assert_eq!(
         r2, 1,
         "force must re-embed every row on re-run, not skip Real"
@@ -551,10 +509,79 @@ fn test_force_idempotent_rerun() {
     assert_eq!(get_embedding(&db, &id), emb1);
 }
 
+/// Write a migration marker (marker-first step: touches ONLY the marker
+/// column; the recorded identity is left untouched).
+fn marker_only(conn: &rusqlite::Connection, target: &identity::ModelIdentity) {
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, NULL, NULL, ?1)
+         ON CONFLICT(id) DO UPDATE SET migration_marker = excluded.migration_marker",
+        [reindex_force::migration_marker_for(target)],
+    )
+    .unwrap();
+}
+
+/// Record the new identity and clear the marker in one transaction (the
+/// only sanctioned exit from the "migrating" state).
+fn record_identity(conn: &rusqlite::Connection, identity: &identity::ModelIdentity) {
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, ?1, ?2, NULL)
+         ON CONFLICT(id) DO UPDATE SET model_id = excluded.model_id,
+                                      model_revision = excluded.model_revision,
+                                      migration_marker = NULL",
+        (&identity.model_id, &identity.revision),
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_force_with_all_projects_migrates_entire_database() {
+    // Per-database migration lifecycle through the same helpers the handler
+    // uses: marker written once before the pass, then identity recorded +
+    // marker cleared only after every project is re-embedded. (The handler
+    // itself constructs a real EmbeddingEngine, which would download the
+    // model, so the wiring is verified here with a fake embedder; the
+    // handler's refusal path is covered by
+    // test_force_refused_without_all_projects above.)
+    let (_dir, db_path) = create_test_db();
+    let mut db = Database::open(&db_path).unwrap();
+    db.insert(
+        "a",
+        "alpha",
+        &test_fake_embedder("a").unwrap(),
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
+    db.insert(
+        "b",
+        "beta",
+        &test_fake_embedder("b").unwrap(),
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
+
+    let target = identity::ModelIdentity {
+        model_id: "BAAI/bge-small-en-v1.5".to_string(),
+        revision: crate::embedding::EMBED_MODEL_REVISION.to_string(),
+    };
+    marker_only(db.conn(), &target);
+    let _ = reindex_force::force_reembed_project(&mut db, "a", |_| Ok(vec![0.1; 384])).unwrap();
+    let _ = reindex_force::force_reembed_project(&mut db, "b", |_| Ok(vec![0.1; 384])).unwrap();
+    record_identity(db.conn(), &target);
+
+    assert_eq!(identity::current_identity(db.conn()).unwrap(), target);
+    assert!(!identity::is_migrating(db.conn()).unwrap());
+}
+
 #[test]
 fn test_force_marker_written_first_then_cleared() {
     let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
+    let mut db = Database::open(&db_path).unwrap();
     db.insert(
         "proj",
         "content",
@@ -570,8 +597,9 @@ fn test_force_marker_written_first_then_cleared() {
         revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
     };
 
-    // Step 1: marker-first write (before any re-embedding).
-    identity::write_marker(db.conn(), &target).unwrap();
+    // Step 1: marker-first write (before any re-embedding) — touches only
+    // the marker column; the recorded identity (none here) is untouched.
+    marker_only(db.conn(), &target);
     assert_eq!(
         identity::read_marker(db.conn()).unwrap().as_deref(),
         Some(
@@ -580,12 +608,12 @@ fn test_force_marker_written_first_then_cleared() {
     );
 
     // Step 2: re-embed all rows (simulated via the force loop).
-    force_reindex_project_with_fake_embedder(&db, "proj").unwrap();
+    force_reindex_project_with_fake_embedder(&mut db, "proj").unwrap();
     // Marker is still present while the re-embed pass runs.
     assert!(identity::read_marker(db.conn()).unwrap().is_some());
 
     // Step 3: record identity + clear marker in one transaction.
-    identity::record_identity_and_clear_marker(db.conn(), &target).unwrap();
+    record_identity(db.conn(), &target);
     assert_eq!(identity::read_identity(db.conn()).unwrap(), Some(target));
     assert_eq!(identity::read_marker(db.conn()).unwrap(), None);
 }
@@ -593,7 +621,7 @@ fn test_force_marker_written_first_then_cleared() {
 #[test]
 fn test_force_marker_survives_interruption() {
     let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
+    let mut db = Database::open(&db_path).unwrap();
     db.insert(
         "proj",
         "content",
@@ -610,23 +638,46 @@ fn test_force_marker_survives_interruption() {
     };
 
     // Marker written, then the process dies before the re-embed loop runs.
-    identity::write_marker(db.conn(), &target).unwrap();
-    // Simulate a crash: no record_identity_and_clear_marker call.
-    // The marker must still be present, so subsequent operations can refuse.
+    marker_only(db.conn(), &target);
+    // Simulate a crash: no record_identity call. The marker must still be
+    // present, so subsequent operations can refuse.
     assert!(identity::read_marker(db.conn()).unwrap().is_some());
 
     // Re-run: force re-embed + record identity + clear marker.
-    force_reindex_project_with_fake_embedder(&db, "proj").unwrap();
-    identity::record_identity_and_clear_marker(db.conn(), &target).unwrap();
+    force_reindex_project_with_fake_embedder(&mut db, "proj").unwrap();
+    record_identity(db.conn(), &target);
     assert_eq!(identity::read_marker(db.conn()).unwrap(), None);
     assert_eq!(identity::read_identity(db.conn()).unwrap(), Some(target));
+}
+
+/// A private generic scan helper mirroring `over_limit_row_ids`'s logic with
+/// an injectable token counter — lets this test exercise the over-limit
+/// report without a real `EmbeddingEngine` (no model download).
+fn over_limit_ids_with_counter(
+    db: &Database,
+    projects: &[String],
+    passage_prefix: &str,
+    count: impl Fn(&str) -> Result<usize, crate::sqlite::Error>,
+) -> Result<Vec<String>, crate::sqlite::Error> {
+    let mut offending: Vec<String> = Vec::new();
+    for project_id in projects {
+        let rows = db.list_all_rows_for_project(project_id)?;
+        for (id, content, _embedding) in rows {
+            let prefixed = format!("{passage_prefix}{content}");
+            let count = count(&prefixed)?;
+            if count > crate::embedding::MAX_EMBEDDING_TOKENS {
+                offending.push(id);
+            }
+        }
+    }
+    Ok(offending)
 }
 
 #[test]
 fn test_force_preflight_flags_overlength_rows_and_refuses_to_start() {
     // Decision 1: reindex --force token-counts every row with the target
     // profile's passage prefix BEFORE writing the marker. A row whose
-    // prefixed content exceeds 512 tokens must be listed by the pre-flight
+    // prefixed content exceeds 512 tokens must be reported by the pre-flight
     // scan, and the caller must refuse to start (write nothing).
     //
     // The token-count boundary itself (512 tokens) is covered by the
@@ -669,14 +720,13 @@ fn test_force_preflight_flags_overlength_rows_and_refuses_to_start() {
         |text: &str| -> Result<usize, crate::sqlite::Error> { Ok(text.split_whitespace().count()) };
 
     let projects = vec!["proj".to_string()];
-    let offending =
-        force_preflight::force_reembed_preflight(&db, &projects, "passage: ", count_words).unwrap();
+    let offending = over_limit_ids_with_counter(&db, &projects, "passage: ", count_words).unwrap();
 
-    assert_eq!(offending.len(), 1, "only the long row should be flagged");
+    assert_eq!(offending.len(), 1, "only the long row should be reported");
     assert_eq!(offending[0], long_id);
     assert!(
         !offending.iter().any(|id| id == &short_id),
-        "short row must not be flagged"
+        "short row must not be reported"
     );
 }
 
@@ -685,7 +735,7 @@ fn test_force_no_marker_when_identity_matches() {
     // If the database already has the target identity recorded and no marker,
     // a force re-embed pass leaves the identity unchanged (idempotent).
     let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
+    let mut db = Database::open(&db_path).unwrap();
     db.insert(
         "proj",
         "content",
@@ -697,9 +747,9 @@ fn test_force_no_marker_when_identity_matches() {
     .unwrap();
 
     let target = identity::ModelIdentity::default_identity();
-    identity::record_identity_and_clear_marker(db.conn(), &target).unwrap();
-    force_reindex_project_with_fake_embedder(&db, "proj").unwrap();
-    identity::record_identity_and_clear_marker(db.conn(), &target).unwrap();
+    record_identity(db.conn(), &target);
+    force_reindex_project_with_fake_embedder(&mut db, "proj").unwrap();
+    record_identity(db.conn(), &target);
     assert_eq!(identity::read_identity(db.conn()).unwrap(), Some(target));
     assert_eq!(identity::read_marker(db.conn()).unwrap(), None);
 }

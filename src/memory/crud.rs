@@ -475,9 +475,10 @@ impl MemoryStore {
     /// the single chokepoint through which add, update, search, hybrid
     /// search, batch ingest and supersede all embed.
     ///
-    /// In test builds, the injected `test_embedder` (if present) is
-    /// consulted AFTER the prefix is applied, so it receives exactly the
-    /// text the real engine would embed.
+    /// In test builds the injected `test_embedder` (if present) is
+    /// consulted instead of the real engine. There is ONE embedder
+    /// dispatch site, and both paths receive exactly `prefix + content`
+    /// (the raw content, unprefixed, for bge).
     pub(crate) fn get_embedding(
         &mut self,
         content: &str,
@@ -494,25 +495,16 @@ impl MemoryStore {
         let profile = profile_for(&self.model_id)?;
         let prefix = role.prefix(profile);
 
-        if prefix.is_empty() {
-            // No prefix (bge): byte-identical behaviour to the unprefixed path.
-            let input = content;
+        // No prefix (bge): the engine input is the raw content; otherwise
+        // the prefix is applied BEFORE the embedder is consulted.
+        let input: String = if prefix.is_empty() {
+            content.to_string()
+        } else {
+            format!("{prefix}{content}")
+        };
 
-            #[cfg(test)]
-            {
-                if let Some(f) = &self.test_embedder {
-                    return f(input);
-                }
-            }
-
-            return self.embedder()?.embed(input);
-        }
-
-        // The prefix is applied BEFORE the embedder is consulted — the test
-        // embedder (test builds) and the real engine (production) both see
-        // exactly `prefix + content`.
-        let input = format!("{prefix}{content}");
-
+        // Single dispatch site: the test embedder (test builds) or the real
+        // engine (production) — both see exactly `input`.
         #[cfg(test)]
         {
             if let Some(f) = &self.test_embedder {

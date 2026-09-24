@@ -12,11 +12,11 @@
 
 use crate::embedding::{EmbeddingEngine, MAX_EMBEDDING_TOKENS};
 use crate::embedding_profiles::{EmbeddingRole, profile_for};
+use crate::commands::reindex_force::{self, ReembedFailure};
 use crate::errors::Error;
 use crate::output::{ReindexFailure, ReindexResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::embedding::classify_embedding;
-use crate::sqlite::force_preflight;
 use crate::sqlite::identity;
 use crate::sqlite::identity::ModelIdentity;
 use std::path::Path;
@@ -61,7 +61,7 @@ pub fn handle_reindex(
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Open database
-    let db = Database::open(db_path).map_err(|e| {
+    let mut db = Database::open(db_path).map_err(|e| {
         let err_msg = e.to_string();
         if err_msg.contains("database is locked") {
             return Error::Config(
@@ -127,7 +127,7 @@ pub fn handle_reindex(
             );
             return Ok(ExitCode::from(1));
         }
-        return handle_reindex_force(&db, model_id, &all_project_ids, json);
+        return handle_reindex_force(&mut db, model_id, &all_project_ids, json);
     }
 
     // Plain reindex: mock-only classification path.
@@ -191,7 +191,7 @@ pub fn handle_reindex(
 /// idempotent pass). On any per-row failure the marker stays in place and the
 /// exit code is non-zero, so operations refuse until a clean re-run finishes.
 fn handle_reindex_force(
-    db: &Database,
+    db: &mut Database,
     model_id: &str,
     projects: &[String],
     json: bool,
@@ -230,14 +230,11 @@ fn handle_reindex_force(
     // Pre-flight (issue #217, decision 1): token-count every row's content
     // with the target profile's passage prefix BEFORE writing the migration
     // marker. If any row would exceed the 512-token limit once prefixed,
-    // refuse to start, write nothing, and list the offending ids — the marker
-    // must only ever be written in a state the re-embed pass can complete.
-    let offending = force_preflight::force_reembed_preflight_with_engine(
-        db,
-        &engine,
-        projects,
-        &passage_prefix,
-    )?;
+    // report the offending ids, refuse to start, and write nothing — the
+    // marker must only ever be written in a state the re-embed pass can
+    // complete.
+    let offending =
+        reindex_force::over_limit_row_ids(db, &engine, projects, &passage_prefix)?;
     if !offending.is_empty() {
         eprintln!(
             "Error: reindex --force refused to start: {} row(s) exceed the {}-token limit once the '{}' passage prefix is prepended. Fix or remove these memories, then re-run `vipune reindex --force`:",
@@ -245,8 +242,8 @@ fn handle_reindex_force(
             MAX_EMBEDDING_TOKENS,
             passage_prefix.trim(),
         );
-        for id in &offending {
-            eprintln!("  {id}");
+        for row in &offending {
+            eprintln!("  {}", row.id);
         }
         eprintln!("No migration marker was written and no rows were changed.");
         return Ok(ExitCode::from(1));
@@ -271,18 +268,14 @@ fn handle_reindex_force(
     // (marker write, row listing, final identity commit); a per-row embed
     // failure is returned as Ok with a populated `failed` list, so the
     // per-project failure reporting below stays intact.
-    let (reindexed, skipped, failed_str) =
-        identity::force_migrate_database(db, &target, projects, embed)
+    let (reindexed, skipped, failed) =
+        reindex_force::force_migrate_database(db, &target, projects, embed)
             .map_err(|e| Error::SqliteModule(e.to_string()))?;
-
-    let failed: Vec<ReindexFailure> = failed_str
-        .iter()
-        .map(|s| {
-            let parts: Vec<&str> = s.splitn(2, ": ").collect();
-            ReindexFailure {
-                id: parts.first().copied().unwrap_or("").to_string(),
-                error: parts.get(1).copied().unwrap_or("").to_string(),
-            }
+    let failed: Vec<ReindexFailure> = failed
+        .into_iter()
+        .map(|f: ReembedFailure| ReindexFailure {
+            id: f.id,
+            error: f.error,
         })
         .collect();
     let total_failed = failed.len();
@@ -309,6 +302,13 @@ fn handle_reindex_force(
             total_failed,
         )?;
         return Ok(ExitCode::from(1));
+    }
+
+    if skipped > 0 {
+        // Corrupted (Unknown-classified) rows cannot be re-embedded: they are
+        // skipped and left as-is. Surface it so a clean-looking success does
+        // not silently hide rows the pass never touched.
+        eprintln!("{skipped} row(s) had corrupted embeddings and were skipped");
     }
 
     if !json {

@@ -14,6 +14,32 @@ use crate::embedding_profiles::EmbeddingRole;
 use crate::memory::{MemoryStore, SearchOptions};
 use crate::sqlite::Database;
 
+/// Write a migration marker (marker-first step: touches ONLY the marker
+/// column; the recorded identity is left untouched).
+fn write_marker(conn: &rusqlite::Connection, target: &crate::sqlite::identity::ModelIdentity) {
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, NULL, NULL, ?1)
+         ON CONFLICT(id) DO UPDATE SET migration_marker = excluded.migration_marker",
+        [format!("migrating to {}", target.display())],
+    )
+    .unwrap();
+}
+
+/// Record a model identity (marker cleared; the only step that replaces the
+/// recorded identity).
+fn record_identity(conn: &rusqlite::Connection, identity: &crate::sqlite::identity::ModelIdentity) {
+    conn.execute(
+        "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+         VALUES (1, ?1, ?2, NULL)
+         ON CONFLICT(id) DO UPDATE SET model_id = excluded.model_id,
+                                      model_revision = excluded.model_revision,
+                                      migration_marker = NULL",
+        (&identity.model_id, &identity.revision),
+    )
+    .unwrap();
+}
+
 /// Open a fresh temp-path store configured for `model_id`, with the
 /// identity/marker state applied via `prepare`. The returned db path lets the
 /// test inspect the recorded state afterwards.
@@ -30,8 +56,6 @@ fn prepared_store(
         embedder: None,
         model_id: model_id.to_string(),
         config: Config::default(),
-        #[cfg(test)]
-        identity_checked: false,
         #[cfg(test)]
         test_embedder: Some(Box::new(crate::memory::crud::test_fake_embedder)),
     };
@@ -65,14 +89,13 @@ fn add_refuses_unrecorded_store_with_nondefault_model() {
 #[test]
 fn add_refuses_while_migration_marker_present() {
     let (_dir, mut store) = prepared_store(e5_model_id(), |db| {
-        crate::sqlite::identity::write_marker(
+        write_marker(
             db.conn(),
             &crate::sqlite::identity::ModelIdentity {
                 model_id: e5_model_id().to_string(),
                 revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
             },
-        )
-        .unwrap();
+        );
     });
     let result = store.add_with_conflict(
         "p",
@@ -101,14 +124,13 @@ fn search_refuses_on_mismatch() {
 #[test]
 fn search_refuses_while_migration_marker_present() {
     let (_dir, mut store) = prepared_store(e5_model_id(), |db| {
-        crate::sqlite::identity::write_marker(
+        write_marker(
             db.conn(),
             &crate::sqlite::identity::ModelIdentity {
                 model_id: e5_model_id().to_string(),
                 revision: "rev".to_string(),
             },
-        )
-        .unwrap();
+        );
     });
     let result = store.search("p", "query", 5, 0.0, SearchOptions::default());
     let err = result.expect_err("search must refuse while migrating");
@@ -166,11 +188,7 @@ fn add_succeeds_when_identity_matches() {
     // Recorded identity == configured → no refusal (zero-change contract for
     // a healthy store).
     let (_dir, mut store) = prepared_store(crate::embedding::EMBED_MODEL_ID, |db| {
-        crate::sqlite::identity::record_identity_and_clear_marker(
-            db.conn(),
-            &crate::sqlite::identity::ModelIdentity::default_identity(),
-        )
-        .unwrap();
+        record_identity(db.conn(), &crate::sqlite::identity::ModelIdentity::default_identity());
     });
     let result = store
         .add_with_conflict(
@@ -244,14 +262,13 @@ fn e5_store_with_real_prefix_contract() -> (tempfile::TempDir, MemoryStore) {
     let (dir, store) = prepared_store(e5_model_id(), |_| {});
     // Record the e5 identity so the identity check passes and add/search
     // actually run through the (test) embedder path.
-    crate::sqlite::identity::record_identity_and_clear_marker(
+    record_identity(
         store.db.conn(),
         &crate::sqlite::identity::ModelIdentity {
             model_id: e5_model_id().to_string(),
             revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
         },
-    )
-    .unwrap();
+    );
     (dir, store)
 }
 

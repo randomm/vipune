@@ -406,9 +406,9 @@ mod tests {
         // an error message goes to stderr). This test asserts the
         // pipeline-level contract: exit 0 AND zero rows inserted.
         let (config, _tmp, db_path) = make_config_with_tmp_db();
-        let _db = Database::open(&db_path).expect("open db");
-        crate::sqlite::identity::record_identity_and_clear_marker(
-            _db.conn(),
+        let mut _db = Database::open(&db_path).expect("open db");
+        crate::commands::reindex_force::record_identity_and_clear_marker(
+            &mut _db,
             &crate::sqlite::identity::ModelIdentity {
                 model_id: "intfloat/multilingual-e5-small".to_string(),
                 revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
@@ -439,8 +439,8 @@ mod tests {
     fn hook_refuses_while_migration_marker_present() {
         let (config, _tmp, db_path) = make_config_with_tmp_db();
         let _db = Database::open(&db_path).expect("open db");
-        crate::sqlite::identity::write_marker(
-            _db.conn(),
+        crate::commands::reindex_force::write_marker(
+            &_db,
             &crate::sqlite::identity::ModelIdentity {
                 model_id: "intfloat/multilingual-e5-small".to_string(),
                 revision: "rev".to_string(),

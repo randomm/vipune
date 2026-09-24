@@ -103,12 +103,12 @@ fn db_path_of(dir: &tempfile::TempDir) -> std::path::PathBuf {
 /// its pinned revision; arbitrary pairs are only comparable to an export
 /// header carrying the same pair.
 fn set_identity(db_path: &std::path::Path, model_id: &str, revision: &str) {
-    let db = crate::sqlite::Database::open(db_path).unwrap();
+    let mut db = crate::sqlite::Database::open(db_path).unwrap();
     let id = crate::sqlite::identity::ModelIdentity {
         model_id: model_id.to_string(),
         revision: revision.to_string(),
     };
-    crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id).unwrap();
+    crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
 }
 
 fn import_stdout_err(source_content: &str, db_path: &std::path::Path) -> Option<String> {
@@ -706,8 +706,8 @@ fn test_import_refuses_while_migration_marker_present() {
     let dir = make_db();
     let db_path = db_path_of(&dir);
     let db = crate::sqlite::Database::open(&db_path).unwrap();
-    crate::sqlite::identity::write_marker(
-        db.conn(),
+    crate::commands::reindex_force::write_marker(
+        &db,
         &crate::sqlite::identity::ModelIdentity {
             model_id: "e5".to_string(),
             revision: "rev".to_string(),

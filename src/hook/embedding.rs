@@ -12,7 +12,7 @@
 
 use crate::config::Config;
 use crate::errors::Error;
-use crate::sqlite::identity;
+use crate::sqlite::identity::assert_identity_ok;
 
 use crate::embedding::EMBEDDING_DIMS;
 
@@ -76,7 +76,7 @@ pub fn placeholder_embedding(content: &str) -> Vec<f32> {
 /// `vipune reindex --force`, or `Error::SqliteModule` if the identity table
 /// cannot be read.
 pub fn ensure_hook_identity_ok(db: &crate::sqlite::Database, config: &Config) -> Result<(), Error> {
-    identity::assert_identity_ok(db.conn(), config.embedding_model.as_str())
+    assert_identity_ok(db.conn(), config.embedding_model.as_str())
 }
 
 #[cfg(test)]
@@ -143,12 +143,12 @@ mod tests {
     #[test]
     fn hook_identity_ok_when_recorded_matches_configured() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db = open_db(&dir);
+        let mut db = open_db(&dir);
         let id = test_identity(
             crate::embedding::EMBED_MODEL_ID,
             crate::embedding::EMBED_MODEL_REVISION,
         );
-        crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id).unwrap();
+        crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
         let config = test_config(crate::embedding::EMBED_MODEL_ID);
         assert!(ensure_hook_identity_ok(&db, &config).is_ok());
     }
@@ -156,9 +156,9 @@ mod tests {
     #[test]
     fn hook_identity_refuses_on_mismatch() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db = open_db(&dir);
+        let mut db = open_db(&dir);
         let id = test_identity("other-model", "rev-1");
-        crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id).unwrap();
+        crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
         let config = test_config(crate::embedding::EMBED_MODEL_ID);
         let err = ensure_hook_identity_ok(&db, &config).unwrap_err();
         let msg = err.to_string();
@@ -177,7 +177,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let db = open_db(&dir);
         let target = test_identity("e5-model", "rev-2");
-        crate::sqlite::identity::write_marker(db.conn(), &target).unwrap();
+        crate::commands::reindex_force::write_marker(&db, &target).unwrap();
         let config = test_config(crate::embedding::EMBED_MODEL_ID);
         let err = ensure_hook_identity_ok(&db, &config).unwrap_err();
         let msg = err.to_string();

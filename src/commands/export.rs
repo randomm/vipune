@@ -18,6 +18,12 @@
 //! row exists — see `crate::sqlite::identity`). Importers compare these
 //! against the destination database's identity and refuse on mismatch.
 //!
+//! The header identity is ADVISORY, not proof: it is whatever the source
+//! store recorded at export time (or its default), and a hand-edited or
+//! mis-labelled header is not verified against the actual vectors. The
+//! import-side refusal is a guard against the common mistake, not a
+//! guarantee of vector provenance.
+//!
 //! Row line (12 fields; the DB column `type` is renamed `memory_type` so the
 //! JSON key never collides with the header's `type` discriminator):
 //! `{"id", "project_id", "content", "metadata", "embedding" (base64),
