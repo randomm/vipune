@@ -1,13 +1,14 @@
 //! In-crate fake-embedder tests for the migration core (issue #221).
 //!
-//! All tests use a fake embedder (no model download). The fake is
-//! deterministic: it returns a 384-dim L2-normalised vector derived from
-//! the content, so re-running the pass on the same content is idempotent at
-//! the vector level. It fails on content starting with "FAIL:" to simulate
-//! per-row failures.
+//! All tests use fake closures (no model download, no real engine). The
+//! embedder is deterministic: it returns a 384-dim L2-normalised vector
+//! derived from the content, so re-running the pass on the same content is
+//! idempotent at the vector level. It fails on content starting with "FAIL:"
+//! to simulate per-row failures. The token counter is a word counter, so any
+//! row with >512 words is flagged by the pre-flight (a lower bound on the
+//! real token count).
 
 use super::*;
-use crate::embedding::EmbeddingEngine;
 use crate::sqlite::identity;
 use tempfile::TempDir;
 
@@ -37,12 +38,20 @@ fn fake_embed(content: &str) -> Result<Vec<f32>, SqliteError> {
     Ok(vec)
 }
 
+/// Stub token counter: counts whitespace-separated tokens (a lower bound on
+/// the real token count, so the >512 threshold is conservative).
+fn word_count(content: &str) -> Result<usize, SqliteError> {
+    Ok(content.split_whitespace().count())
+}
+
 fn test_config(db_path: &Path, model: &str) -> crate::config::Config {
-    crate::config::Config {
-        database_path: db_path.to_path_buf(),
-        embedding_model: model.to_string(),
-        ..Default::default()
-    }
+    // `Config::load()` resolves the full default config (including the
+    // home-dir database path). The migration only reads `embedding_model`
+    // and `database_path` here; the other fields are carried through as-is.
+    let mut config = crate::config::Config::load().unwrap();
+    config.database_path = db_path.to_path_buf();
+    config.embedding_model = model.to_string();
+    config
 }
 
 fn make_db_dir() -> (TempDir, std::path::PathBuf) {
@@ -89,9 +98,10 @@ fn test_migrate_success_records_identity_clears_marker() {
 
     let config = test_config(&db_path, "intfloat/multilingual-e5-small");
     let mut embed = |content: &str| fake_embed(content);
+    let mut count = |content: &str| word_count(content);
 
-    let report =
-        migrate_model_with_embedder(&mut db, &config, &mut embed).expect("migration must succeed");
+    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut count)
+        .expect("migration must succeed");
 
     assert_eq!(report.reindexed, 2, "both rows should be reindexed");
     assert_eq!(report.skipped, 0);
@@ -123,8 +133,9 @@ fn test_migrate_unknown_model_fails_before_any_write() {
 
     let config = test_config(&db_path, "not/a-real-model");
     let mut embed = |content: &str| fake_embed(content);
+    let mut count = |content: &str| word_count(content);
 
-    let result = migrate_model_with_embedder(&mut db, &config, &mut embed);
+    let result = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut count);
     assert!(result.is_err(), "unknown model must fail");
 
     // No marker written, no identity recorded.
@@ -145,9 +156,10 @@ fn test_migrate_unknown_model_fails_before_any_write() {
 #[test]
 fn test_migrate_preflight_refusal_lists_offending_id_and_writes_nothing() {
     let (_dir, db_path) = make_db_dir();
-    let db = Database::open(&db_path).unwrap();
+    let mut db = Database::open(&db_path).unwrap();
 
-    // A row well over 512 tokens under the real e5 tokenizer, plus a short row.
+    // A row well over 512 words (hence over the stub counter's 512 limit),
+    // plus a short row.
     let long_content: String = (0..700)
         .map(|i| format!("word{i}"))
         .collect::<Vec<_>>()
@@ -162,12 +174,22 @@ fn test_migrate_preflight_refusal_lists_offending_id_and_writes_nothing() {
     let long_blob_before = get_embedding_blob(&db, &long_id);
     let short_blob_before = get_embedding_blob(&db, &short_id);
 
-    let engine = EmbeddingEngine::new("intfloat/multilingual-e5-small").unwrap();
-    let projects = db.list_all_project_ids().unwrap();
-    let offending = preflight_over_limit(&db, &projects, &engine).unwrap();
+    let config = test_config(&db_path, "intfloat/multilingual-e5-small");
+    let mut embed = |content: &str| fake_embed(content);
+    let mut count = |content: &str| word_count(content);
 
-    assert_eq!(offending.len(), 1, "only the long row should be reported");
-    assert_eq!(offending[0], long_id);
+    let err = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut count)
+        .expect_err("pre-flight must refuse when a row is over the limit");
+    match err {
+        SqliteError::MigrationRefused { offending } => {
+            assert_eq!(
+                offending,
+                vec![long_id.clone()],
+                "only the long row should be reported"
+            );
+        }
+        other => panic!("expected MigrationRefused, got {other:?}"),
+    }
 
     // No marker written; BLOBs byte-identical (nothing was written).
     assert_eq!(
@@ -213,8 +235,9 @@ fn test_migrate_per_row_failure_keeps_marker_and_old_identity() {
 
     let config = test_config(&db_path, "intfloat/multilingual-e5-small");
     let mut embed = |content: &str| fake_embed(content);
+    let mut count = |content: &str| word_count(content);
 
-    let result = migrate_model_with_embedder(&mut db, &config, &mut embed);
+    let result = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut count);
     let err = result.expect_err("must fail when a row fails to embed");
 
     match err {
@@ -273,9 +296,10 @@ fn test_migrate_rerun_after_interruption_performs_full_pass() {
 
     let config = test_config(&db_path, "intfloat/multilingual-e5-small");
     let mut embed = |content: &str| fake_embed(content);
+    let mut count = |content: &str| word_count(content);
 
-    let report =
-        migrate_model_with_embedder(&mut db, &config, &mut embed).expect("re-run must succeed");
+    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut count)
+        .expect("re-run must succeed");
 
     // Full pass: all 3 rows re-embedded (not just the unprocessed remainder).
     assert_eq!(report.reindexed, 3, "full pass must re-embed all rows");
@@ -300,8 +324,9 @@ fn test_migrate_skips_corrupted_rows_and_still_clears_marker() {
 
     let config = test_config(&db_path, "intfloat/multilingual-e5-small");
     let mut embed = |content: &str| fake_embed(content);
+    let mut count = |content: &str| word_count(content);
 
-    let report = migrate_model_with_embedder(&mut db, &config, &mut embed)
+    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut count)
         .expect("migration must succeed even with corrupted rows");
 
     assert_eq!(report.reindexed, 1);
@@ -334,8 +359,9 @@ fn test_migrate_fresh_store_with_no_identity_row() {
 
     let config = test_config(&db_path, "intfloat/multilingual-e5-small");
     let mut embed = |content: &str| fake_embed(content);
+    let mut count = |content: &str| word_count(content);
 
-    let report = migrate_model_with_embedder(&mut db, &config, &mut embed)
+    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut count)
         .expect("migration on a fresh store must succeed");
     assert_eq!(report.reindexed, 1);
 
@@ -365,8 +391,9 @@ fn test_migrate_bge_default_profile_empty_prefix() {
 
     let config = test_config(&db_path, "BAAI/bge-small-en-v1.5");
     let mut embed = |content: &str| fake_embed(content);
+    let mut count = |content: &str| word_count(content);
 
-    let report = migrate_model_with_embedder(&mut db, &config, &mut embed)
+    let report = migrate_model_with_embedder(&mut db, &config, &mut embed, &mut count)
         .expect("bge migration must succeed");
     assert_eq!(report.reindexed, 1);
 

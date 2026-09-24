@@ -66,6 +66,25 @@ fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
 ///
 /// Returns error if the database is locked (we set busy_timeout=0 for fast-fail),
 /// the embedder cannot be initialised, or all rows fail.
+/// The library mirror of the CLI's resolved config: every field copied
+/// explicitly (the same totality contract as `main.rs`'s `to_lib_config`),
+/// so the migration runs with the values the CLI is using.
+fn config_from_cli() -> crate::config::Config {
+    use crate::config::Config as CliConfig;
+    let cli = CliConfig::load().expect("CLI config was already loaded at startup");
+    crate::config::Config {
+        database_path: cli.database_path,
+        embedding_model: cli.embedding_model,
+        similarity_threshold: cli.similarity_threshold,
+        recency_weight: cli.recency_weight,
+        hybrid: cli.hybrid,
+        decay_refresh_days: cli.decay_refresh_days,
+        promotion_threshold: cli.promotion_threshold,
+        prune_retrieval_limit: cli.prune_retrieval_limit,
+        prune_min_age_days: cli.prune_min_age_days,
+    }
+}
+
 pub fn handle_reindex(
     db_path: &Path,
     model_id: &str,
@@ -248,18 +267,17 @@ fn handle_reindex_force(
         }
     }
 
-    // The library's config type mirrors the bin's field-for-field (see the
-    // main.rs mapping test); only the model id matters to the migration.
-    let lib_config = crate::config::Config {
-        embedding_model: model_id.to_string(),
-        ..Default::default()
-    };
+    // The migration sees the same resolved config the CLI is running with
+    // (every field copied explicitly — see `config_from_cli`); only the
+    // model id is re-pointed at the CLI's.
+    let mut lib_config = config_from_cli();
+    lib_config.embedding_model = model_id.to_string();
 
-    // `migrate_model` opens its own handle with busy_timeout=0 and runs the
-    // full lifecycle: pre-flight token scan (no writes when refused),
-    // marker-first write, per-project re-embed, then identity + clear marker
-    // in one transaction only on a fully clean pass. The embed closure is
-    // built internally by `migrate_model` via `EmbeddingEngine::embed_passage`.
+    // `migrate_model` opens its own handle with busy_timeout=0, constructs a
+    // single embedding engine, and runs the full lifecycle with one
+    // pre-flight: token scan (no writes when refused), marker-first write,
+    // per-project re-embed, then identity + clear marker in one transaction
+    // only on a fully clean pass.
     let result = migrate_model(db_path, &lib_config);
 
     let (reindexed, skipped, failed) = match result {

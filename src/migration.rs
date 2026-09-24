@@ -5,9 +5,9 @@
 //!
 //! 1. Resolve the configured model profile (unknown id → error, no writes).
 //! 2. **Pre-flight**: token-count every stored row's content with the target
-//!    profile's *passage* role. Any row over the 512-token limit →
-//!    `Error::MigrationRefused { offending }` listing every offending id.
-//!    Nothing is written; no rows are changed.
+//!    profile's *passage* role (via the caller-supplied counter). Any row
+//!    over the 512-token limit → `Error::MigrationRefused { offending }`
+//!    listing every offending id. Nothing is written; no rows are changed.
 //! 3. **Marker first**: the migration marker naming the target identity is
 //!    (re)written before any row is touched. A crash mid-pass leaves the
 //!    marker behind, so all embedding operations refuse until a re-run
@@ -23,20 +23,19 @@
 //!    recorded identity is kept.
 //! 7. Re-running after an interruption performs a FULL pass.
 //!
-//! The embedding source stays injectable internally: `migrate_model`
-//! delegates to the crate-private `migrate_model_with_embedder`, whose
-//! `embed` closure receives the **raw stored content** (never prefixed —
-//! prefixes live only at embed time, never in the DB) and must return a
-//! 384-dim f32 vector. The production closure calls
-//! `EmbeddingEngine::embed_passage`; in-crate tests pass a fake embedder so
-//! no model download happens (see `src/migration_tests.rs`).
+//! Both the embedder and the pre-flight token counter are injectable via
+//! crate-private closures: `migrate_model` builds one over a single
+//! `EmbeddingEngine` (the pre-flight and the re-embed pass share that
+//! engine, so the pre-flight runs exactly once). In-crate tests pass fake
+//! closures so no model download happens (see `src/migration_tests.rs`).
 
-use crate::embedding::EmbeddingEngine;
+use crate::embedding::{EMBEDDING_DIMS, EmbeddingEngine};
 use crate::embedding_profiles::{EmbeddingRole, profile_for};
 use crate::errors::Error;
 use crate::sqlite::embedding::{EmbeddingClass, classify_embedding};
 use crate::sqlite::identity::ModelIdentity;
 use crate::sqlite::{self, Database, Error as SqliteError};
+use std::cell::RefCell;
 use std::path::Path;
 
 /// The result of a completed model migration pass.
@@ -58,6 +57,10 @@ pub use crate::sqlite::migration_types::MigrationRowFailure;
 /// left in place and the old identity kept; a clean pass →
 /// `Ok(MigrationReport)` with the marker cleared and the new identity
 /// recorded in one transaction.
+///
+/// The pre-flight token scan and the re-embed pass share ONE
+/// `EmbeddingEngine` (constructed once, after the profile resolves); the
+/// pre-flight runs exactly once.
 ///
 /// # Errors
 ///
@@ -82,46 +85,55 @@ pub fn migrate_model(
     // hint; the library caller gets the raw locked error).
     db.set_busy_timeout(std::time::Duration::ZERO)?;
 
-    let mut engine = EmbeddingEngine::new(&config.embedding_model)?;
-
-    // Pre-flight: token-count every row with the engine's passage role (the
-    // engine is the single prefix site). Runs before anything is written.
-    let projects = db.list_all_project_ids()?;
-    let offending = preflight_over_limit(&db, &projects, &engine)?;
-    if !offending.is_empty() {
-        return Err(Error::MigrationRefused { offending });
-    }
-
-    // The embed closure owns the engine (mutable borrow) and applies the
-    // target profile's passage prefix exactly once.
-    let mut embed = |content: &str| -> Result<Vec<f32>, SqliteError> {
-        engine
-            .embed_passage(content)
-            .map_err(|e| SqliteError::Sqlite(e.to_string()))
-    };
-
-    let report = migrate_model_with_embedder(&mut db, config, &mut embed)?;
+    // One engine for the whole call; the engine is the single prefix site
+    // (the passage prefix is applied exactly once, by `embed_passage`). The
+    // `RefCell` lets the counter closure (shared borrows) and the embed
+    // closure (mutable borrows) alias the same engine — they never run at
+    // the same time, because the shared core runs the pre-flight to
+    // completion before the re-embed pass starts.
+    let engine = RefCell::new(EmbeddingEngine::new(&config.embedding_model)?);
+    let report = migrate_model_with_embedder(
+        &mut db,
+        config,
+        &mut |content| {
+            engine
+                .borrow_mut()
+                .embed_passage(content)
+                .map_err(|e| SqliteError::Sqlite(e.to_string()))
+        },
+        &mut |content| {
+            engine
+                .borrow()
+                .token_count(EmbeddingRole::Passage, content)
+                .map_err(|e| SqliteError::Sqlite(e.to_string()))
+        },
+    )?;
     Ok(report)
 }
 
 /// The engine-injectable core of `migrate_model` (crate-private: library
-/// tests call this with a fake embedder and no model download).
+/// tests call this with fake closures and no model download).
 ///
 /// Resolves the target profile from `config.embedding_model`, runs the
-/// pre-flight token scan with the profile's passage role, and — if it
-/// passes — executes the marker-first lifecycle over every project in the
-/// database, recording the new identity and clearing the marker in one
-/// transaction only on a fully clean pass.
+/// pre-flight token scan with the supplied counter, and — if it passes —
+/// executes the marker-first lifecycle over every project in the database,
+/// recording the new identity and clearing the marker in one transaction
+/// only on a fully clean pass.
 ///
 /// The `embed` closure receives the raw stored content and must return a
-/// 384-dim f32 vector.
-pub fn migrate_model_with_embedder<E>(
+/// 384-dim f32 vector. The `token_count` closure receives the same raw
+/// content and must return its passage-role token count (the production
+/// closure counts with `EmbeddingRole::Passage`; the limit check is `>`
+/// against `MAX_EMBEDDING_TOKENS`).
+pub(crate) fn migrate_model_with_embedder<E, C>(
     db: &mut Database,
     config: &crate::config::Config,
     embed: &mut E,
+    token_count: &mut C,
 ) -> Result<MigrationReport, SqliteError>
 where
     E: FnMut(&str) -> Result<Vec<f32>, SqliteError>,
+    C: FnMut(&str) -> Result<usize, SqliteError>,
 {
     let profile = profile_for(&config.embedding_model)
         .map_err(|e| SqliteError::InvalidInput(e.to_string()))?;
@@ -130,13 +142,10 @@ where
         revision: profile.revision.to_string(),
     };
 
+    // Pre-flight: token-count every row with the caller's counter. Any row
+    // over the limit → `MigrationRefused` with no writes.
     let projects = db.list_all_project_ids()?;
-
-    // Pre-flight: token-count every row with the target profile's passage
-    // prefix. Any row over the limit → `MigrationRefused` with no writes.
-    let engine = EmbeddingEngine::new(&config.embedding_model)
-        .map_err(|e| SqliteError::Sqlite(e.to_string()))?;
-    let offending = preflight_over_limit(db, &projects, &engine)?;
+    let offending = preflight_over_limit(db, &projects, &mut *token_count)?;
     if !offending.is_empty() {
         return Err(SqliteError::MigrationRefused { offending });
     }
@@ -175,24 +184,22 @@ where
     })
 }
 
-/// Token-count every stored row in `projects` with the target profile's
-/// passage prefix and return the ids of rows that exceed the limit.
-///
-/// The production path (issue #221) runs this pre-flight in
-/// `migrate_model` with the real engine, BEFORE anything is written; a row
-/// at exactly `MAX_EMBEDDING_TOKENS` is allowed (the check is strict `>`).
-pub fn preflight_over_limit(
+/// Token-count every stored row in `projects` with the caller's counter and
+/// return the ids of rows that exceed the limit (strict `>` — a row at
+/// exactly `MAX_EMBEDDING_TOKENS` is allowed).
+pub(crate) fn preflight_over_limit<C>(
     db: &Database,
     projects: &[String],
-    engine: &EmbeddingEngine,
-) -> Result<Vec<String>, SqliteError> {
+    token_count: &mut C,
+) -> Result<Vec<String>, SqliteError>
+where
+    C: FnMut(&str) -> Result<usize, SqliteError>,
+{
     let mut offending: Vec<String> = Vec::new();
     for project_id in projects {
         let rows = db.list_all_rows_for_project(project_id)?;
         for (id, content, _embedding) in rows {
-            let count = engine
-                .token_count(EmbeddingRole::Passage, &content)
-                .map_err(|e| SqliteError::Sqlite(e.to_string()))?;
+            let count = token_count(&content)?;
             if count > crate::embedding::MAX_EMBEDDING_TOKENS {
                 offending.push(id);
             }
@@ -205,7 +212,7 @@ pub fn preflight_over_limit(
 ///
 /// Unknown-classified (corrupted) rows are skipped and counted in the
 /// returned `skipped` value. Returns `(reindexed, skipped, failures)`.
-pub fn reembed_project<F>(
+pub(crate) fn reembed_project<F>(
     db: &mut Database,
     project_id: &str,
     mut embed: F,
@@ -226,16 +233,18 @@ where
             continue;
         }
         match embed(&content) {
-            Ok(new_vec) => {
+            Ok(new_vec) if new_vec.len() == EMBEDDING_DIMS => {
                 update_embedding_in(&tx, &id, &new_vec)?;
                 reindexed += 1;
             }
-            Err(e) => {
-                failed.push(MigrationRowFailure {
-                    id,
-                    error: e.to_string(),
-                });
-            }
+            Ok(_) => failed.push(MigrationRowFailure {
+                id,
+                error: "embedder returned wrong vector length".to_string(),
+            }),
+            Err(e) => failed.push(MigrationRowFailure {
+                id,
+                error: e.to_string(),
+            }),
         }
     }
     commit_tx(tx)?;
@@ -262,7 +271,10 @@ fn update_embedding_in(
 /// The write touches ONLY the marker column; the recorded identity is left
 /// as-is. If no identity row exists yet, one is inserted with NULL
 /// `model_id` + the marker.
-pub fn write_migration_marker(db: &Database, target: &ModelIdentity) -> Result<(), SqliteError> {
+pub(crate) fn write_migration_marker(
+    db: &Database,
+    target: &ModelIdentity,
+) -> Result<(), SqliteError> {
     let marker = migration_marker_for(target);
     db.conn()
         .execute(
@@ -280,7 +292,7 @@ pub fn write_migration_marker(db: &Database, target: &ModelIdentity) -> Result<(
 /// The only sanctioned exit from the "migrating" state; the write is rolled
 /// back automatically if it fails, so identity and marker can never be
 /// half-updated.
-pub fn record_identity_and_clear_marker(
+pub(crate) fn record_identity_and_clear_marker(
     db: &mut Database,
     identity: &ModelIdentity,
 ) -> Result<(), SqliteError> {

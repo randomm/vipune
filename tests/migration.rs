@@ -61,7 +61,16 @@ fn migration_marker_and_identity_are_readable_after_marker_write() {
         )
         .unwrap();
 
-    assert_eq!(vipune::read_marker(db.conn()).unwrap(), Some(marker_text));
+    assert_eq!(
+        db.conn()
+            .query_row::<Option<String>, _, _>(
+                "SELECT migration_marker FROM model_identity WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        Some(marker_text)
+    );
     assert!(
         vipune::is_migrating(db.conn()).unwrap(),
         "is_migrating must be true while the marker is present"

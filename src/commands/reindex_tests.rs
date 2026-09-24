@@ -417,21 +417,24 @@ fn test_force_refused_without_all_projects() {
 
 // ── reindex --force: model-switch migration path (issue #217) ──
 //
-// The --force path is exercised through the bin-only orchestration in
-// `crate::commands::reindex_force` (marker write, per-project re-embed pass,
-// record-and-clear) plus the read side in `crate::sqlite::identity`. These
-// cover the contract: force re-embeds every row (including Real), writes the
-// marker first (leaving the recorded identity untouched), and records the
-// identity + clears the marker in one transaction only on a clean pass.
-
-use crate::commands::reindex_force::{self, ReembedFailure};
+// The --force path is exercised through the library's migration core in
+// `crate::migration` (per-project re-embed pass, marker write, record-and-
+// clear) plus the read side in `crate::sqlite::identity`.
+use crate::migration;
 use crate::sqlite::identity;
 
 fn force_reindex_project_with_fake_embedder(
     db: &mut Database,
     project_id: &str,
-) -> Result<(usize, usize, Vec<ReembedFailure>), crate::sqlite::Error> {
-    reindex_force::force_reembed_project(db, project_id, |content| {
+) -> Result<
+    (
+        usize,
+        usize,
+        Vec<crate::sqlite::migration_types::MigrationRowFailure>,
+    ),
+    crate::sqlite::Error,
+> {
+    migration::reembed_project(db, project_id, |content| {
         test_fake_embedder(content).map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
     })
 }
@@ -479,9 +482,8 @@ fn test_force_reembeds_all_rows_including_real() {
     assert_eq!(classify_embedding(&emb_after), EmbeddingClass::Real);
     assert_ne!(emb_after2, mock_vec);
     assert_eq!(classify_embedding(&emb_after2), EmbeddingClass::Real);
-    // The unknown (zero-vector) row was skipped — it must be left untouched.
-    let emb_after3 = get_embedding(&db, &id3);
-    assert_eq!(emb_after3, unknown_vec);
+    // The unknown (zero-vector) row was skipped — left untouched.
+    assert_eq!(get_embedding(&db, &id3), unknown_vec);
 }
 
 #[test]
@@ -509,20 +511,19 @@ fn test_force_idempotent_rerun() {
     assert_eq!(get_embedding(&db, &id), emb1);
 }
 
-/// Write a migration marker (marker-first step: touches ONLY the marker
-/// column; the recorded identity is left untouched).
+/// Write a migration marker (marker-first; identity left untouched).
 fn marker_only(conn: &rusqlite::Connection, target: &identity::ModelIdentity) {
     conn.execute(
         "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
          VALUES (1, NULL, NULL, ?1)
          ON CONFLICT(id) DO UPDATE SET migration_marker = excluded.migration_marker",
-        [reindex_force::migration_marker_for(target)],
+        [migration::migration_marker_for(target)],
     )
     .unwrap();
 }
 
-/// Record the new identity and clear the marker in one transaction (the
-/// only sanctioned exit from the "migrating" state).
+/// Record the new identity and clear the marker in one transaction (the only
+/// sanctioned exit from the "migrating" state).
 fn record_identity(conn: &rusqlite::Connection, identity: &identity::ModelIdentity) {
     conn.execute(
         "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
@@ -570,8 +571,8 @@ fn test_force_with_all_projects_migrates_entire_database() {
         revision: crate::embedding::EMBED_MODEL_REVISION.to_string(),
     };
     marker_only(db.conn(), &target);
-    let _ = reindex_force::force_reembed_project(&mut db, "a", |_| Ok(vec![0.1; 384])).unwrap();
-    let _ = reindex_force::force_reembed_project(&mut db, "b", |_| Ok(vec![0.1; 384])).unwrap();
+    let _ = migration::reembed_project(&mut db, "a", |_| Ok(vec![0.1; 384])).unwrap();
+    let _ = migration::reembed_project(&mut db, "b", |_| Ok(vec![0.1; 384])).unwrap();
     record_identity(db.conn(), &target);
 
     assert_eq!(identity::current_identity(db.conn()).unwrap(), target);
@@ -650,9 +651,8 @@ fn test_force_marker_survives_interruption() {
     assert_eq!(identity::read_identity(db.conn()).unwrap(), Some(target));
 }
 
-/// A private generic scan helper mirroring `over_limit_row_ids`'s logic with
-/// an injectable token counter — lets this test exercise the over-limit
-/// report without a real `EmbeddingEngine` (no model download).
+/// Private scan helper mirroring the library's pre-flight scan with an
+/// injectable token counter — no real `EmbeddingEngine` needed (no model download).
 fn over_limit_ids_with_counter(
     db: &Database,
     projects: &[String],

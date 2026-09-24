@@ -273,12 +273,13 @@ fn test_force_per_row_failure_error_shape_and_post_state() {
         )
         .unwrap();
 
-    let config = crate::config::Config {
-        database_path: db_path.clone(),
-        embedding_model: "BAAI/bge-small-en-v1.5".to_string(),
-        ..Default::default()
-    };
-    let result = crate::migration::migrate_model_with_embedder(&mut db, &config, &mut |content| {
+    // `Config::load()` resolves the full default config (including the
+    // home-dir database path). The migration only reads `embedding_model`
+    // and `database_path` here; the other fields are carried through as-is.
+    let mut config = crate::config::Config::load().unwrap();
+    config.database_path = db_path.clone();
+    config.embedding_model = "BAAI/bge-small-en-v1.5".to_string();
+    let mut embed = |content: &str| {
         if content == "bad content" {
             Err(crate::sqlite::Error::Sqlite(
                 "simulated embed failure".to_string(),
@@ -286,7 +287,12 @@ fn test_force_per_row_failure_error_shape_and_post_state() {
         } else {
             test_fake_embedder(content).map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
         }
-    });
+    };
+    let mut count = |content: &str| -> Result<usize, crate::sqlite::Error> {
+        Ok(content.split_whitespace().count())
+    };
+    let result =
+        crate::migration::migrate_model_with_embedder(&mut db, &config, &mut embed, &mut count);
     let err = result.expect_err("a failing row must refuse the pass");
     match err {
         crate::sqlite::Error::MigrationIncomplete { report } => {

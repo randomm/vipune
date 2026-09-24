@@ -15,8 +15,6 @@ mod merge;
 mod promote;
 mod prune;
 mod reindex;
-#[cfg(test)]
-pub mod reindex_force;
 
 #[cfg(test)]
 pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search};
