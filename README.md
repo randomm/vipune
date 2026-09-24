@@ -143,14 +143,61 @@ Optionally, clear all data:
 rm -rf ~/.vipune ~/.config/vipune
 ```
 
+## Embedding Models
+
+vipune embeds memories with a local ONNX model downloaded from HuggingFace Hub on first use, pinned to an exact revision for reproducibility. The model is chosen **per database** via the `embedding_model` setting (see [Configuration](#configuration)) — set it before your first `vipune add`, because a database records which model it was created with.
+
+### Built-in profiles
+
+| Model ID | Revision | Languages | Download size | Prefixes |
+|----------|----------|-----------|---------------|----------|
+| `BAAI/bge-small-en-v1.5` (default) | `5c38ec7c405ec4b44b94cc5a9bb96e735b38267a` | English | ~66 MB | none |
+| `intfloat/multilingual-e5-small` | `614241f622f53c4eeff9890bdc4f31cfecc418b3` | ~100 languages (xlm-roberta) | ~470 MB | automatic `query: ` / `passage: ` |
+
+**Choosing a model:** the default `bge-small-en-v1.5` is fast and small but English-focused. If your memories are in other languages (e.g. Finnish, Swedish, German), select the multilingual profile instead — it embeds ~100 languages, at the cost of a much larger one-time download:
+
+```bash
+# Either set the environment variable
+export VIPUNE_EMBEDDING_MODEL="intfloat/multilingual-e5-small"
+
+# ...or in ~/.config/vipune/config.toml
+embedding_model = "intfloat/multilingual-e5-small"
+```
+
+### Automatic prefixes (e5 only)
+
+The e5 model requires task prefixes to work well. vipune applies them **automatically**: `query: ` is prepended to search queries and `passage: ` to stored text at embedding time. **Do not add these prefixes yourself** — they are never written into stored content, search output, or the FTS index; they exist only at embed time.
+
+The `bge-small-en-v1.5` profile uses no prefixes.
+
+Note: the prefix consumes tokens of the 512-token limit, so slightly longer texts that embed fine under bge may be rejected (exit code 3) under e5 — over-length input is always rejected, never truncated.
+
+### Switching models on an existing database
+
+A database records the model id + revision it was created with. If the configured model no longer matches the recorded identity, `add`, `update`, and `search` refuse with an error naming both identities — the stored embeddings are in a different vector space and results would be meaningless.
+
+To migrate an existing database to a different model:
+
+```bash
+vipune reindex --force
+```
+
+This re-embeds **every** stored memory with the newly configured model (a plain `vipune reindex` would re-embed nothing, since existing vectors already look real). The migration is crash-safe and pre-checked:
+
+1. **Pre-flight** — `reindex --force` first token-counts every stored row with the target model's passage prefix. If any row would exceed the 512-token limit once prefixed, it refuses to start, writes nothing, and lists the offending memory ids. The migration marker is only ever written in a state the re-embed pass can complete.
+2. **Marker-first** — it records a `migrating to <id>@<revision>` marker before re-embedding.
+3. **Re-embed + record** — it re-embeds every row, then in one transaction records the new identity and clears the marker.
+
+If the run is interrupted, the marker stays and operations refuse until you re-run `vipune reindex --force`, which performs a full idempotent pass from the beginning.
+
 ## Air-gapped / Offline Usage
 
-vipune downloads the embedding model from HuggingFace Hub on first run. The model is pinned to a specific revision to ensure reproducibility:
+vipune downloads the embedding model from HuggingFace Hub on first run. Each model is pinned to a specific revision to ensure reproducibility:
 
-- **Model ID**: `BAAI/bge-small-en-v1.5`
-- **Revision**: `5c38ec7c405ec4b44b94cc5a9bb96e735b38267a`
+- `BAAI/bge-small-en-v1.5` — revision `5c38ec7c405ec4b44b94cc5a9bb96e735b38267a`
+- `intfloat/multilingual-e5-small` — revision `614241f622f53c4eeff9890bdc4f31cfecc418b3`
 
-For air-gapped environments, pre-fetch the model before going offline:
+For air-gapped environments, pre-fetch the default model before going offline:
 
 ```bash
 # Install huggingface-cli first if you don't have it
@@ -162,10 +209,19 @@ huggingface-cli download BAAI/bge-small-en-v1.5 \
   --cache-dir ~/.cache/huggingface/hub
 ```
 
+If you selected the multilingual profile instead, pre-fetch that one as well:
+
+```bash
+huggingface-cli download intfloat/multilingual-e5-small \
+  --revision 614241f622f53c4eeff9890bdc4f31cfecc418b3 \
+  --cache-dir ~/.cache/huggingface/hub
+```
+
 The model will be cached in the HF Hub cache layout at `~/.cache/huggingface/hub/` and vipune will use it without network access. You can verify the cache before going offline:
 
 ```bash
 ls ~/.cache/huggingface/hub/models--BAAI--bge-small-en-v1.5/
+ls ~/.cache/huggingface/hub/models--intfloat--multilingual-e5-small/
 ```
 
 **Note**: When upgrading vipune, the pinned revision may change. Check the release notes and re-download the new revision if the SHA has changed.
@@ -257,7 +313,7 @@ vipune works with zero configuration. All paths use the user's home directory:
 
 **Environment variables (override defaults):**
 - `VIPUNE_DATABASE_PATH` - SQLite database location
-- `VIPUNE_EMBEDDING_MODEL` - HuggingFace model ID (default: `BAAI/bge-small-en-v1.5`)
+- `VIPUNE_EMBEDDING_MODEL` - embedding model profile: `BAAI/bge-small-en-v1.5` (default) or `intfloat/multilingual-e5-small` — see [Embedding Models](#embedding-models)
 - `HF_HOME` - HuggingFace cache home directory (changes the model cache location to `$HF_HOME/hub`)
 - `VIPUNE_PROJECT` - Project identifier (overrides auto-detection)
 - `VIPUNE_SIMILARITY_THRESHOLD` - Conflict detection threshold, 0.0-1.0 (default: `0.85`)

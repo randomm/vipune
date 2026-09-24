@@ -121,6 +121,23 @@ impl MemoryStore {
         })
     }
 
+    /// Refuse add/update/search/embedding while the store's model identity
+    /// (recorded row, or the bge default when unrecorded) does not match the
+    /// configured model, or while a migration marker is in flight (issue
+    /// #217). Runs on EVERY embedding operation — in tests and production
+    /// alike — so a store opened against a healthy database still refuses if
+    /// a migration begins mid-session, and a finished migration clears the
+    /// refusal on the next operation without reopening the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Error::Config` message naming the recorded (or default)
+    /// identity against the configured one — or the interrupted migration
+    /// target — and pointing at `vipune reindex --force`.
+    pub(crate) fn assert_embedding_allowed(&mut self) -> Result<(), Error> {
+        crate::sqlite::identity::assert_identity_ok(self.db.conn(), &self.model_id)
+    }
+
     /// Lazily initialize and return a mutable reference to the embedding engine.
     ///
     /// Downloads the model on first call; subsequent calls return the cached engine.
@@ -165,7 +182,7 @@ impl MemoryStore {
         MemoryStore {
             db,
             embedder: None,
-            model_id: String::new(),
+            model_id: crate::embedding::EMBED_MODEL_ID.to_string(),
             config,
             test_embedder: None,
         }
@@ -201,6 +218,12 @@ impl MemoryStore {
 
         let db = Database::open(&path).expect("open test database");
         Self::from_db_with_test_embedder(db)
+    }
+
+    /// Replace the test-only embedder (test builds only) with a new one.
+    #[cfg(test)]
+    pub(crate) fn set_test_embedder(&mut self, embedder: TestEmbedder) {
+        self.test_embedder = Some(embedder);
     }
 
     #[cfg(test)]

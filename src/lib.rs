@@ -41,6 +41,7 @@
 
 pub mod config;
 pub mod embedding;
+pub mod embedding_profiles;
 pub mod errors;
 pub mod memory;
 pub mod memory_types; // Library-only: batch ingest API (not used in CLI)
@@ -49,12 +50,17 @@ mod rrf;
 mod sqlite;
 mod temporal;
 
+#[cfg(test)]
+#[path = "embedding_dim_audit_tests.rs"]
+mod embedding_dim_audit_tests;
+
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
 // Re-export public API
 pub use config::Config;
 pub use embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine};
+pub use embedding_profiles::{BUILTIN_PROFILES, EmbeddingRole, ModelProfile, profile_for};
 pub use errors::Error;
 pub use memory::lifecycle::{MemoryStatus, MemoryType};
 pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
@@ -67,6 +73,12 @@ pub use sqlite::Database;
 pub use sqlite::Memory;
 pub use sqlite::embedding::EmbeddingClass;
 pub use sqlite::embedding::classify_embedding;
+/// Model identity tracking (issue #217): the recorded (model id, revision)
+/// pair a database's vectors were produced with, plus the mismatch /
+/// in-flight-migration refusal shared by the embedding chokepoints.
+pub use sqlite::identity::{
+    ModelIdentity, assert_identity_ok, current_identity, is_migrating, read_identity,
+};
 
 #[cfg(test)]
 mod integration_tests {

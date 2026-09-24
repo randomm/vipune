@@ -10,6 +10,10 @@
 //! The generator is deterministic per-content (same content → same vector),
 //! so re-runs of the hook on the same candidate are byte-stable.
 
+use crate::config::Config;
+use crate::errors::Error;
+use crate::sqlite::identity::assert_identity_ok;
+
 use crate::embedding::EMBEDDING_DIMS;
 
 /// Generate a deterministic placeholder embedding for the hook path.
@@ -50,10 +54,54 @@ pub fn placeholder_embedding(content: &str) -> Vec<f32> {
     vec
 }
 
+/// Check the hook path's model-identity source (issue #217, task-b).
+///
+/// The hook uses the same profile source as the main CLI path: a recorded
+/// identity (or the bge@pinned-revision default when no row exists) must
+/// match the configured `embedding_model`, and no interrupted model
+/// migration (`migration_marker`) may be in flight.
+///
+/// The caller (the hook pipeline) treats any `Err` as a refusal: it prints
+/// the error to stderr and exits 0 — the hook contract is exit-0-always (the
+/// hook must never surface an error to the agent mid-session), but the
+/// refusal message is never silent. A mismatch/migrating store must not
+/// accumulate placeholder rows that no future plain `reindex` would ever
+/// backfill (real vectors classify as Real, so only `reindex --force`
+/// re-embeds a switched store).
+///
+/// # Errors
+///
+/// Returns an `Error::Config` message naming the recorded and configured
+/// identities (or the interrupted migration target) and pointing at
+/// `vipune reindex --force`, or `Error::SqliteModule` if the identity table
+/// cannot be read.
+pub fn ensure_hook_identity_ok(db: &crate::sqlite::Database, config: &Config) -> Result<(), Error> {
+    assert_identity_ok(db.conn(), config.embedding_model.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sqlite::embedding::{EmbeddingClass, classify_embedding};
+
+    fn test_config(model: &str) -> Config {
+        Config {
+            embedding_model: model.to_string(),
+            ..Config::default()
+        }
+    }
+
+    fn open_db(dir: &tempfile::TempDir) -> crate::sqlite::Database {
+        let path = dir.path().join("test.db");
+        crate::sqlite::Database::open(&path).unwrap()
+    }
+
+    fn test_identity(model_id: &str, revision: &str) -> crate::sqlite::identity::ModelIdentity {
+        crate::sqlite::identity::ModelIdentity {
+            model_id: model_id.to_string(),
+            revision: revision.to_string(),
+        }
+    }
 
     #[test]
     fn placeholder_classifies_as_mock() {
@@ -80,6 +128,70 @@ mod tests {
         assert_ne!(
             a, b,
             "different content should produce different placeholders"
+        );
+    }
+
+    #[test]
+    fn hook_identity_ok_when_db_default_and_config_default() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = open_db(&dir);
+        assert!(
+            ensure_hook_identity_ok(&db, &test_config(crate::embedding::EMBED_MODEL_ID)).is_ok()
+        );
+    }
+
+    #[test]
+    fn hook_identity_ok_when_recorded_matches_configured() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut db = open_db(&dir);
+        let id = test_identity(
+            crate::embedding::EMBED_MODEL_ID,
+            crate::embedding::EMBED_MODEL_REVISION,
+        );
+        crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
+        let config = test_config(crate::embedding::EMBED_MODEL_ID);
+        assert!(ensure_hook_identity_ok(&db, &config).is_ok());
+    }
+
+    #[test]
+    fn hook_identity_refuses_on_mismatch() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut db = open_db(&dir);
+        let id = test_identity("other-model", "rev-1");
+        crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
+        let config = test_config(crate::embedding::EMBED_MODEL_ID);
+        let err = ensure_hook_identity_ok(&db, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("other-model"),
+            "mismatch error names recorded id: {msg}"
+        );
+        assert!(
+            msg.contains("vipune reindex --force"),
+            "mismatch error points at --force: {msg}"
+        );
+    }
+
+    #[test]
+    fn hook_identity_refuses_while_migration_marker_present() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = open_db(&dir);
+        let target = test_identity("e5-model", "rev-2");
+        crate::commands::reindex_force::write_marker(&db, &target).unwrap();
+        let config = test_config(crate::embedding::EMBED_MODEL_ID);
+        let err = ensure_hook_identity_ok(&db, &config).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("migration"),
+            "marker error names the migration: {msg}"
+        );
+        assert!(
+            msg.contains("e5-model@rev-2"),
+            "marker error names the target: {msg}"
+        );
+        assert!(
+            msg.contains("vipune reindex --force"),
+            "marker error points at --force: {msg}"
         );
     }
 }

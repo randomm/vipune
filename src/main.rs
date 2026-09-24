@@ -3,7 +3,9 @@
 mod commands;
 mod config;
 mod embedding;
+mod embedding_profiles;
 mod errors;
+
 mod hook;
 mod memory;
 pub mod memory_types; // Re-export for library consumers: IngestPolicy, BatchIngestItemResult, BatchIngestResult

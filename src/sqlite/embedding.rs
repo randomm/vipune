@@ -1,10 +1,11 @@
 //! Embedding BLOB conversion, cosine similarity computation, and embedding classification.
 
+use crate::embedding::EMBEDDING_DIMS;
+
 use super::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-const EMBEDDING_DIMS: usize = 384;
 const EMBEDDING_BLOB_SIZE: usize = EMBEDDING_DIMS * 4; // 384 f32 values × 4 bytes each
 
 /// Classification of an embedding vector based on its L2 norm.

@@ -63,13 +63,13 @@ fn export_lines(db_path: &std::path::Path, out_path: &std::path::Path) -> Vec<Va
 }
 
 #[test]
-fn test_base64_roundtrip_1536_bytes() {
+fn test_base64_roundtrip_full_blob() {
     let blob = vec_to_blob(&vec![0.25f32; 384]).unwrap();
-    assert_eq!(blob.len(), 1536);
+    assert_eq!(blob.len(), crate::embedding::EMBEDDING_DIMS * 4);
     let encoded = base64_encode(&blob);
     assert_eq!(base64_decode(&encoded).unwrap(), blob);
-    // Standard base64 of 1536 bytes is 2048 chars, no padding.
-    assert_eq!(encoded.len(), 2048);
+    // Standard base64 of a full blob is 4/3 of the byte length, no padding.
+    assert_eq!(encoded.len(), (blob.len() * 4) / 3);
     assert!(!encoded.contains('='));
 }
 
@@ -115,6 +115,13 @@ fn test_jsonl_header_fields_and_row_count() {
     assert_eq!(header["type"], "export");
     assert_eq!(header["format_version"], 1);
     assert_eq!(header["embedding_dims"], 384);
+    // No identity row in a fresh store: the header records the default
+    // bge identity at its pinned revision.
+    assert_eq!(header["model_id"], crate::embedding::EMBED_MODEL_ID);
+    assert_eq!(
+        header["model_revision"],
+        crate::embedding::EMBED_MODEL_REVISION
+    );
     assert_eq!(header["rows"], 3);
     assert!(
         header["exported_at"].as_str().unwrap().contains("T"),
@@ -347,10 +354,13 @@ fn test_write_jsonl_returns_row_count_not_header() {
         },
     ];
     let mut buf = Vec::new();
-    let count = write_jsonl(&mut buf, &rows, "2024-01-01T00:00:00Z").unwrap();
+    let count = write_jsonl(&mut buf, &rows, "2024-01-01T00:00:00Z", "model-a", "rev-a").unwrap();
     assert_eq!(count, 2);
     let text = String::from_utf8(buf).unwrap();
     assert_eq!(text.lines().count(), 3, "header + 2 rows");
+    let header: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(header["model_id"], "model-a");
+    assert_eq!(header["model_revision"], "rev-a");
 }
 
 #[test]
@@ -385,4 +395,27 @@ fn test_export_corrupt_blob_row_does_not_abort() {
     let bad = lines.iter().find(|v| v["id"] == "bad").unwrap();
     let decoded = base64_decode(bad["embedding"].as_str().unwrap()).unwrap();
     assert_eq!(decoded, vec![0xAB; 1535]);
+}
+
+#[test]
+fn test_export_header_records_recorded_identity() {
+    let (_dir, db_path) = create_test_db();
+    {
+        let mut db = Database::open(&db_path).unwrap();
+        let id = crate::sqlite::identity::ModelIdentity {
+            model_id: "e5-model".to_string(),
+            revision: "e5-rev".to_string(),
+        };
+        crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
+    }
+    let db = Database::open(&db_path).unwrap();
+    let conn = db.conn();
+    let blob = vec_to_blob(&vec![0.5f32; 384]).unwrap();
+    seed_raw(conn, "r1", "p", "c", Some(&blob), 0, None);
+
+    let out = _dir.path().join("export.jsonl");
+    let lines = export_lines(&db_path, &out);
+    let header = &lines[0];
+    assert_eq!(header["model_id"], "e5-model");
+    assert_eq!(header["model_revision"], "e5-rev");
 }

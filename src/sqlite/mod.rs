@@ -6,6 +6,7 @@ pub mod embedding;
 pub mod export_scan;
 pub mod fts;
 pub mod hash;
+pub mod identity;
 pub mod import;
 pub mod list;
 pub mod migrations;
@@ -402,6 +403,21 @@ impl Database {
     /// their own `&mut self` methods instead.
     pub fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Open a write transaction on the connection.
+    ///
+    /// `&mut self` because rusqlite's `Connection::transaction` (0.38) takes
+    /// `&mut self`: a transaction takes an exclusive write lock, so the
+    /// caller must own the connection for its duration. Callers that only
+    /// share a read `&Connection` (via `conn()`) must not use this.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the transaction cannot be started (e.g. database
+    /// locked beyond the busy timeout).
+    pub fn begin_transaction(&mut self) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+        self.conn.transaction()
     }
 
     /// Set the SQLite busy timeout. Used by reindex for fast-fail on locks.

@@ -86,6 +86,42 @@ fn header(rows: usize) -> String {
     )
 }
 
+fn header_with_identity(rows: usize, model_id: &str, model_revision: &str) -> String {
+    format!(
+        r#"{{"type":"export","version":1,"embedding_dims":384,"model_id":"{model_id}","model_revision":"{model_revision}","exported_at":"2024-01-01T00:00:00Z","rows":{rows}}}"#
+    )
+}
+
+fn db_path_of(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    dir.path().join("test.db")
+}
+
+/// Record a model identity on the destination database.
+/// Record a model identity on the destination database. The caller is
+/// responsible for recording a pair that the identity resolver
+/// (`configured_identity`) can also produce — for the default model that is
+/// its pinned revision; arbitrary pairs are only comparable to an export
+/// header carrying the same pair.
+fn set_identity(db_path: &std::path::Path, model_id: &str, revision: &str) {
+    let mut db = crate::sqlite::Database::open(db_path).unwrap();
+    let id = crate::sqlite::identity::ModelIdentity {
+        model_id: model_id.to_string(),
+        revision: revision.to_string(),
+    };
+    crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
+}
+
+fn import_stdout_err(source_content: &str, db_path: &std::path::Path) -> Option<String> {
+    use crate::commands::import::handle_import;
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), source_content).unwrap();
+    let result = handle_import(db_path, Some(tmp.path().to_str().unwrap()), None, false);
+    match result {
+        Ok(_) => None,
+        Err(e) => Some(e.to_string()),
+    }
+}
+
 fn make_db() -> tempfile::TempDir {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("test.db");
@@ -335,8 +371,9 @@ fn test_import_wrong_dimension_embedding_aborts() {
     let result = import::run_import(&db_path, file.to_str().unwrap());
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
+    let expected_bytes = crate::embedding::EMBEDDING_DIMS * 4;
     assert!(
-        msg.contains("wrong-dimension") || msg.contains("expected 1536"),
+        msg.contains("wrong-dimension") || msg.contains(&expected_bytes.to_string()),
         "got: {}",
         msg
     );
@@ -592,4 +629,169 @@ fn test_import_response_serializes_with_inserted_and_skipped() {
     let json = serde_json::to_string(&resp).unwrap();
     assert!(json.contains("\"inserted\":5"), "got: {}", json);
     assert!(json.contains("\"skipped\":2"), "got: {}", json);
+}
+
+// ---- Model identity (issue #217, task-b) ----
+
+#[test]
+fn test_import_refuses_when_header_identity_differs_from_db() {
+    let dir = make_db();
+    let db_path = db_path_of(&dir);
+    set_identity(&db_path, "other-model", "other-rev");
+    let blob = blob_of(&test_embedding());
+    let row = make_row_json(
+        "id-1",
+        "proj",
+        "content",
+        None,
+        &blob,
+        "2024-01-01T00:00:00Z",
+        "2024-01-01T00:00:00Z",
+        "fact",
+        "active",
+        None,
+        0,
+        None,
+    );
+    let jsonl = format!(
+        "{}\n{}\n",
+        header_with_identity(
+            1,
+            crate::embedding::EMBED_MODEL_ID,
+            crate::embedding::EMBED_MODEL_REVISION
+        ),
+        row
+    );
+    let err = import_stdout_err(&jsonl, &db_path).expect("must refuse");
+    assert!(err.contains("import refused"), "got: {err}");
+    assert!(
+        err.contains("other-model"),
+        "error names recorded identity: {err}"
+    );
+    assert_eq!(row_count(&db_path), 0, "nothing written on refusal");
+}
+
+#[test]
+fn test_import_refuses_when_db_identity_differs_from_default_header() {
+    let dir = make_db();
+    let db_path = db_path_of(&dir);
+    // Legacy (identity-free) header ⇒ treated as bge; db recorded as e5 ⇒ refuse.
+    set_identity(&db_path, "e5-model", "e5-rev");
+    let blob = blob_of(&test_embedding());
+    let row = make_row_json(
+        "id-1",
+        "proj",
+        "content",
+        None,
+        &blob,
+        "2024-01-01T00:00:00Z",
+        "2024-01-01T00:00:00Z",
+        "fact",
+        "active",
+        None,
+        0,
+        None,
+    );
+    let jsonl = format!("{}\n{}\n", header(1), row);
+    let err = import_stdout_err(&jsonl, &db_path).expect("must refuse");
+    assert!(err.contains("import refused"), "got: {err}");
+    assert!(
+        err.contains("e5-model"),
+        "error names recorded identity: {err}"
+    );
+}
+
+#[test]
+fn test_import_refuses_while_migration_marker_present() {
+    let dir = make_db();
+    let db_path = db_path_of(&dir);
+    let db = crate::sqlite::Database::open(&db_path).unwrap();
+    crate::commands::reindex_force::write_marker(
+        &db,
+        &crate::sqlite::identity::ModelIdentity {
+            model_id: "e5".to_string(),
+            revision: "rev".to_string(),
+        },
+    )
+    .unwrap();
+    let blob = blob_of(&test_embedding());
+    let row = make_row_json(
+        "id-1",
+        "proj",
+        "content",
+        None,
+        &blob,
+        "2024-01-01T00:00:00Z",
+        "2024-01-01T00:00:00Z",
+        "fact",
+        "active",
+        None,
+        0,
+        None,
+    );
+    let jsonl = format!("{}\n{}\n", header(1), row);
+    let err = import_stdout_err(&jsonl, &db_path).expect("must refuse");
+    assert!(err.contains("migration"), "got: {err}");
+    assert_eq!(row_count(&db_path), 0);
+}
+
+#[test]
+fn test_import_accepts_matching_identity_header() {
+    let dir = make_db();
+    let db_path = db_path_of(&dir);
+    set_identity(&db_path, "e5-model", "e5-rev");
+    let blob = blob_of(&test_embedding());
+    let row = make_row_json(
+        "id-1",
+        "proj",
+        "content",
+        None,
+        &blob,
+        "2024-01-01T00:00:00Z",
+        "2024-01-01T00:00:00Z",
+        "fact",
+        "active",
+        None,
+        0,
+        None,
+    );
+    let jsonl = format!(
+        "{}\n{}\n",
+        header_with_identity(1, "e5-model", "e5-rev"),
+        row
+    );
+    assert!(
+        import_stdout_err(&jsonl, &db_path).is_none(),
+        "matching identity must import"
+    );
+    assert_eq!(row_count(&db_path), 1);
+}
+
+#[test]
+fn test_import_accepts_legacy_header_into_default_store() {
+    // Pre-#217 export (no identity keys) into a store with no identity row:
+    // both resolve to the default bge identity → import proceeds.
+    let dir = make_db();
+    let db_path = db_path_of(&dir);
+    let blob = blob_of(&test_embedding());
+    let row = make_row_json(
+        "id-1",
+        "proj",
+        "content",
+        None,
+        &blob,
+        "2024-01-01T00:00:00Z",
+        "2024-01-01T00:00:00Z",
+        "fact",
+        "active",
+        None,
+        0,
+        None,
+    );
+    let jsonl = format!("{}\n{}\n", header(1), row);
+    assert!(
+        import_stdout_err(&jsonl, &db_path).is_none(),
+        "legacy header into default store must import"
+    );
+    assert_eq!(row_count(&db_path), 1);
 }

@@ -160,8 +160,30 @@ fn migrate_v5(conn: &Connection) -> SqliteResult<()> {
     Ok(())
 }
 
+/// Migration 6: create the empty `model_identity` table (issue #217).
+///
+/// Single-row table holding the embedding model identity (id + revision) and
+/// an optional migration marker. The migration inserts NO rows: a database
+/// with no identity row is treated as the built-in default (bge at its pinned
+/// revision), so existing stores are unaffected (zero-change contract).
+/// Row writes are owned by the `reindex --force` migration path, not the
+/// migration itself.
+fn migrate_v6(conn: &Connection) -> SqliteResult<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS model_identity (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            model_id TEXT,
+            model_revision TEXT,
+            migration_marker TEXT
+        );",
+    )?;
+    Ok(())
+}
+
 fn migrations() -> Vec<MigrationFn> {
-    vec![migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5]
+    vec![
+        migrate_v1, migrate_v2, migrate_v3, migrate_v4, migrate_v5, migrate_v6,
+    ]
 }
 
 fn total_migrations() -> i32 {
@@ -323,6 +345,99 @@ mod tests {
         conn.pragma_update(None, "user_version", 4).unwrap();
     }
 
+    /// Bring a v4-DB to version 5 (used to build a v5 baseline for upgrade tests).
+    fn upgrade_to_v5(conn: &Connection) {
+        migrate_v5(conn).unwrap();
+        conn.pragma_update(None, "user_version", 5).unwrap();
+    }
+
+    // --- Migration 6: model_identity table ---
+
+    fn setup_v5_with_row(conn: &Connection, project_id: &str, content: &str) {
+        setup_v4_with_row(conn, project_id, content);
+        upgrade_to_v5(conn);
+    }
+
+    #[test]
+    fn test_migration_6_creates_empty_identity_table() {
+        let conn = create_test_db();
+        setup_v5_with_row(&conn, "proj-a", "content");
+        migrate_v6(&conn).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM model_identity", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "migration v6 must create the table without inserting any row"
+        );
+        // A no-identity-row database is treated as bge at its pinned revision:
+        // the default must match the configured default with zero changes.
+        assert_eq!(
+            crate::sqlite::identity::read_identity(&conn).unwrap(),
+            None,
+            "no identity row exists, so the store reads as the default bge identity"
+        );
+    }
+
+    #[test]
+    fn test_migration_6_bumps_user_version_to_6() {
+        let conn = create_test_db();
+        setup_v5_with_row(&conn, "proj-a", "content");
+        run_migrations(&conn).unwrap();
+        assert_eq!(version_of(&conn), 6);
+    }
+
+    #[test]
+    fn test_migration_6_preserves_existing_rows() {
+        let conn = create_test_db();
+        setup_v5_with_row(&conn, "proj-a", "Some memory content");
+        run_migrations(&conn).unwrap();
+        let row_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE project_id = 'proj-a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(row_count, 1, "v5 rows must survive the v6 migration");
+        let content: String = conn
+            .query_row("SELECT content FROM memories WHERE id = 'r1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(content, "Some memory content");
+    }
+
+    #[test]
+    fn test_migration_6_single_row_enforced() {
+        let conn = create_test_db();
+        setup_v5_with_row(&conn, "proj-a", "content");
+        migrate_v6(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+             VALUES (1, 'BAAI/bge-small-en-v1.5', 'rev-a', NULL)",
+            [],
+        )
+        .unwrap();
+        let second = conn.execute(
+            "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
+             VALUES (2, 'other', 'rev-b', NULL)",
+            [],
+        );
+        assert!(second.is_err(), "only the singleton row id = 1 is allowed");
+    }
+
+    #[test]
+    fn test_upgrade_from_v5_reaches_latest() {
+        let conn = create_test_db();
+        setup_v5_with_row(&conn, "proj-a", "content");
+        run_migrations(&conn).unwrap();
+        assert_eq!(version_of(&conn), total_migrations());
+        assert_eq!(total_migrations(), 6);
+    }
+
+    // --- Migration 5 (continued) ---
+
     #[test]
     fn test_migration_5_adds_importance_column_default_medium() {
         let conn = create_test_db();
@@ -340,17 +455,45 @@ mod tests {
     fn test_migration_5_bumps_user_version_to_5() {
         let conn = create_test_db();
         setup_v4_with_row(&conn, "proj-a", "content");
-        run_migrations(&conn).unwrap();
+        migrate_v5(&conn).unwrap();
+        conn.pragma_update(None, "user_version", 5).unwrap();
         assert_eq!(version_of(&conn), 5);
     }
 
     #[test]
     fn test_migration_5_idempotent_via_run_migrations() {
+        // run_migrations from v4 applies v5 exactly once; re-running at v5 is
+        // a no-op for v5 (v6 continues the framework idempotency coverage).
         let conn = create_test_db();
-        init_schema(&conn).unwrap();
+        setup_v4_with_row(&conn, "proj-a", "content");
+        conn.pragma_update(None, "user_version", 4).unwrap();
+        run_migrations(&conn).unwrap();
+        assert_eq!(version_of(&conn), 6);
+        let importance: String = conn
+            .query_row("SELECT importance FROM memories WHERE id = 'r1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            importance, "medium",
+            "v5 column must be applied exactly once"
+        );
+    }
+
+    #[test]
+    fn test_migration_6_idempotent_via_run_migrations() {
+        let conn = create_test_db();
+        setup_v5_with_row(&conn, "proj-a", "content");
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
-        assert_eq!(version_of(&conn), 5);
+        assert_eq!(version_of(&conn), 6);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM model_identity", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "re-running migrations must not insert identity rows"
+        );
     }
 
     // --- content_hash parity tests (shared hash.rs::content_hash) ---

@@ -15,9 +15,14 @@
 //!   with ZERO) so a restore waits for a running MCP server rather than
 //!   failing instantly on `database is locked`.
 //! - `--project` is ignored (cross-project by contract) with a stderr warning.
+//! - The header's model identity (`model_id` + `model_revision`) is compared
+//!   against the destination database's recorded identity: a mismatch is
+//!   refused, and headers without identity (pre-#217 exports) are treated as
+//!   the default bge identity, so legacy exports still import into default
+//!   stores.
 //!
 //! JSONL schema — header line:
-//!   `{"type":"export","version":1,"embedding_dims":384,"exported_at":...,"rows":N}`
+//!   `{"type":"export","version":1,"embedding_dims":384,"model_id":...,"model_revision":...,"exported_at":...,"rows":N}`
 //! Row line (12 fields; DB column `type` is named `memory_type`):
 //!   `id`, `project_id`, `content`, `metadata` (nullable), `embedding`
 //!   (base64 of the exact stored BLOB), `created_at`, `updated_at`,
@@ -27,6 +32,7 @@
 use crate::errors::Error;
 use crate::output::print_json;
 use crate::sqlite::Database;
+use crate::sqlite::identity;
 use base64::Engine;
 use serde::Deserialize;
 use std::io::BufRead;
@@ -36,8 +42,7 @@ use std::time::Duration;
 
 use super::ImportResponse;
 
-/// Expected embedding dimensions of a restored row (384 × f32).
-const EMBEDDING_DIMS: usize = 384;
+use crate::embedding::EMBEDDING_DIMS;
 
 /// Busy timeout for the import connection: a restore should WAIT for a
 /// running MCP server to release its lock, unlike reindex/doctor which use
@@ -124,9 +129,32 @@ fn parse_row(line: &str, line_no: usize) -> Result<(ImportRow, Vec<u8>), Error> 
     Ok((row, blob))
 }
 
+/// The model identity carried by an export header. `None` fields mean the
+/// header predates issue #217 (no identity keys) — such exports are treated
+/// as the default bge identity, so legacy files still import into default
+/// stores (zero-change contract).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HeaderIdentity {
+    model_id: Option<String>,
+    model_revision: Option<String>,
+}
+
+impl HeaderIdentity {
+    /// Resolve to a concrete identity: absent fields fall back to the default
+    /// bge identity's value.
+    fn resolved(&self) -> identity::ModelIdentity {
+        let default = identity::ModelIdentity::default_identity();
+        identity::ModelIdentity {
+            model_id: self.model_id.clone().unwrap_or(default.model_id),
+            revision: self.model_revision.clone().unwrap_or(default.revision),
+        }
+    }
+}
+
 /// Validate the header line: must be JSON with `type: "export"`, a version,
-/// and a `rows` count. Returns the declared row count.
-fn validate_header(line: &str) -> Result<usize, Error> {
+/// and a `rows` count. Returns the declared row count and the header's model
+/// identity (None fields = identity absent, i.e. a legacy export).
+fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
     let line = line.trim_end_matches('\r');
     let value: serde_json::Value = serde_json::from_str(line)
         .map_err(|e| Error::InvalidInput(format!("line 1: malformed header JSON: {}", e)))?;
@@ -148,7 +176,17 @@ fn validate_header(line: &str) -> Result<usize, Error> {
         .get("rows")
         .and_then(|v| v.as_u64())
         .ok_or_else(|| Error::InvalidInput("line 1: header missing rows".to_string()))?;
-    Ok(rows as usize)
+    let identity = HeaderIdentity {
+        model_id: obj
+            .get("model_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        model_revision: obj
+            .get("model_revision")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    };
+    Ok((rows as usize, identity))
 }
 
 /// Run the import. Returns the response on success, or an `Err` whose
@@ -175,8 +213,29 @@ pub(crate) fn run_import(db_path: &Path, source: &str) -> Result<ImportResponse,
         ));
     }
 
-    // Validate header (line 1).
-    validate_header(lines[0])?;
+    // Validate header (line 1) and check its model identity against the
+    // destination database: a mismatched identity means the exported vectors
+    // were produced by a different model and would silently degrade search
+    // quality, so the import is refused (use `reindex --force` after export
+    // into a matching store, or re-export from a matching store).
+    let (_rows, header_identity) = validate_header(lines[0])?;
+    let (recorded, marker) = identity::read_identity_and_marker(db.conn())
+        .map_err(|e| Error::SqliteModule(format!("identity read failed: {e}")))?;
+    if marker.is_some() {
+        return Err(Error::InvalidInput(format!(
+            "import refused: destination database is in the middle of a model migration ({}); complete it with `vipune reindex --force` and retry",
+            marker.unwrap_or_default()
+        )));
+    }
+    let destination = recorded.unwrap_or_else(identity::ModelIdentity::default_identity);
+    let source = header_identity.resolved();
+    if source != destination {
+        return Err(Error::InvalidInput(format!(
+            "import refused: export was produced with model {} but the destination database uses {}. Re-import into a store embedded with the same model, or complete the migration with `vipune reindex --force`.",
+            source.display(),
+            destination.display()
+        )));
+    }
 
     // Parse and validate every data line up front (all-or-nothing).
     let mut parsed: Vec<(usize, ImportRow, Vec<u8>)> = Vec::new();

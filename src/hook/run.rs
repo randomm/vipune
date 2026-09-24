@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use crate::config::Config;
 use crate::errors::Error;
-use crate::hook::embedding::placeholder_embedding;
+use crate::hook::embedding::{ensure_hook_identity_ok, placeholder_embedding};
 use crate::hook::extract::extract_candidate;
 use crate::hook::payload::{HookEvent, HookPayload, parse_hook_payload};
 use crate::project::detect_project_at;
@@ -68,7 +68,28 @@ pub fn run_hook_event(
         None => return Ok(ExitCode::SUCCESS),
     };
 
-    // 5. Insert with placeholder embedding. A UNIQUE constraint violation
+    // 5. Model-identity check (issue #217): the hook uses the same profile
+    //    source as the main CLI path. A store whose recorded identity (or
+    //    default) does not match the configured model — or one with an
+    //    interrupted `reindex --force` marker — is refused: placeholder rows
+    //    would accumulate that no plain `reindex` would ever backfill (real
+    //    vectors classify as Real, so only `reindex --force` re-embeds a
+    //    switched store).
+    //
+    //    The hook contract is exit-0-always (the hook must never surface an
+    //    error to the agent mid-session), but the refusal is never silent:
+    //    the error message is printed to stderr so the user (not the agent)
+    //    sees that the hook is refusing and why.
+    if let Err(e) = ensure_hook_identity_ok(&db, config) {
+        eprintln!("vipune hook: {e}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    // 6. Insert with placeholder embedding (its dimension tracks the shared
+    //    `EMBEDDING_DIMS` constant, so it stays valid under any 384-dim
+    //    profile — the profile source is the constant, and the placeholder
+    //    classifies as `Mock` so `reindex --force` re-embeds it with the
+    //    configured profile's passage prefix). A UNIQUE constraint violation
     //    (either from a pre-existing row or a concurrent hook event that
     //    raced past any pre-check) is treated as a silent skip — the row
     //    was already inserted by the other invocation, so the outcome is
@@ -376,5 +397,73 @@ mod tests {
             count, 1,
             "PreToolUse with tool_input object should insert one row"
         );
+    }
+
+    #[test]
+    fn hook_refuses_on_identity_mismatch_and_exits_zero() {
+        // Decision 8: the hook refuses the insert on mismatch (exit 0 — the
+        // hook contract is never non-zero — but the refusal is not silent:
+        // an error message goes to stderr). This test asserts the
+        // pipeline-level contract: exit 0 AND zero rows inserted.
+        let (config, _tmp, db_path) = make_config_with_tmp_db();
+        let mut _db = Database::open(&db_path).expect("open db");
+        crate::commands::reindex_force::record_identity_and_clear_marker(
+            &mut _db,
+            &crate::sqlite::identity::ModelIdentity {
+                model_id: "intfloat/multilingual-e5-small".to_string(),
+                revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
+            },
+        )
+        .unwrap();
+        let repo = make_git_repo(
+            _tmp.path(),
+            "repo-mismatch",
+            "git@github.com:owner/repo-mismatch.git",
+        );
+        let payload = format!(
+            r#"{{"prompt": "something to remember", "cwd": "{}"}}"#,
+            repo.display()
+        );
+        let exit = run_hook_event(&config, HookEvent::UserPromptSubmit, &payload)
+            .expect("hook exits 0 even on refusal");
+        assert_eq!(exit, ExitCode::SUCCESS, "hook must exit 0 on refusal");
+        let db2 = Database::open(&db_path).expect("open db");
+        let count: i64 = db2
+            .conn()
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(count, 0, "refused hook insert must not create a row");
+    }
+
+    #[test]
+    fn hook_refuses_while_migration_marker_present() {
+        let (config, _tmp, db_path) = make_config_with_tmp_db();
+        let _db = Database::open(&db_path).expect("open db");
+        crate::commands::reindex_force::write_marker(
+            &_db,
+            &crate::sqlite::identity::ModelIdentity {
+                model_id: "intfloat/multilingual-e5-small".to_string(),
+                revision: "rev".to_string(),
+            },
+        )
+        .unwrap();
+        let repo = make_git_repo(
+            _tmp.path(),
+            "repo-migrating",
+            "git@github.com:owner/repo-migrating.git",
+        );
+        let payload = format!(
+            r#"{{"prompt": "something to remember", "cwd": "{}"}}"#,
+            repo.display()
+        );
+        let exit = run_hook_event(&config, HookEvent::UserPromptSubmit, &payload)
+            .expect("hook exits 0 even on refusal");
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let db2 = Database::open(&db_path).expect("open db");
+        let count: i64 = db2
+            .conn()
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(count, 0, "hook during migration must not create a row");
     }
 }
