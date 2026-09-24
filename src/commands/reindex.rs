@@ -68,11 +68,12 @@ fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
 /// the embedder cannot be initialised, or all rows fail.
 /// The library mirror of the CLI's resolved config: every field copied
 /// explicitly (the same totality contract as `main.rs`'s `to_lib_config`),
-/// so the migration runs with the values the CLI is using.
-fn config_from_cli() -> crate::config::Config {
+/// so the migration runs with the values the CLI is using. Loading the
+/// config here (a production path) surfaces errors instead of panicking.
+fn config_from_cli() -> Result<crate::config::Config, Error> {
     use crate::config::Config as CliConfig;
-    let cli = CliConfig::load().expect("CLI config was already loaded at startup");
-    crate::config::Config {
+    let cli = CliConfig::load().map_err(|e| Error::Config(e.to_string()))?;
+    Ok(crate::config::Config {
         database_path: cli.database_path,
         embedding_model: cli.embedding_model,
         similarity_threshold: cli.similarity_threshold,
@@ -82,7 +83,7 @@ fn config_from_cli() -> crate::config::Config {
         promotion_threshold: cli.promotion_threshold,
         prune_retrieval_limit: cli.prune_retrieval_limit,
         prune_min_age_days: cli.prune_min_age_days,
-    }
+    })
 }
 
 pub fn handle_reindex(
@@ -270,7 +271,7 @@ fn handle_reindex_force(
     // The migration sees the same resolved config the CLI is running with
     // (every field copied explicitly — see `config_from_cli`); only the
     // model id is re-pointed at the CLI's.
-    let mut lib_config = config_from_cli();
+    let mut lib_config = config_from_cli()?;
     lib_config.embedding_model = model_id.to_string();
 
     // `migrate_model` opens its own handle with busy_timeout=0, constructs a

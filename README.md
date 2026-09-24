@@ -310,22 +310,20 @@ for memory in results {
 2. **Call `vipune::migrate_model`** — it runs the same crash-safe pre-flight + marker-first + re-embed lifecycle as `reindex --force`:
 
 ```rust
-use vipune::{migrate_model, Config, MemoryStore, MemoryType, MemoryStatus};
-use std::path::Path;
+use vipune::{migrate_model, Config, MemoryStore};
 
-let config = Config {
-    database_path: Path::new("/path/to/db.db").to_path_buf(),
-    embedding_model: "intfloat/multilingual-e5-small".to_string(),
-    ..Default::default()
-};
+// Start from your fully loaded config (file + environment values) and
+// re-point the model id at the migration target.
+let mut config = Config::load().expect("failed to load config");
+config.embedding_model = "intfloat/multilingual-e5-small".into();
 
 // The old store must be dropped before this call.
-let report = migrate_model(Path::new("/path/to/db.db"), &config)
+let report = migrate_model(config.database_path.as_path(), &config)
     .expect("migration failed");
 println!("Reindexed {} rows ({} skipped)", report.reindexed, report.skipped);
 
 // Reopen the store with the new model.
-let store = MemoryStore::new(Path::new("/path/to/db.db"), &config.embedding_model, config)
+let store = MemoryStore::new(config.database_path.as_path(), &config.embedding_model, config)
     .expect("reopen failed");
 ```
 
