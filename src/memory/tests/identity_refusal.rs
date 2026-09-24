@@ -188,7 +188,10 @@ fn add_succeeds_when_identity_matches() {
     // Recorded identity == configured → no refusal (zero-change contract for
     // a healthy store).
     let (_dir, mut store) = prepared_store(crate::embedding::EMBED_MODEL_ID, |db| {
-        record_identity(db.conn(), &crate::sqlite::identity::ModelIdentity::default_identity());
+        record_identity(
+            db.conn(),
+            &crate::sqlite::identity::ModelIdentity::default_identity(),
+        );
     });
     let result = store
         .add_with_conflict(

@@ -76,7 +76,9 @@ pub use sqlite::embedding::classify_embedding;
 /// Model identity tracking (issue #217): the recorded (model id, revision)
 /// pair a database's vectors were produced with, plus the mismatch /
 /// in-flight-migration refusal shared by the embedding chokepoints.
-pub use sqlite::identity::{ModelIdentity, assert_identity_ok, current_identity, is_migrating, read_identity};
+pub use sqlite::identity::{
+    ModelIdentity, assert_identity_ok, current_identity, is_migrating, read_identity,
+};
 
 #[cfg(test)]
 mod integration_tests {

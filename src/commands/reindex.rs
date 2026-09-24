@@ -10,9 +10,9 @@
 //! idempotent pass). Plain reindex (no `--force`) still re-embeds only
 //! Mock-classified rows.
 
+use crate::commands::reindex_force::{self, ReembedFailure};
 use crate::embedding::{EmbeddingEngine, MAX_EMBEDDING_TOKENS};
 use crate::embedding_profiles::{EmbeddingRole, profile_for};
-use crate::commands::reindex_force::{self, ReembedFailure};
 use crate::errors::Error;
 use crate::output::{ReindexFailure, ReindexResponse, print_json};
 use crate::sqlite::Database;
@@ -233,8 +233,7 @@ fn handle_reindex_force(
     // report the offending ids, refuse to start, and write nothing — the
     // marker must only ever be written in a state the re-embed pass can
     // complete.
-    let offending =
-        reindex_force::over_limit_row_ids(db, &engine, projects, &passage_prefix)?;
+    let offending = reindex_force::over_limit_row_ids(db, &engine, projects, &passage_prefix)?;
     if !offending.is_empty() {
         eprintln!(
             "Error: reindex --force refused to start: {} row(s) exceed the {}-token limit once the '{}' passage prefix is prepended. Fix or remove these memories, then re-run `vipune reindex --force`:",

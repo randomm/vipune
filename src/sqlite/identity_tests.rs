@@ -297,7 +297,9 @@ fn test_interrupted_migration_reports_old_identity_and_marker_target() {
     let (identity, marker) = read_identity_and_marker(&conn).unwrap();
     assert_eq!(identity, Some(old.clone()), "identity is still the old one");
     assert!(
-        marker.as_deref().is_some_and(|m| m.contains(&target.display())),
+        marker
+            .as_deref()
+            .is_some_and(|m| m.contains(&target.display())),
         "marker names the target: {marker:?}"
     );
     assert_eq!(read_identity(&conn).unwrap(), Some(old));
