@@ -16,7 +16,7 @@ pub mod search;
 pub mod supersede;
 pub mod update;
 
-pub use migration_types::{MigrationReport, MigrationRowFailure};
+pub use migration_types::MigrationReport;
 
 #[cfg(test)]
 mod tests;
@@ -99,10 +99,21 @@ pub enum Error {
     /// Pre-flight token scan found rows exceeding the embedding token limit.
     /// Carries the offending memory ids structurally so callers can act
     /// without parsing a message.
+    ///
+    /// Constructed internally by `crate::migration` (lib target); the bin
+    /// target does not call the migration path directly, so this variant is
+    /// dead in the bin target. The `#[allow]` is necessary to keep the
+    /// crate compiling under `-D dead-code` (the two targets compile
+    /// separately and the lib-target constructor is not visible to the bin).
+    #[allow(dead_code)]
     MigrationRefused { offending: Vec<String> },
     /// The re-embed pass ran but at least one row failed to embed.
     /// The migration marker is left in place and the old identity is kept;
     /// the `report` carries the per-row failure details.
+    ///
+    /// See the `MigrationRefused` doc comment for why `#[allow(dead_code)]`
+    /// is necessary in the bin target.
+    #[allow(dead_code)]
     MigrationIncomplete { report: MigrationReport },
 }
 
