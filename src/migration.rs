@@ -34,15 +34,10 @@ use crate::embedding_profiles::{EmbeddingRole, profile_for};
 use crate::errors::Error;
 use crate::sqlite::embedding::{EmbeddingClass, classify_embedding};
 use crate::sqlite::identity::ModelIdentity;
+use crate::sqlite::migration_types::{MigrationReport, MigrationRowFailure};
 use crate::sqlite::{self, Database, Error as SqliteError};
 use std::cell::RefCell;
 use std::path::Path;
-
-/// The result of a completed model migration pass.
-pub use crate::sqlite::migration_types::MigrationReport;
-
-/// A single row whose re-embedding failed during a migration pass.
-pub use crate::sqlite::migration_types::MigrationRowFailure;
 
 /// Migrate the whole database (all projects) at `db_path` to the model
 /// profile named by `config.embedding_model`.
@@ -155,7 +150,7 @@ where
 
     let mut reindexed: usize = 0;
     let mut skipped: usize = 0;
-    let mut failures: Vec<MigrationRowFailure> = Vec::new();
+    let mut failures: Vec<MigrationRowFailure> = vec![];
 
     for project_id in &projects {
         let (r, s, f) = reembed_project(db, project_id, &mut *embed)?;

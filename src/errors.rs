@@ -167,6 +167,21 @@ mod error_conversion_tests {
     }
 
     #[test]
+    fn migration_refused_message_names_the_token_limit_constant() {
+        // The rendered wording must track MAX_EMBEDDING_TOKENS (already
+        // interpolated via the #[error] attribute) — this pins "512-token"
+        // to the constant so the two cannot drift.
+        let err = Error::MigrationRefused {
+            offending: vec!["mem-1".to_string()],
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&crate::embedding::MAX_EMBEDDING_TOKENS.to_string()),
+            "expected the rendered message to contain the token-limit constant: {msg}"
+        );
+    }
+
+    #[test]
     fn sqlite_migration_refused_converts_to_migration_refused() {
         let offending = vec!["mem-1".to_string(), "mem-2".to_string()];
         let sqlite_err = crate::sqlite::Error::MigrationRefused {

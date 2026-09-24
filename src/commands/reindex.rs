@@ -52,38 +52,23 @@ fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
     }
 }
 
-/// Run the reindex operation on the database.
-///
-/// # Arguments
-///
-/// * `db_path` - Path to the SQLite database
-/// * `model_id` - HuggingFace model ID for the embedding engine
-/// * `project_filter` - If Some, only reindex this project; if None, reindex all projects
-/// * `force` - If true, full model-switch migration (marker → re-embed all rows → record identity)
-/// * `json` - If true, output JSON; otherwise human-readable
-///
-/// # Errors
-///
-/// Returns error if the database is locked (we set busy_timeout=0 for fast-fail),
-/// the embedder cannot be initialised, or all rows fail.
-/// The library mirror of the CLI's resolved config: every field copied
-/// explicitly (the same totality contract as `main.rs`'s `to_lib_config`),
-/// so the migration runs with the values the CLI is using. Loading the
-/// config here (a production path) surfaces errors instead of panicking.
-fn config_from_cli() -> Result<crate::config::Config, Error> {
-    use crate::config::Config as CliConfig;
-    let cli = CliConfig::load().map_err(|e| Error::Config(e.to_string()))?;
-    Ok(crate::config::Config {
-        database_path: cli.database_path,
-        embedding_model: cli.embedding_model,
-        similarity_threshold: cli.similarity_threshold,
-        recency_weight: cli.recency_weight,
-        hybrid: cli.hybrid,
-        decay_refresh_days: cli.decay_refresh_days,
-        promotion_threshold: cli.promotion_threshold,
-        prune_retrieval_limit: cli.prune_retrieval_limit,
-        prune_min_age_days: cli.prune_min_age_days,
-    })
+/// Open a `Database` handle that fails fast on a locked database, mapping
+/// the lock error to the actionable MCP-server hint. `busy_timeout` is set
+/// to zero so any contended operation fails immediately instead of waiting.
+fn open_fast_fail(db_path: &Path) -> Result<Database, Error> {
+    let db = wrap_busy(Database::open(db_path).map_err(Error::from))?;
+    db.set_busy_timeout(Duration::ZERO)?;
+    Ok(db)
+}
+
+/// The migration's config: the CLI's fully resolved config, with only the
+/// embedding model re-pointed at the model this command was invoked with —
+/// no field-by-field copy that could drift from `main.rs`'s
+/// `to_lib_config`.
+fn migration_config(model_id: &str) -> Result<crate::config::Config, Error> {
+    let mut config = crate::config::Config::load().map_err(|e| Error::Config(e.to_string()))?;
+    config.embedding_model = model_id.to_string();
+    Ok(config)
 }
 
 pub fn handle_reindex(
@@ -93,19 +78,8 @@ pub fn handle_reindex(
     force: bool,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    // Open database
-    let db = Database::open(db_path).map_err(|e| {
-        let err_msg = e.to_string();
-        if err_msg.contains("database is locked") {
-            return Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-            );
-        }
-        Error::Config(err_msg)
-    })?;
-
-    // Set busy timeout to 0ms for fast-fail behavior on database locks (reindex-specific)
-    db.set_busy_timeout(Duration::ZERO)?;
+    // Open database (fast-fail on a lock; busy_timeout=0, MCP-server hint)
+    let db = open_fast_fail(db_path)?;
 
     // Determine which projects to process (the full list is also needed for
     // the scoped-reindex hint below).
@@ -241,16 +215,7 @@ fn handle_reindex_force(
     // the handle so `migrate_model` can open its own connection without a
     // lock conflict.
     let (current, migrating) = {
-        let db = Database::open(db_path).map_err(|e| {
-            let err_msg = e.to_string();
-            if err_msg.contains("database is locked") {
-                return Error::Config(
-                    "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-                );
-            }
-            Error::Config(err_msg)
-        })?;
-        db.set_busy_timeout(Duration::ZERO)?;
+        let db = open_fast_fail(db_path)?;
         let current = identity::current_identity(db.conn()).map_err(Error::from)?;
         let migrating = identity::is_migrating(db.conn()).map_err(Error::from)?;
         (current, migrating)
@@ -268,11 +233,9 @@ fn handle_reindex_force(
         }
     }
 
-    // The migration sees the same resolved config the CLI is running with
-    // (every field copied explicitly — see `config_from_cli`); only the
-    // model id is re-pointed at the CLI's.
-    let mut lib_config = config_from_cli()?;
-    lib_config.embedding_model = model_id.to_string();
+    // The migration sees the CLI's fully resolved config, with only the
+    // model re-pointed at the one this command was invoked with.
+    let lib_config = migration_config(model_id)?;
 
     // `migrate_model` opens its own handle with busy_timeout=0, constructs a
     // single embedding engine, and runs the full lifecycle with one
