@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-24
+
+### Features
+
+- Let users choose their embedding model per database ([#218](https://github.com/randomm/vipune/pull/218))
+
+
 ## [0.12.0] - 2026-09-11
 
 ### Bug Fixes
