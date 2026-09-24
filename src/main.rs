@@ -3,7 +3,7 @@
 mod commands;
 mod config;
 mod embedding;
-pub mod embedding_profiles; // Re-export for library consumers: built-in model profile table
+mod embedding_profiles;
 mod errors;
 
 mod hook;

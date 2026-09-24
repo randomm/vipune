@@ -402,11 +402,11 @@ fn test_export_header_records_recorded_identity() {
     let (_dir, db_path) = create_test_db();
     {
         let db = Database::open(&db_path).unwrap();
-        let id = crate::sqlite::model_identity::ModelIdentity {
+        let id = crate::sqlite::identity::ModelIdentity {
             model_id: "e5-model".to_string(),
             revision: "e5-rev".to_string(),
         };
-        crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id.into()).unwrap();
+        crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id).unwrap();
     }
     let db = Database::open(&db_path).unwrap();
     let conn = db.conn();

@@ -468,14 +468,25 @@ impl MemoryStore {
     /// the 512-token `ContentTooLong` check sees the prefixed text; the
     /// prefix never touches the stored content, FTS index, or output.
     ///
+    /// Before embedding, the store refuses if its model identity (recorded
+    /// row, or the bge default when unrecorded) does not match the configured
+    /// model, or if a migration marker is in flight (issue #217) — this is
+    /// the single chokepoint through which add, update, search, hybrid
+    /// search, batch ingest and supersede all embed.
+    ///
     /// In test builds, uses the injected `test_embedder` if present (the fake
-    /// embedder ignores the prefix and embeds the raw text). Otherwise
-    /// delegates to the real embedding engine.
+    /// embedder ignores the prefix and embeds the raw text); the identity
+    /// check runs before the test embedder is consulted.
     pub(crate) fn get_embedding(
         &mut self,
         content: &str,
         role: EmbeddingRole,
     ) -> Result<Vec<f32>, Error> {
+        // Mismatch / in-flight-migration refusal (issue #217): never embed
+        // into a store whose vectors were produced by a different model, or
+        // while a `reindex --force` migration is in flight.
+        self.assert_embedding_allowed()?;
+
         #[cfg(test)]
         {
             if let Some(f) = &self.test_embedder {

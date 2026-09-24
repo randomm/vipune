@@ -74,8 +74,14 @@ pub fn run_hook_event(
     //    interrupted `reindex --force` marker — is refused: placeholder rows
     //    would accumulate that no plain `reindex` would ever backfill (real
     //    vectors classify as Real, so only `reindex --force` re-embeds a
-    //    switched store). The hook stays silent: skip, exit 0.
-    if ensure_hook_identity_ok(&db, config).is_err() {
+    //    switched store).
+    //
+    //    The hook contract is exit-0-always (the hook must never surface an
+    //    error to the agent mid-session), but the refusal is never silent:
+    //    the error message is printed to stderr so the user (not the agent)
+    //    sees that the hook is refusing and why.
+    if let Err(e) = ensure_hook_identity_ok(&db, config) {
+        eprintln!("vipune hook: {e}");
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -88,14 +94,6 @@ pub fn run_hook_event(
     //    raced past any pre-check) is treated as a silent skip — the row
     //    was already inserted by the other invocation, so the outcome is
     //    correct.
-    //
-    //    Refusal on identity mismatch or a migration marker in flight
-    //    (issue #217 decision 8): the hook process already opens the
-    //    database, so `ensure_hook_identity_ok` reads the recorded identity
-    //    and migration marker and refuses the insert (skip) when they do
-    //    not match the configured profile or a migration is in flight.
-    //    The marker is only written and cleared by `reindex --force`
-    //    (helpers in `crate::sqlite::model_identity`), never by the hook.
     let hash = content_hash(&candidate);
     let embedding = placeholder_embedding(&candidate);
     let result = db.insert_with_hash(
@@ -399,5 +397,73 @@ mod tests {
             count, 1,
             "PreToolUse with tool_input object should insert one row"
         );
+    }
+
+    #[test]
+    fn hook_refuses_on_identity_mismatch_and_exits_zero() {
+        // Decision 8: the hook refuses the insert on mismatch (exit 0 — the
+        // hook contract is never non-zero — but the refusal is not silent:
+        // an error message goes to stderr). This test asserts the
+        // pipeline-level contract: exit 0 AND zero rows inserted.
+        let (config, _tmp, db_path) = make_config_with_tmp_db();
+        let _db = Database::open(&db_path).expect("open db");
+        crate::sqlite::identity::record_identity_and_clear_marker(
+            _db.conn(),
+            &crate::sqlite::identity::ModelIdentity {
+                model_id: "intfloat/multilingual-e5-small".to_string(),
+                revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
+            },
+        )
+        .unwrap();
+        let repo = make_git_repo(
+            _tmp.path(),
+            "repo-mismatch",
+            "git@github.com:owner/repo-mismatch.git",
+        );
+        let payload = format!(
+            r#"{{"prompt": "something to remember", "cwd": "{}"}}"#,
+            repo.display()
+        );
+        let exit = run_hook_event(&config, HookEvent::UserPromptSubmit, &payload)
+            .expect("hook exits 0 even on refusal");
+        assert_eq!(exit, ExitCode::SUCCESS, "hook must exit 0 on refusal");
+        let db2 = Database::open(&db_path).expect("open db");
+        let count: i64 = db2
+            .conn()
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(count, 0, "refused hook insert must not create a row");
+    }
+
+    #[test]
+    fn hook_refuses_while_migration_marker_present() {
+        let (config, _tmp, db_path) = make_config_with_tmp_db();
+        let _db = Database::open(&db_path).expect("open db");
+        crate::sqlite::identity::write_marker(
+            _db.conn(),
+            &crate::sqlite::identity::ModelIdentity {
+                model_id: "intfloat/multilingual-e5-small".to_string(),
+                revision: "rev".to_string(),
+            },
+        )
+        .unwrap();
+        let repo = make_git_repo(
+            _tmp.path(),
+            "repo-migrating",
+            "git@github.com:owner/repo-migrating.git",
+        );
+        let payload = format!(
+            r#"{{"prompt": "something to remember", "cwd": "{}"}}"#,
+            repo.display()
+        );
+        let exit = run_hook_event(&config, HookEvent::UserPromptSubmit, &payload)
+            .expect("hook exits 0 even on refusal");
+        assert_eq!(exit, ExitCode::SUCCESS);
+        let db2 = Database::open(&db_path).expect("open db");
+        let count: i64 = db2
+            .conn()
+            .query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(count, 0, "hook during migration must not create a row");
     }
 }

@@ -45,6 +45,13 @@ pub struct MemoryStore {
     pub(crate) embedder: Option<EmbeddingEngine>,
     pub(crate) model_id: String,
     pub(crate) config: Config,
+    /// Identity/marker state read at construction; re-checked before every
+    /// embedding operation (see `assert_embedding_allowed`). Set true by the
+    /// test constructors, which run on temp databases with the configured
+    /// (default) identity and the test embedder — the check is the no-op it
+    /// is for.
+    #[cfg(test)]
+    pub(crate) identity_checked: bool,
     #[cfg(test)]
     pub(crate) test_embedder: Option<TestEmbedder>,
 }
@@ -117,8 +124,36 @@ impl MemoryStore {
             model_id: model_id.to_string(),
             config,
             #[cfg(test)]
+            identity_checked: false,
+            #[cfg(test)]
             test_embedder: None,
         })
+    }
+
+    /// Refuse add/update/search/embedding while the store's model identity
+    /// (recorded row, or the bge default when unrecorded) does not match the
+    /// configured model, or while a migration marker is in flight (issue
+    /// #217). Called lazily before every embedding operation, so a store
+    /// opened against a healthy database still refuses if a migration
+    /// begins mid-session, and a finished migration clears the refusal on
+    /// the next operation without reopening the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Error::Config` message naming the recorded (or default)
+    /// identity against the configured one — or the interrupted migration
+    /// target — and pointing at `vipune reindex --force`.
+    pub(crate) fn assert_embedding_allowed(&mut self) -> Result<(), Error> {
+        #[cfg(test)]
+        if self.identity_checked {
+            return Ok(());
+        }
+        crate::sqlite::identity::assert_identity_ok(self.db.conn(), &self.model_id)?;
+        #[cfg(test)]
+        {
+            self.identity_checked = true;
+        }
+        Ok(())
     }
 
     /// Lazily initialize and return a mutable reference to the embedding engine.
@@ -167,6 +202,7 @@ impl MemoryStore {
             embedder: None,
             model_id: String::new(),
             config,
+            identity_checked: true,
             test_embedder: None,
         }
     }
@@ -201,6 +237,13 @@ impl MemoryStore {
 
         let db = Database::open(&path).expect("open test database");
         Self::from_db_with_test_embedder(db)
+    }
+
+    /// Set the test-only embedder (test builds only).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn set_test_embedder(&mut self, embedder: TestEmbedder) {
+        self.test_embedder = Some(embedder);
     }
 
     #[cfg(test)]

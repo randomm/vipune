@@ -47,7 +47,7 @@ pub mod memory;
 pub mod memory_types; // Library-only: batch ingest API (not used in CLI)
 pub mod project;
 mod rrf;
-pub mod sqlite;
+mod sqlite;
 mod temporal;
 
 #[cfg(test)]
@@ -60,9 +60,7 @@ pub mod mcp;
 // Re-export public API
 pub use config::Config;
 pub use embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine};
-pub use embedding_profiles::{
-    BUILTIN_PROFILES, EmbeddingRole, ModelProfile, default_profile, profile_for,
-};
+pub use embedding_profiles::{BUILTIN_PROFILES, EmbeddingRole, ModelProfile, profile_for};
 pub use errors::Error;
 pub use memory::lifecycle::{MemoryStatus, MemoryType};
 pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
@@ -75,7 +73,11 @@ pub use sqlite::Database;
 pub use sqlite::Memory;
 pub use sqlite::embedding::EmbeddingClass;
 pub use sqlite::embedding::classify_embedding;
-pub use sqlite::identity::{ModelIdentity, current_identity, force_migrate_project, is_migrating};
+pub use sqlite::force_preflight::{force_reembed_preflight, force_reembed_preflight_with_engine};
+pub use sqlite::identity::{
+    ModelIdentity, assert_identity_ok, configured_identity, current_identity,
+    force_migrate_database, is_migrating, record_identity_and_clear_marker, write_marker,
+};
 
 #[cfg(test)]
 mod integration_tests {

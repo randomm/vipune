@@ -16,6 +16,7 @@ use crate::errors::Error;
 use crate::output::{ReindexFailure, ReindexResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::embedding::classify_embedding;
+use crate::sqlite::force_preflight;
 use crate::sqlite::identity;
 use crate::sqlite::identity::ModelIdentity;
 use std::path::Path;
@@ -73,11 +74,13 @@ pub fn handle_reindex(
     // Set busy timeout to 0ms for fast-fail behavior on database locks (reindex-specific)
     db.set_busy_timeout(Duration::ZERO)?;
 
-    // Determine which projects to process
+    // Determine which projects to process (the full list is also needed for
+    // the scoped-reindex hint below).
+    let all_project_ids = wrap_busy(db.list_all_project_ids().map_err(Error::from))?;
     let projects: Vec<String> = if let Some(filter) = project_filter {
         vec![filter.to_string()]
     } else {
-        wrap_busy(db.list_all_project_ids().map_err(Error::from))?
+        all_project_ids.clone()
     };
 
     if projects.is_empty() {
@@ -99,7 +102,6 @@ pub fn handle_reindex(
     // behind (mirrors the issue #156 under-reporting concern).
     if !json {
         if let Some(filter) = project_filter {
-            let all_project_ids = wrap_busy(db.list_all_project_ids().map_err(Error::from))?;
             let other_count = all_project_ids
                 .iter()
                 .filter(|pid| pid.as_str() != filter)
@@ -114,6 +116,17 @@ pub fn handle_reindex(
     }
 
     if force {
+        // `reindex --force` is a per-DATABASE migration (issue #217): the
+        // marker is written once and the new identity is recorded once, only
+        // after every row of every project has been re-embedded. A project
+        // filter would leave a silently mixed store, so --force requires
+        // --all-projects.
+        if project_filter.is_some() {
+            eprintln!(
+                "Error: `reindex --force` migrates the entire database: pass --all-projects so every project is re-embedded before the marker is written and the new identity is recorded."
+            );
+            return Ok(ExitCode::from(1));
+        }
         return handle_reindex_force(&db, model_id, &projects, json);
     }
 
@@ -217,8 +230,12 @@ fn handle_reindex_force(
     // marker. If any row would exceed the 512-token limit once prefixed,
     // refuse to start, write nothing, and list the offending ids — the marker
     // must only ever be written in a state the re-embed pass can complete.
-    let offending =
-        identity::force_reembed_preflight_with_engine(db, &engine, projects, passage_prefix)?;
+    let offending = force_preflight::force_reembed_preflight_with_engine(
+        db,
+        &engine,
+        projects,
+        passage_prefix,
+    )?;
     if !offending.is_empty() {
         eprintln!(
             "Error: reindex --force refused to start: {} row(s) exceed the {}-token limit once the '{}' passage prefix is prepended. Fix or remove these memories, then re-run `vipune reindex --force`:",
@@ -235,25 +252,25 @@ fn handle_reindex_force(
 
     let mut total_failed: usize = 0;
     let mut responses: Vec<ReindexResponse> = vec![];
+    // Re-embed the raw stored content (which never carries a prefix —
+    // prefixes exist only at embed time) with the target profile's passage
+    // prefix applied exactly once; a stored row must never be double-prefixed
+    // (see the no-double-prefixing edge case).
+    let prefix = passage_prefix.to_string();
+    let mut embed_cb = |content: &str| {
+        let prefixed = format!("{prefix}{content}");
+        engine
+            .embed(&prefixed)
+            .map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
+    };
 
     for project_id in projects {
         if !json {
             println!("Project {}: force re-embedding all rows...", project_id);
         }
 
-        let (reindexed, skipped, failed_str) = {
-            // Re-embed the raw stored content (which never carries a prefix —
-            // prefixes exist only at embed time) with the target profile's
-            // passage prefix applied exactly once; a stored row must never be
-            // double-prefixed (see the no-double-prefixing edge case).
-            let cb = |content: &str| {
-                let prefixed = format!("{passage_prefix}{content}");
-                engine
-                    .embed(&prefixed)
-                    .map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
-            };
-            identity::force_migrate_project(db, &target, project_id, cb)?
-        };
+        let (reindexed, skipped, failed_str) =
+            identity::force_reembed_project(db, project_id, &mut embed_cb)?;
 
         let failed: Vec<ReindexFailure> = failed_str
             .iter()
@@ -284,7 +301,9 @@ fn handle_reindex_force(
 
     if total_failed > 0 {
         // Any failure means the re-embed pass did not complete; the marker
-        // stays so operations refuse until a clean re-run finishes.
+        // stays (force_migrate_database refuses to record the new identity
+        // when the pass is incomplete) so operations refuse until a clean
+        // re-run finishes.
         eprintln!(
             "Error: {} row(s) failed during force reindex. The migration marker is left in place; fix the errors and re-run `vipune reindex --force`.",
             total_failed

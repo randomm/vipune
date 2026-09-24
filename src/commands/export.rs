@@ -15,7 +15,7 @@
 //!
 //! The model id + revision record the identity the store's embeddings were
 //! produced with (the recorded identity, or the default bge identity when no
-//! row exists — see `crate::sqlite::model_identity`). Importers compare these
+//! row exists — see `crate::sqlite::identity`). Importers compare these
 //! against the destination database's identity and refuse on mismatch.
 //!
 //! Row line (12 fields; the DB column `type` is renamed `memory_type` so the
@@ -30,7 +30,7 @@
 use crate::errors::Error;
 use crate::sqlite::Database;
 use crate::sqlite::export_scan::ExportRow;
-use crate::sqlite::model_identity;
+use crate::sqlite::identity;
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
@@ -296,9 +296,9 @@ pub fn handle_export(
     // The header records the identity the store's embeddings were produced
     // with (the recorded identity, or the default bge identity when no row
     // exists — the zero-change contract for pre-v6 stores).
-    let (recorded, _) = model_identity::read_identity(db.conn())
+    let (recorded, _) = identity::read_identity_and_marker(db.conn())
         .map_err(|e| Error::Config(format!("identity read failed: {e}")))?;
-    let identity = recorded.unwrap_or_else(model_identity::default_identity);
+    let identity = recorded.unwrap_or_else(identity::ModelIdentity::default_identity);
 
     let rows = db
         .scan_all_rows()

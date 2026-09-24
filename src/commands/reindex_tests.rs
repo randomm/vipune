@@ -378,6 +378,86 @@ fn test_footer_scope_multiple_projects() {
     assert_eq!(footer_scope_text(&projects), "all projects");
 }
 
+#[test]
+fn test_force_refused_without_all_projects() {
+    // `reindex --force` is a per-database migration (issue #217): a project
+    // filter would leave a silently mixed store, so the handler refuses to
+    // start (exit 1) rather than partially migrate. No marker is written.
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
+    db.insert(
+        "proj",
+        "content",
+        &test_fake_embedder("c").unwrap(),
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
+
+    let result = handle_reindex(
+        &db_path,
+        "BAAI/bge-small-en-v1.5",
+        Some("proj"),
+        true,
+        false,
+    );
+    let exit = result.expect("handler returns Ok(ExitCode::from(1)) on refusal");
+    assert_ne!(
+        exit,
+        std::process::ExitCode::SUCCESS,
+        "force without --all-projects must not exit 0"
+    );
+
+    // No marker was written, no identity recorded.
+    let db2 = Database::open(&db_path).unwrap();
+    assert!(!identity::is_migrating(db2.conn()).unwrap());
+    assert!(identity::read_identity(db2.conn()).unwrap().is_none());
+}
+
+#[test]
+fn test_force_with_all_projects_migrates_entire_database() {
+    // Per-database migration lifecycle through the same helpers the handler
+    // uses: marker written once before the pass, then identity recorded +
+    // marker cleared only after every project is re-embedded. (The handler
+    // itself constructs a real EmbeddingEngine, which would download the
+    // model, so the wiring is verified here with a fake embedder; the
+    // handler's refusal path is covered by
+    // test_force_refused_without_all_projects above.)
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
+    db.insert(
+        "a",
+        "alpha",
+        &test_fake_embedder("a").unwrap(),
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
+    db.insert(
+        "b",
+        "beta",
+        &test_fake_embedder("b").unwrap(),
+        None,
+        "fact",
+        "active",
+    )
+    .unwrap();
+
+    let target = identity::ModelIdentity {
+        model_id: "BAAI/bge-small-en-v1.5".to_string(),
+        revision: crate::embedding::EMBED_MODEL_REVISION.to_string(),
+    };
+    identity::write_marker(db.conn(), &target).unwrap();
+    let _ = identity::force_reembed_project(&db, "a", |_| Ok(vec![0.1; 384])).unwrap();
+    let _ = identity::force_reembed_project(&db, "b", |_| Ok(vec![0.1; 384])).unwrap();
+    identity::record_identity_and_clear_marker(db.conn(), &target).unwrap();
+
+    assert_eq!(identity::current_identity(db.conn()).unwrap(), target);
+    assert!(!identity::is_migrating(db.conn()).unwrap());
+}
+
 // ── reindex --force: model-switch migration path (issue #217) ──
 //
 // The --force path is exercised via `reindex_project_force` (the pure
@@ -386,6 +466,7 @@ fn test_footer_scope_multiple_projects() {
 // cover the contract: force re-embeds every row (including Real), writes
 // the marker first, and records identity + clears the marker atomically.
 
+use crate::sqlite::force_preflight;
 use crate::sqlite::identity;
 
 fn force_reindex_project_with_fake_embedder(
@@ -589,7 +670,7 @@ fn test_force_preflight_flags_overlength_rows_and_refuses_to_start() {
 
     let projects = vec!["proj".to_string()];
     let offending =
-        identity::force_reembed_preflight(&db, &projects, "passage: ", count_words).unwrap();
+        force_preflight::force_reembed_preflight(&db, &projects, "passage: ", count_words).unwrap();
 
     assert_eq!(offending.len(), 1, "only the long row should be flagged");
     assert_eq!(offending[0], long_id);
@@ -615,7 +696,7 @@ fn test_force_no_marker_when_identity_matches() {
     )
     .unwrap();
 
-    let target = identity::ModelIdentity::bge_default();
+    let target = identity::ModelIdentity::default_identity();
     identity::record_identity_and_clear_marker(db.conn(), &target).unwrap();
     force_reindex_project_with_fake_embedder(&db, "proj").unwrap();
     identity::record_identity_and_clear_marker(db.conn(), &target).unwrap();

@@ -288,10 +288,10 @@ mod tests {
     /// two would break the README/CI drift test and the profile simultaneously.
     #[test]
     fn test_default_profile_matches_embed_constants() {
-        use crate::embedding_profiles::{default_profile, profile_for};
+        use crate::embedding_profiles::profile_for;
         let p = profile_for(EMBED_MODEL_ID).expect("default profile lookup");
         assert_eq!(p.revision, EMBED_MODEL_REVISION);
-        assert_eq!(default_profile().model_id, EMBED_MODEL_ID);
+        assert_eq!(p.model_id, EMBED_MODEL_ID);
     }
 
     /// `EmbeddingEngine::new` must resolve every model id through the profile

@@ -104,11 +104,11 @@ fn db_path_of(dir: &tempfile::TempDir) -> std::path::PathBuf {
 /// header carrying the same pair.
 fn set_identity(db_path: &std::path::Path, model_id: &str, revision: &str) {
     let db = crate::sqlite::Database::open(db_path).unwrap();
-    let id = crate::sqlite::model_identity::ModelIdentity {
+    let id = crate::sqlite::identity::ModelIdentity {
         model_id: model_id.to_string(),
         revision: revision.to_string(),
     };
-    crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id.into()).unwrap();
+    crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id).unwrap();
 }
 
 fn import_stdout_err(source_content: &str, db_path: &std::path::Path) -> Option<String> {
@@ -708,11 +708,10 @@ fn test_import_refuses_while_migration_marker_present() {
     let db = crate::sqlite::Database::open(&db_path).unwrap();
     crate::sqlite::identity::write_marker(
         db.conn(),
-        &crate::sqlite::model_identity::ModelIdentity {
+        &crate::sqlite::identity::ModelIdentity {
             model_id: "e5".to_string(),
             revision: "rev".to_string(),
-        }
-        .into(),
+        },
     )
     .unwrap();
     let blob = blob_of(&test_embedding());

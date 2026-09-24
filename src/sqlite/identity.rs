@@ -1,24 +1,33 @@
-//! Model identity tracking for the `model_identity` table (migration v6).
+//! Model identity tracking for the `model_identity` table (migration v6,
+//! issue #217).
 //!
-//! A database records which embedding model (id + revision) produced its
-//! vectors. A database with no identity row is treated as the built-in
-//! default — bge at its pinned revision (`crate::embedding::{EMBED_MODEL_ID,
-//! EMBED_MODEL_REVISION}`).
+//! A database records which embedding model (id + pinned revision) produced
+//! its vectors. A database with no identity row is treated as the built-in
+//! default — bge at its pinned revision
+//! (`crate::embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION}`).
 //!
 //! An optional migration marker (`"migrating to <id>@<revision>"`) signals
-//! that a `reindex --force` model switch was started but not finished; while
-//! the marker is present, operations that embed must refuse (issue #217).
-//! The marker is written before the re-embed loop and cleared in the same
-//! transaction that records the new identity, so a crash mid-run leaves the
-//! marker behind and the database is unambiguous about its state.
+//! that a `reindex --force` model switch was started but not finished. The
+//! marker is written once, BEFORE any row of the re-embed pass, and cleared in
+//! the same transaction that records the new identity, so a crash mid-run
+//! leaves the marker behind and every embedding operation (add / update /
+//! search / hook insert) refuses until `reindex --force` completes.
+//!
+//! The identity lifecycle is per-DATABASE, not per-project: the marker is
+//! written once and the identity is recorded once after every row of every
+//! project in the database has been re-embedded. That is what keeps a
+//! multi-project database from ending up as a silently mixed store after a
+//! partial run.
 
-use crate::embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION, EmbeddingEngine};
+use crate::embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION};
+use crate::embedding_profiles::profile_for;
 use crate::sqlite::Database;
 use crate::sqlite::Error;
 use crate::sqlite::embedding::{EmbeddingClass, classify_embedding};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
-/// The (model id, revision) pair a database's vectors were produced with.
+/// The (model id, pinned revision) pair a database's vectors were produced
+/// with, or that a migration is switching to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelIdentity {
     pub model_id: String,
@@ -26,8 +35,9 @@ pub struct ModelIdentity {
 }
 
 impl ModelIdentity {
-    /// The default identity: bge at its pinned revision.
-    pub fn bge_default() -> Self {
+    /// The default identity: bge at its pinned revision. A database with no
+    /// recorded identity row is treated as this identity.
+    pub fn default_identity() -> Self {
         Self {
             model_id: EMBED_MODEL_ID.to_string(),
             revision: EMBED_MODEL_REVISION.to_string(),
@@ -41,10 +51,6 @@ impl ModelIdentity {
 }
 
 /// Read the recorded identity. `None` row ⇒ the bge default.
-///
-/// # Errors
-///
-/// Returns error if the read fails.
 pub fn read_identity(conn: &Connection) -> Result<Option<ModelIdentity>, Error> {
     match conn.query_row(
         "SELECT model_id, model_revision FROM model_identity WHERE id = 1",
@@ -60,6 +66,7 @@ pub fn read_identity(conn: &Connection) -> Result<Option<ModelIdentity>, Error> 
     }
 }
 
+/// Read the migration marker, if one is in flight.
 pub fn read_marker(conn: &Connection) -> Result<Option<String>, Error> {
     match conn.query_row(
         "SELECT migration_marker FROM model_identity WHERE id = 1 AND migration_marker IS NOT NULL",
@@ -73,21 +80,20 @@ pub fn read_marker(conn: &Connection) -> Result<Option<String>, Error> {
 }
 
 /// Format the migration marker for a target identity.
+#[allow(dead_code)] // used only by lib-test call sites (see migration_tests)
 pub(crate) fn migration_marker_for(identity: &ModelIdentity) -> String {
     format!("migrating to {}", identity.display())
 }
 
-/// Write the migration marker for a target identity (marker-first crash-safety).
+/// Write the migration marker for a target identity (marker-first
+/// crash-safety).
 ///
-/// The marker is written in its own transaction BEFORE the re-embed loop so
+/// The marker is written in its own transaction BEFORE the re-embed pass so
 /// that an interruption (crash, kill, locked database) leaves the marker
-/// behind: all subsequent embedding operations refuse until `reindex --force`
+/// behind and all embedding operations refuse until `reindex --force`
 /// finishes. The upsert also stages the target identity in the same row so a
 /// marker-present database always names the interrupted target.
-///
-/// # Errors
-///
-/// Returns error if the write fails.
+#[allow(dead_code)] // production caller is the hook path (crate::hook); bin target has no direct caller
 pub fn write_marker(conn: &Connection, target: &ModelIdentity) -> Result<(), Error> {
     let marker = migration_marker_for(target);
     conn.execute(
@@ -108,12 +114,8 @@ pub fn write_marker(conn: &Connection, target: &ModelIdentity) -> Result<(), Err
 /// marker updates are atomic: a crash before the commit leaves the previous
 /// state intact (either the old identity with no marker, or the marker still
 /// set with the old identity), never a half-migrated state.
-///
-/// # Errors
-///
-/// Returns error if the write or the commit fails; the transaction is rolled
-/// back on any error before this function returns.
-pub(crate) fn record_identity_and_clear_marker(
+#[allow(dead_code)] // production caller is `force_migrate_database` (lib); bin target has no direct caller
+pub fn record_identity_and_clear_marker(
     conn: &Connection,
     identity: &ModelIdentity,
 ) -> Result<(), Error> {
@@ -139,120 +141,108 @@ pub(crate) fn record_identity_and_clear_marker(
     }
 }
 
-/// Pre-flight check for `reindex --force` (issue #217, decision 1):
-/// token-count every row's content in each project with the target profile's
-/// passage prefix and refuse to start (returning the offending ids) if any
-/// row would exceed the 512-token limit once embedded.
-///
-/// The marker must only ever be written in a state the pass can complete: if
-/// a row's content is over the token budget *after* the passage prefix is
-/// prepended, the re-embed would fail mid-run, leaving a marker behind and
-/// a half-migrated store. So the over-length rows are detected *before* the
-/// marker is written and the command refuses to start, writing nothing.
-///
-/// Rows are listed per project via `list_all_rows_for_project`; a row with a
-/// corrupted embedding is not skipped here — the pre-flight is about token
-/// count, not embedding validity — and a token-count error on any row is
-/// propagated as an `Error::Sqlite` so the caller can surface it.
-///
-/// # Arguments
-///
-/// * `db` - The database to scan
-/// * `engine` - The embedding engine for the target profile (used only for
-///   its `token_count`, so no embedding work is done)
-/// * `projects` - The project ids to scan (every project, not just the
-///   current one, so a multi-project store can't smuggle an over-length row
-///   past the check via a project-scoped reindex)
-/// * `passage_prefix` - The target profile's passage prefix (prepended to
-///   each row's content before the token count, matching how the re-embed
-///   loop will embed the row)
-///
-/// # Returns
-///
-/// `Ok(Vec<offending_ids>)` — empty when every row fits the token budget
-/// (the pass may proceed), or the list of memory ids whose prefixed content
-/// exceeds the limit (the caller must refuse to start and print them).
-///
-/// # Errors
-///
-/// Returns `Error::Sqlite` if a row's content cannot be token-counted.
-pub fn force_reembed_preflight<C>(
-    db: &Database,
-    projects: &[String],
-    passage_prefix: &str,
-    count: C,
-) -> Result<Vec<String>, Error>
-where
-    C: Fn(&str) -> Result<usize, Error>,
-{
-    let max = crate::embedding::MAX_EMBEDDING_TOKENS;
-    let mut offending: Vec<String> = Vec::new();
-    for project_id in projects {
-        let rows = db.list_all_rows_for_project(project_id)?;
-        for (id, content, _embedding) in rows {
-            let prefixed = format!("{passage_prefix}{content}");
-            let count = count(&prefixed).map_err(|e| Error::Sqlite(e.to_string()))?;
-            if count > max {
-                offending.push(id);
-            }
-        }
-    }
-    Ok(offending)
-}
-
-/// Pre-flight check for `reindex --force` (issue #217, decision 1):
-/// token-count every row's content with the target profile's passage prefix
-/// via the engine's tokenizer, and return the offending ids if any row would
-/// exceed the 512-token limit once embedded.
-///
-/// # Errors
-///
-/// Returns `Error::Sqlite` if a row's content cannot be token-counted.
-pub fn force_reembed_preflight_with_engine(
-    db: &Database,
-    engine: &EmbeddingEngine,
-    projects: &[String],
-    passage_prefix: &str,
-) -> Result<Vec<String>, Error> {
-    force_reembed_preflight(db, projects, passage_prefix, |text| {
-        engine
-            .token_count(text)
-            .map_err(|e| Error::Sqlite(e.to_string()))
-    })
-}
-
-/// Begin a model-switch migration: write the migration marker for the target
-/// identity. Call this BEFORE the re-embed loop so a crash mid-run leaves the
-/// marker behind and all embedding operations refuse.
-///
-/// After the re-embed pass completes cleanly, call [`complete_migration`]
-/// to record the new identity and clear the marker atomically.
-///
-/// # Errors
-///
-/// Returns error if the marker write fails.
-pub(crate) fn begin_migration(conn: &Connection, target: &ModelIdentity) -> Result<(), Error> {
-    write_marker(conn, target)
-}
-
-pub(crate) fn complete_migration(conn: &Connection, identity: &ModelIdentity) -> Result<(), Error> {
-    record_identity_and_clear_marker(conn, identity)
-}
-
+/// True while a migration marker is present (an interrupted `reindex --force`).
 pub fn is_migrating(conn: &Connection) -> Result<bool, Error> {
     Ok(read_marker(conn)?.is_some())
 }
 
+/// The identity the store currently has: the recorded identity, or the bge
+/// default when no row is recorded.
 pub fn current_identity(conn: &Connection) -> Result<ModelIdentity, Error> {
-    Ok(read_identity(conn)?.unwrap_or_else(ModelIdentity::bge_default))
+    Ok(read_identity(conn)?.unwrap_or_else(ModelIdentity::default_identity))
+}
+
+/// The identity the currently configured model resolves to.
+///
+/// A built-in profile id resolves to its pinned revision (via the profile
+/// registry in `crate::embedding_profiles`); any configured id that is not a
+/// built-in profile resolves to the id itself with no revision recorded,
+/// which makes any store with a recorded row mismatch (refused) rather than
+/// silently "matching". Config validation rejects unknown ids anyway.
+pub fn configured_identity(configured_model_id: &str) -> ModelIdentity {
+    match profile_for(configured_model_id) {
+        Ok(profile) => ModelIdentity {
+            model_id: profile.model_id.to_string(),
+            revision: profile.revision.to_string(),
+        },
+        Err(_) => ModelIdentity {
+            model_id: configured_model_id.to_string(),
+            revision: String::new(),
+        },
+    }
+}
+
+/// Read the recorded identity and any migration marker in one query.
+///
+/// Returns `(identity, migration_marker)` where `identity` is `None` when no
+/// row exists (callers compare against [`ModelIdentity::default_identity`])
+/// and `migration_marker` is the "migrating to ..." text if one is present.
+pub fn read_identity_and_marker(
+    conn: &Connection,
+) -> Result<(Option<ModelIdentity>, Option<String>), Error> {
+    let row: Option<(String, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT model_id, model_revision, migration_marker FROM model_identity WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| Error::Sqlite(e.to_string()))?;
+
+    let Some((model_id, revision, marker)) = row else {
+        return Ok((None, None));
+    };
+    // A row written by `reindex --force`'s marker-first step stages the
+    // target identity alongside the marker; treat a partial row as a
+    // recorded identity too.
+    let identity = ModelIdentity {
+        model_id,
+        revision: revision.unwrap_or_default(),
+    };
+    Ok((Some(identity), marker))
+}
+
+/// Mismatch / in-flight-migration refusal for the embedding chokepoints
+/// (issue #217: add, update, search, hook inserts, and anything else that
+/// embeds).
+///
+/// Refuses when a migration marker is present (refusal names the interrupted
+/// target), or when the effective identity (recorded row, or bge default
+/// when unrecorded) differs from the configured model's identity (id OR
+/// revision). The error always points at `vipune reindex --force`.
+///
+/// # Errors
+///
+/// `Error::Config` with the refusal message; `Error::SqliteModule` if the
+/// identity table cannot be read.
+pub fn assert_identity_ok(
+    conn: &Connection,
+    configured_model_id: &str,
+) -> Result<(), crate::errors::Error> {
+    let (recorded, marker) = read_identity_and_marker(conn)
+        .map_err(|e| crate::errors::Error::SqliteModule(e.to_string()))?;
+    if let Some(marker) = marker {
+        return Err(crate::errors::Error::Config(format!(
+            "model migration in progress: database is migrating to {marker} — add/update/search are refused until the migration completes. Run `vipune reindex --force` to complete it."
+        )));
+    }
+    let effective = recorded.unwrap_or_else(ModelIdentity::default_identity);
+    let configured = configured_identity(configured_model_id);
+    if effective != configured {
+        return Err(crate::errors::Error::Config(format!(
+            "model identity mismatch: database was last embedded with {} but the configured model is {}. Re-embed the store with `vipune reindex --force`.",
+            effective.display(),
+            configured.display()
+        )));
+    }
+    Ok(())
 }
 
 /// Re-embed every row in a project, bypassing Mock/Real classification.
 ///
-/// Used by [`force_migrate_project`] and by tests. Only Unknown (corrupted)
-/// rows are skipped; Real and Mock rows are all re-embedded. The `embed`
-/// closure receives the raw stored content (unprefixed) and must return a
-/// 384-dim f32 vector.
+/// Used by [`force_migrate_database`] and by tests. Only Unknown (corrupted)
+/// rows are skipped. The `embed` closure receives the raw stored content
+/// (unprefixed) and must return a 384-dim f32 vector.
 ///
 /// # Returns
 ///
@@ -290,242 +280,70 @@ where
     Ok((reindexed, skipped, failed))
 }
 
-/// Run the full `reindex --force` model-switch migration on a single project.
+/// Run the `reindex --force` model-switch migration for the ENTIRE database
+/// (issue #217).
 ///
-/// This is the lib-level function that the binary's `reindex --force` path
-/// calls. It performs the crash-safe dance in order:
-/// 1. Write the migration marker (via [`begin_migration`])
-/// 2. Re-embed every row via the provided `embed` closure (bypassing
-///    Mock/Real classification; only Unknown rows are skipped)
-/// 3. If all rows succeed: record the new identity and clear the marker
-///    (via [`complete_migration`]) in ONE transaction
-/// 4. If any row fails: the marker stays, and the function returns an error
+/// The caller performs the pre-flight token check on every project first
+/// (see `crate::sqlite::force_preflight`) so the marker is only written when
+/// the pass can complete. This function owns the marker/identity lifecycle:
+/// it writes the migration marker ONCE before any row is touched, re-embeds
+/// every row of every project (bypassing Mock/Real classification), then —
+/// only if every row succeeded — records the new identity and clears the
+/// marker in ONE transaction. If any row failed, the marker stays and the
+/// new identity is NOT recorded (decision 1); the recovery is a clean
+/// re-run of `reindex --force`.
 ///
-/// The `embed` closure receives the raw stored content (unprefixed — prefixes
-/// live only at embed time, never in the DB) and must return a 384-dim f32
-/// vector. The closure is called once per row, in the order returned by
-/// `list_all_rows_for_project`.
-///
-/// # Arguments
-///
-/// * `db` - The database to migrate
-/// * `target` - The target model identity (id + revision) to record
-/// * `project_id` - The project to re-embed (one project per call)
-/// * `embed` - The embedding function (profile's passage embedding)
+/// The `embed` closure receives the raw stored content (unprefixed —
+/// prefixes live only at embed time, never in the DB).
 ///
 /// # Returns
 ///
-/// `(reindexed, skipped, failed)` counts for this project.
+/// `(reindexed, skipped, failed)` counts summed across all projects.
 ///
 /// # Errors
 ///
-/// Returns an error if the marker write fails, the re-embed pass has any
-/// failures, or the final identity commit fails.
-pub fn force_migrate_project<F>(
+/// Error if the marker write fails, the re-embed pass has any failures, or
+/// the final identity commit fails.
+#[allow(dead_code)] // production caller is the hook path (crate::hook) via the marker/identity
+// lifecycle; the bin target's reindex handler uses the per-project helpers
+// directly, so this database-level entry point is not reachable from the bin.
+pub fn force_migrate_database<F>(
     db: &Database,
     target: &ModelIdentity,
-    project_id: &str,
+    projects: &[String],
     mut embed: F,
 ) -> Result<(usize, usize, Vec<String>), Error>
 where
     F: FnMut(&str) -> Result<Vec<f32>, Error>,
 {
-    // Step 1: marker-first (must be durable before any row is touched).
-    begin_migration(db.conn(), target)?;
+    // Marker-first (durable before any row is touched).
+    write_marker(db.conn(), target)?;
 
-    // Step 2: re-embed every row (bypassing Mock/Real classification).
-    let (reindexed, skipped, failed) =
-        force_reembed_project(db, project_id, |content| embed(content))?;
+    // Re-embed every row of every project, then — only on a fully clean pass
+    // — record the new identity and clear the marker in one transaction.
+    let mut totals: (usize, usize, Vec<String>) = (0, 0, vec![]);
+    for project_id in projects {
+        let (reindexed, skipped, failed) = force_reembed_project(db, project_id, &mut embed)?;
+        totals.0 += reindexed;
+        totals.1 += skipped;
+        totals.2.extend(failed);
+    }
 
-    if !failed.is_empty() {
-        // Marker stays — the re-embed pass did not complete.
+    if !totals.2.is_empty() {
+        // Marker stays — the re-embed pass did not complete, and the new
+        // identity is deliberately NOT recorded (issue #217 decision 1).
         return Err(Error::InvalidInput(format!(
-            "force reindex failed on {} row(s) for project {}: the migration marker is left in place. Fix the errors and re-run `vipune reindex --force`.",
-            failed.len(),
-            project_id
+            "force reindex failed on {} row(s) across {} project(s): the migration marker is left in place and the new model identity was not recorded. Fix the errors and re-run `vipune reindex --force`.",
+            totals.2.len(),
+            projects.len()
         )));
     }
 
-    // Step 3: record identity + clear marker in ONE transaction.
-    complete_migration(db.conn(), target)?;
+    record_identity_and_clear_marker(db.conn(), target)?;
 
-    Ok((reindexed, skipped, failed))
+    Ok(totals)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use rusqlite::Connection;
-
-    fn migrated_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE model_identity (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                model_id TEXT,
-                model_revision TEXT,
-                migration_marker TEXT
-            );",
-        )
-        .unwrap();
-        conn
-    }
-
-    #[test]
-    fn test_no_row_means_none() {
-        let conn = migrated_conn();
-        assert_eq!(read_identity(&conn).unwrap(), None);
-        assert_eq!(read_marker(&conn).unwrap(), None);
-    }
-
-    #[test]
-    fn test_read_identity_roundtrip() {
-        let conn = migrated_conn();
-        let identity = ModelIdentity {
-            model_id: "intfloat/multilingual-e5-small".to_string(),
-            revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
-        };
-        record_identity_and_clear_marker(&conn, &identity).unwrap();
-        assert_eq!(read_identity(&conn).unwrap(), Some(identity));
-        assert_eq!(read_marker(&conn).unwrap(), None);
-    }
-
-    #[test]
-    fn test_write_marker_persists_marker_and_target() {
-        let conn = migrated_conn();
-        let target = ModelIdentity {
-            model_id: "intfloat/multilingual-e5-small".to_string(),
-            revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
-        };
-        write_marker(&conn, &target).unwrap();
-        let marker = read_marker(&conn).unwrap();
-        assert_eq!(
-            marker.as_deref(),
-            Some(
-                "migrating to intfloat/multilingual-e5-small@614241f622f53c4eeff9890bdc4f31cfecc418b3"
-            )
-        );
-        let target_recorded = read_identity(&conn).unwrap();
-        assert_eq!(target_recorded, Some(target));
-    }
-
-    #[test]
-    fn test_record_identity_clears_marker() {
-        let conn = migrated_conn();
-        let target = ModelIdentity {
-            model_id: "intfloat/multilingual-e5-small".to_string(),
-            revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
-        };
-        write_marker(&conn, &target).unwrap();
-        // Simulate a crash mid-run: marker present, some rows re-embedded.
-        // Re-run: record identity + clear marker in one transaction.
-        record_identity_and_clear_marker(&conn, &target).unwrap();
-        assert_eq!(read_identity(&conn).unwrap(), Some(target));
-        assert_eq!(read_marker(&conn).unwrap(), None);
-    }
-
-    #[test]
-    fn test_marker_overwrites_existing_marker() {
-        let conn = migrated_conn();
-        let first = ModelIdentity {
-            model_id: "intfloat/multilingual-e5-small".to_string(),
-            revision: "rev-a".to_string(),
-        };
-        let second = ModelIdentity {
-            model_id: "BAAI/bge-small-en-v1.5".to_string(),
-            revision: "rev-b".to_string(),
-        };
-        write_marker(&conn, &first).unwrap();
-        write_marker(&conn, &second).unwrap();
-        let marker = read_marker(&conn).unwrap();
-        assert_eq!(
-            marker.as_deref(),
-            Some("migrating to BAAI/bge-small-en-v1.5@rev-b")
-        );
-        // Still a single row.
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM model_identity", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn test_bge_default_identity_matches_embed_constants() {
-        let default = ModelIdentity::bge_default();
-        assert_eq!(default.model_id, EMBED_MODEL_ID);
-        assert_eq!(default.revision, EMBED_MODEL_REVISION);
-        assert_eq!(
-            default.display(),
-            "BAAI/bge-small-en-v1.5@5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
-        );
-    }
-
-    #[test]
-    fn test_record_identity_overwrites_previous_identity() {
-        let conn = migrated_conn();
-        let first = ModelIdentity::bge_default();
-        record_identity_and_clear_marker(&conn, &first).unwrap();
-        let second = ModelIdentity {
-            model_id: "intfloat/multilingual-e5-small".to_string(),
-            revision: "rev-x".to_string(),
-        };
-        record_identity_and_clear_marker(&conn, &second).unwrap();
-        assert_eq!(read_identity(&conn).unwrap(), Some(second));
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM model_identity", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(count, 1);
-    }
-
-    // Integration test: exercise the full force_migrate_project path so the
-    // lib target's dead-code analysis sees all intermediate functions as used.
-    #[test]
-    fn test_force_migrate_project_full_cycle() {
-        use crate::sqlite::Database;
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        let db = Database::open(&path).unwrap();
-
-        let fake_embed = |content: &str| -> Result<Vec<f32>, Error> {
-            // Deterministic fake: hash content into a 384-dim vector with norm ≈ 1.0
-            let mut v = vec![0.0f32; 384];
-            for (i, b) in content.bytes().enumerate() {
-                v[i % 384] += (b as f32) / 255.0;
-            }
-            let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-            if norm > 0.0 {
-                for x in &mut v {
-                    *x /= norm;
-                }
-            }
-            Ok(v)
-        };
-
-        db.insert(
-            "proj",
-            "test content",
-            &vec![0.5; 384],
-            None,
-            "fact",
-            "active",
-        )
-        .unwrap();
-
-        let target = ModelIdentity {
-            model_id: "test-model".to_string(),
-            revision: "test-rev".to_string(),
-        };
-
-        let (reindexed, skipped, failed) =
-            force_migrate_project(&db, &target, "proj", |c| fake_embed(c)).unwrap();
-        assert_eq!(reindexed, 1);
-        assert_eq!(skipped, 0);
-        assert!(failed.is_empty());
-
-        // Identity recorded, marker cleared.
-        assert_eq!(current_identity(db.conn()).unwrap(), target);
-        assert!(!is_migrating(db.conn()).unwrap());
-    }
-}
+#[path = "identity_tests.rs"]
+mod identity_tests;

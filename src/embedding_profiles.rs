@@ -62,17 +62,10 @@ impl ModelProfile {
     /// All built-in profiles are 384-dimensional; this method is the single
     /// place callers should read the dimension from, so a future profile with
     /// different geometry can declare it here.
+    #[allow(dead_code)] // test-only call sites
     pub fn dims(&self) -> usize {
         EMBEDDING_DIMS
     }
-}
-
-/// The default built-in profile: bge-small-en-v1.5 at its pinned revision.
-///
-/// A database with no recorded model identity is treated as this profile at
-/// its pinned revision.
-pub fn default_profile() -> &'static ModelProfile {
-    &BUILTIN_PROFILES[0]
 }
 
 /// The role an embedding is computed for.
@@ -187,7 +180,7 @@ mod tests {
 
     #[test]
     fn default_profile_is_bge() {
-        assert_eq!(default_profile().model_id, "BAAI/bge-small-en-v1.5");
+        assert_eq!(BUILTIN_PROFILES[0].model_id, "BAAI/bge-small-en-v1.5");
     }
 
     #[test]

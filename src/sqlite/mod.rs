@@ -4,13 +4,13 @@
 
 pub mod embedding;
 pub mod export_scan;
+pub mod force_preflight;
 pub mod fts;
 pub mod hash;
 pub mod identity;
 pub mod import;
 pub mod list;
 pub mod migrations;
-pub mod model_identity;
 pub mod query_mod;
 pub mod search;
 pub mod supersede;

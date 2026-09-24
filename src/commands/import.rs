@@ -32,7 +32,7 @@
 use crate::errors::Error;
 use crate::output::print_json;
 use crate::sqlite::Database;
-use crate::sqlite::model_identity;
+use crate::sqlite::identity;
 use base64::Engine;
 use serde::Deserialize;
 use std::io::BufRead;
@@ -142,9 +142,9 @@ struct HeaderIdentity {
 impl HeaderIdentity {
     /// Resolve to a concrete identity: absent fields fall back to the default
     /// bge identity's value.
-    fn resolved(&self) -> model_identity::ModelIdentity {
-        let default = model_identity::default_identity();
-        model_identity::ModelIdentity {
+    fn resolved(&self) -> identity::ModelIdentity {
+        let default = identity::ModelIdentity::default_identity();
+        identity::ModelIdentity {
             model_id: self.model_id.clone().unwrap_or(default.model_id),
             revision: self.model_revision.clone().unwrap_or(default.revision),
         }
@@ -219,7 +219,7 @@ pub(crate) fn run_import(db_path: &Path, source: &str) -> Result<ImportResponse,
     // quality, so the import is refused (use `reindex --force` after export
     // into a matching store, or re-export from a matching store).
     let (_rows, header_identity) = validate_header(lines[0])?;
-    let (recorded, marker) = model_identity::read_identity(db.conn())
+    let (recorded, marker) = identity::read_identity_and_marker(db.conn())
         .map_err(|e| Error::SqliteModule(format!("identity read failed: {e}")))?;
     if marker.is_some() {
         return Err(Error::InvalidInput(format!(
@@ -227,7 +227,7 @@ pub(crate) fn run_import(db_path: &Path, source: &str) -> Result<ImportResponse,
             marker.unwrap_or_default()
         )));
     }
-    let destination = recorded.unwrap_or_else(model_identity::default_identity);
+    let destination = recorded.unwrap_or_else(identity::ModelIdentity::default_identity);
     let source = header_identity.resolved();
     if source != destination {
         return Err(Error::InvalidInput(format!(
