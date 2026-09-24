@@ -542,6 +542,64 @@ fn test_force_marker_survives_interruption() {
 }
 
 #[test]
+fn test_force_preflight_flags_overlength_rows_and_refuses_to_start() {
+    // Decision 1: reindex --force token-counts every row with the target
+    // profile's passage prefix BEFORE writing the marker. A row whose
+    // prefixed content exceeds 512 tokens must be listed by the pre-flight
+    // scan, and the caller must refuse to start (write nothing).
+    //
+    // The token-count boundary itself (512 tokens) is covered by the
+    // existing embed() boundary tests in src/embedding.rs. Here we verify
+    // the scan logic with a stub counter so no model download is needed:
+    // the stub counts words, so any row with >512 words is flagged.
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
+
+    // A row well over 512 words (hence well over 512 tokens).
+    let long_content: String = (0..600)
+        .map(|i| format!("word{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let long_id = db
+        .insert(
+            "proj",
+            &long_content,
+            &vec![0.5; 384],
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+    // A short row that fits comfortably.
+    let short_id = db
+        .insert(
+            "proj",
+            "short content",
+            &vec![0.5; 384],
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap();
+
+    // Stub counter: counts whitespace-separated tokens (a lower bound on the
+    // real token count, so the >512 threshold is conservative).
+    let count_words =
+        |text: &str| -> Result<usize, crate::sqlite::Error> { Ok(text.split_whitespace().count()) };
+
+    let projects = vec!["proj".to_string()];
+    let offending =
+        identity::force_reembed_preflight(&db, &projects, "passage: ", count_words).unwrap();
+
+    assert_eq!(offending.len(), 1, "only the long row should be flagged");
+    assert_eq!(offending[0], long_id);
+    assert!(
+        !offending.iter().any(|id| id == &short_id),
+        "short row must not be flagged"
+    );
+}
+
+#[test]
 fn test_force_no_marker_when_identity_matches() {
     // If the database already has the target identity recorded and no marker,
     // a force re-embed pass leaves the identity unchanged (idempotent).

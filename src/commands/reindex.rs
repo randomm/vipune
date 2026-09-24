@@ -10,7 +10,8 @@
 //! idempotent pass). Plain reindex (no `--force`) still re-embeds only
 //! Mock-classified rows.
 
-use crate::embedding::EmbeddingEngine;
+use crate::embedding::{EmbeddingEngine, MAX_EMBEDDING_TOKENS};
+use crate::embedding_profiles::{EmbeddingRole, profile_for};
 use crate::errors::Error;
 use crate::output::{ReindexFailure, ReindexResponse, print_json};
 use crate::sqlite::Database;
@@ -180,10 +181,15 @@ fn handle_reindex_force(
     projects: &[String],
     json: bool,
 ) -> Result<ExitCode, Error> {
+    // Resolve the profile: the target identity records the profile's pinned
+    // revision (not the bge default's), so the marker and the recorded
+    // identity both name the model the store will actually be re-embedded with.
+    let profile = profile_for(model_id)?;
     let target = ModelIdentity {
-        model_id: model_id.to_string(),
-        revision: crate::embedding::EMBED_MODEL_REVISION.to_string(),
+        model_id: profile.model_id.to_string(),
+        revision: profile.revision.to_string(),
     };
+    let passage_prefix = EmbeddingRole::Passage.prefix(profile);
 
     // Pre-check: if the database is already in a migrating state, the marker
     // is already set. Re-running --force is safe (full idempotent pass), so
@@ -206,6 +212,27 @@ fn handle_reindex_force(
     // Initialise the embedding engine (downloads model if needed)
     let mut engine = EmbeddingEngine::new(model_id)?;
 
+    // Pre-flight (issue #217, decision 1): token-count every row's content
+    // with the target profile's passage prefix BEFORE writing the migration
+    // marker. If any row would exceed the 512-token limit once prefixed,
+    // refuse to start, write nothing, and list the offending ids — the marker
+    // must only ever be written in a state the re-embed pass can complete.
+    let offending =
+        identity::force_reembed_preflight_with_engine(db, &engine, projects, passage_prefix)?;
+    if !offending.is_empty() {
+        eprintln!(
+            "Error: reindex --force refused to start: {} row(s) exceed the {}-token limit once the '{}' passage prefix is prepended. Fix or remove these memories, then re-run `vipune reindex --force`:",
+            offending.len(),
+            MAX_EMBEDDING_TOKENS,
+            passage_prefix.trim(),
+        );
+        for id in &offending {
+            eprintln!("  {id}");
+        }
+        eprintln!("No migration marker was written and no rows were changed.");
+        return Ok(ExitCode::from(1));
+    }
+
     let mut total_failed: usize = 0;
     let mut responses: Vec<ReindexResponse> = vec![];
 
@@ -215,9 +242,14 @@ fn handle_reindex_force(
         }
 
         let (reindexed, skipped, failed_str) = {
+            // Re-embed the raw stored content (which never carries a prefix —
+            // prefixes exist only at embed time) with the target profile's
+            // passage prefix applied exactly once; a stored row must never be
+            // double-prefixed (see the no-double-prefixing edge case).
             let cb = |content: &str| {
+                let prefixed = format!("{passage_prefix}{content}");
                 engine
-                    .embed(content)
+                    .embed(&prefixed)
                     .map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
             };
             identity::force_migrate_project(db, &target, project_id, cb)?
