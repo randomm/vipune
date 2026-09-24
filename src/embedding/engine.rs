@@ -263,7 +263,7 @@ impl EmbeddingEngine {
         let encoding = self
             .count_tokenizer
             .encode(input, true)
-            .map_err(|e| Error::InvalidInput(format!("count tokenizer: {e}")))?;
+            .map_err(|e| Error::Tokenization(format!("count tokenizer: {e}").into()))?;
         Ok(encoding.get_ids().len())
     }
 }
