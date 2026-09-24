@@ -57,6 +57,7 @@ pub mod embedding_profiles;
 pub mod errors;
 pub mod memory;
 pub mod memory_types; // Library-only: batch ingest API (not used in CLI)
+pub mod migration;
 pub mod project;
 mod rrf;
 mod sqlite;
@@ -80,6 +81,7 @@ pub use memory::{MemoryStore, UpdateParams};
 pub use memory_types::{
     AddResult, BatchIngestItemResult, BatchIngestResult, ConflictMemory, IngestPolicy,
 }; // Library-only: conflict detection and batch ingest types
+pub use migration::migrate_model;
 pub use project::{detect_project, detect_project_at};
 pub use sqlite::Database;
 pub use sqlite::Memory;
@@ -91,6 +93,7 @@ pub use sqlite::embedding::classify_embedding;
 pub use sqlite::identity::{
     ModelIdentity, assert_identity_ok, current_identity, is_migrating, read_identity,
 };
+pub use sqlite::migration_types::{MigrationReport, MigrationRowFailure};
 
 #[cfg(test)]
 mod integration_tests {

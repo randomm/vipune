@@ -108,7 +108,7 @@ fn set_identity(db_path: &std::path::Path, model_id: &str, revision: &str) {
         model_id: model_id.to_string(),
         revision: revision.to_string(),
     };
-    crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
+    crate::migration::record_identity_and_clear_marker(&mut db, &id).unwrap();
 }
 
 fn import_stdout_err(source_content: &str, db_path: &std::path::Path) -> Option<String> {
@@ -706,7 +706,7 @@ fn test_import_refuses_while_migration_marker_present() {
     let dir = make_db();
     let db_path = db_path_of(&dir);
     let db = crate::sqlite::Database::open(&db_path).unwrap();
-    crate::commands::reindex_force::write_marker(
+    crate::migration::write_migration_marker(
         &db,
         &crate::sqlite::identity::ModelIdentity {
             model_id: "e5".to_string(),

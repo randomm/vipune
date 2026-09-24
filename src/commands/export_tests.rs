@@ -406,7 +406,7 @@ fn test_export_header_records_recorded_identity() {
             model_id: "e5-model".to_string(),
             revision: "e5-rev".to_string(),
         };
-        crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
+        crate::migration::record_identity_and_clear_marker(&mut db, &id).unwrap();
     }
     let db = Database::open(&db_path).unwrap();
     let conn = db.conn();

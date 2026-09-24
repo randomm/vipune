@@ -182,6 +182,8 @@ To migrate an existing database to a different model:
 vipune reindex --force
 ```
 
+Library consumers can call `vipune::migrate_model(db_path, &config)` in-process — see the [Library Usage](#library-usage) section for the close-then-reopen cutover sequence.
+
 This re-embeds **every** stored memory with the newly configured model (a plain `vipune reindex` would re-embed nothing, since existing vectors already look real). The migration is crash-safe and pre-checked:
 
 1. **Pre-flight** — `reindex --force` first token-counts every stored row with the target model's passage prefix. If any row would exceed the 512-token limit once prefixed, it refuses to start, writes nothing, and lists the offending memory ids. The migration marker is only ever written in a state the re-embed pass can complete.
@@ -301,6 +303,33 @@ for memory in results {
 **v0.4+ features**: `MemoryType`, `MemoryStatus`, `supersedes` flag, and telemetry (retrieval_count) are available for type-aware memory management. See the [CLI reference](docs/cli-reference.md) for details.
 
 **Direct embedding (`EmbeddingEngine`)**: callers that embed directly (bypassing `MemoryStore`) use the role-aware API — `embed_passage` for stored text and `embed_query` for search/classification text. The engine prepends the model profile's prefix (e5: `query: ` / `passage: `; bge: none) before tokenisation, and the 512-token limit is enforced on the prefixed text (over-length input is rejected, never truncated). The engine performs **no** database model-identity check; if you keep vector caches outside vipune, key them by `vipune::current_identity`'s `ModelIdentity` (model id + revision) so a model switch invalidates them.
+
+**Model migration (in-process)**: if your configured model no longer matches the database's recorded identity, all embedding operations refuse. To migrate in-process (for library consumers):
+
+1. **Close the store** — `drop(store)` or close the `Database` handle. `migrate_model` opens its own connection with `busy_timeout=0`; a live handle on the same file will cause it to fail immediately with a locked-database error.
+2. **Call `vipune::migrate_model`** — it runs the same crash-safe pre-flight + marker-first + re-embed lifecycle as `reindex --force`:
+
+```rust
+use vipune::{migrate_model, Config, MemoryStore};
+
+// Start from your fully loaded config (file + environment values) and
+// re-point the model id at the migration target.
+let mut config = Config::load().expect("failed to load config");
+config.embedding_model = "intfloat/multilingual-e5-small".into();
+
+// The old store must be dropped before this call.
+let report = migrate_model(config.database_path.as_path(), &config)
+    .expect("migration failed");
+println!("Reindexed {} rows ({} skipped)", report.reindexed, report.skipped);
+
+// Reopen the store with the new model.
+let store = MemoryStore::new(config.database_path.as_path(), &config.embedding_model, config)
+    .expect("reopen failed");
+```
+
+3. **Reopen the store** — create a new `MemoryStore` with the same path and the new model.
+
+The CLI equivalent is `vipune reindex --force`, which wraps the same library call with progress output.
 
 **See the crate documentation at [docs.rs](https://docs.rs/vipune) for complete API reference.**
 

@@ -22,9 +22,9 @@
 //! written once and the identity is recorded once after every row of every
 //! project in the database has been re-embedded. That is what keeps a
 //! multi-project database from ending up as a silently mixed store after a
-//! partial run. The marker/identity writes themselves live in the binary
-//! (`crate::commands::reindex_force`); this module is the read side plus the
-//! mismatch/marker refusal the library chokepoints share.
+//! partial run. The marker/identity writes themselves live in
+//! `crate::migration`; this module is the read side plus the mismatch/marker
+//! refusal the library chokepoints share.
 
 use crate::embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION};
 use crate::embedding_profiles::profile_for;

@@ -148,7 +148,7 @@ mod tests {
             crate::embedding::EMBED_MODEL_ID,
             crate::embedding::EMBED_MODEL_REVISION,
         );
-        crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
+        crate::migration::record_identity_and_clear_marker(&mut db, &id).unwrap();
         let config = test_config(crate::embedding::EMBED_MODEL_ID);
         assert!(ensure_hook_identity_ok(&db, &config).is_ok());
     }
@@ -158,7 +158,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let mut db = open_db(&dir);
         let id = test_identity("other-model", "rev-1");
-        crate::commands::reindex_force::record_identity_and_clear_marker(&mut db, &id).unwrap();
+        crate::migration::record_identity_and_clear_marker(&mut db, &id).unwrap();
         let config = test_config(crate::embedding::EMBED_MODEL_ID);
         let err = ensure_hook_identity_ok(&db, &config).unwrap_err();
         let msg = err.to_string();
@@ -177,7 +177,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let db = open_db(&dir);
         let target = test_identity("e5-model", "rev-2");
-        crate::commands::reindex_force::write_marker(&db, &target).unwrap();
+        crate::migration::write_migration_marker(&db, &target).unwrap();
         let config = test_config(crate::embedding::EMBED_MODEL_ID);
         let err = ensure_hook_identity_ok(&db, &config).unwrap_err();
         let msg = err.to_string();
