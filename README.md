@@ -300,6 +300,8 @@ for memory in results {
 
 **v0.4+ features**: `MemoryType`, `MemoryStatus`, `supersedes` flag, and telemetry (retrieval_count) are available for type-aware memory management. See the [CLI reference](docs/cli-reference.md) for details.
 
+**Direct embedding (`EmbeddingEngine`)**: callers that embed directly (bypassing `MemoryStore`) use the role-aware API — `embed_passage` for stored text and `embed_query` for search/classification text. The engine prepends the model profile's prefix (e5: `query: ` / `passage: `; bge: none) before tokenisation, and the 512-token limit is enforced on the prefixed text (over-length input is rejected, never truncated). The engine performs **no** database model-identity check; if you keep vector caches outside vipune, key them by `vipune::current_identity`'s `ModelIdentity` (model id + revision) so a model switch invalidates them.
+
 **See the crate documentation at [docs.rs](https://docs.rs/vipune) for complete API reference.**
 
 ## Configuration
