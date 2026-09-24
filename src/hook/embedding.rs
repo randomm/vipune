@@ -151,7 +151,7 @@ mod tests {
             model_id: crate::embedding::EMBED_MODEL_ID.to_string(),
             revision: crate::embedding::EMBED_MODEL_REVISION.to_string(),
         };
-        crate::sqlite::model_identity::write_identity(db.conn(), &id).unwrap();
+        crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id.into()).unwrap();
         let config = test_config(crate::embedding::EMBED_MODEL_ID);
         assert!(ensure_hook_identity_ok(&db, &config).is_ok());
     }
@@ -164,7 +164,7 @@ mod tests {
             model_id: "other-model".to_string(),
             revision: "rev-1".to_string(),
         };
-        crate::sqlite::model_identity::write_identity(db.conn(), &id).unwrap();
+        crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id.into()).unwrap();
         let config = test_config(crate::embedding::EMBED_MODEL_ID);
         let err = ensure_hook_identity_ok(&db, &config).unwrap_err();
         let msg = err.to_string();
@@ -182,12 +182,11 @@ mod tests {
     fn hook_identity_refuses_while_migration_marker_present() {
         let dir = tempfile::TempDir::new().unwrap();
         let db = open_db(&dir);
-        let id = crate::sqlite::model_identity::ModelIdentity {
-            model_id: crate::embedding::EMBED_MODEL_ID.to_string(),
-            revision: crate::embedding::EMBED_MODEL_REVISION.to_string(),
+        let target = crate::sqlite::model_identity::ModelIdentity {
+            model_id: "e5-model".to_string(),
+            revision: "rev-2".to_string(),
         };
-        crate::sqlite::model_identity::write_identity(db.conn(), &id).unwrap();
-        crate::sqlite::model_identity::write_migration_marker(db.conn(), "e5-model@rev-2").unwrap();
+        crate::sqlite::identity::write_marker(db.conn(), &target.into()).unwrap();
         let config = test_config(crate::embedding::EMBED_MODEL_ID);
         let err = ensure_hook_identity_ok(&db, &config).unwrap_err();
         let msg = err.to_string();

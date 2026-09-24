@@ -1,17 +1,17 @@
 //! Model identity bookkeeping for the `model_identity` table (migration v6,
 //! issue #217).
 //!
-//! The table holds a single row (id 1) with the model id + revision the
-//! database's embeddings were last produced with, and an optional migration
-//! marker written by `reindex --force` before it re-embeds the store.
+//! This is the read/compare side of model identity: export and import read
+//! the identity recorded for the store (defaulting to bge at its pinned
+//! revision when no row exists), the hook path reads the identity + migration
+//! marker to decide whether to insert, and migration tests compare the
+//! recorded identity against the configured profile. The write side — the
+//! marker-first crash-safe dance of `reindex --force` (write marker,
+//! re-embed, record identity + clear marker in one transaction) — lives in
+//! [`crate::sqlite::identity`], which owns the table's lifecycle.
 //!
-//! A database with no identity row is treated as the default model
-//! (bge) at its pinned revision — the zero-change contract for pre-v6 stores.
-//!
-//! Marker/identity lifecycle (write marker first, clear it in the same
-//! transaction that records the new identity) is owned by
-//! [`crate::sqlite::identity`]; this module is the read/compare side used by
-//! export, import, hook and the refusal checks.
+//! The identity a database is assumed to have when no row is recorded: the
+//! default model (bge) at its pinned revision.
 
 use crate::embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION};
 use crate::sqlite::Error;
@@ -27,6 +27,15 @@ pub struct ModelIdentity {
     pub model_id: String,
     /// Pinned revision the embeddings were produced with.
     pub revision: String,
+}
+
+impl From<ModelIdentity> for crate::sqlite::identity::ModelIdentity {
+    fn from(value: ModelIdentity) -> Self {
+        crate::sqlite::identity::ModelIdentity {
+            model_id: value.model_id,
+            revision: value.revision,
+        }
+    }
 }
 
 impl ModelIdentity {
@@ -55,8 +64,8 @@ pub fn default_identity() -> ModelIdentity {
 pub fn configured_identity(configured_model_id: &str) -> ModelIdentity {
     match crate::embedding_profiles::profile_for(configured_model_id) {
         Ok(profile) => ModelIdentity {
-            model_id: profile.model_id.clone(),
-            revision: profile.revision.clone(),
+            model_id: profile.model_id.to_string(),
+            revision: profile.revision.to_string(),
         },
         Err(_) => ModelIdentity {
             model_id: configured_model_id.to_string(),
@@ -90,83 +99,37 @@ pub fn read_identity(conn: &Connection) -> Result<(Option<ModelIdentity>, Option
     match row {
         None => Ok((None, None)),
         Some((model_id, revision, marker)) => {
-            let identity = match (model_id, revision) {
-                (Some(id), Some(rev)) => Some(ModelIdentity {
-                    model_id: id,
-                    revision: rev,
-                }),
-                _ => None,
-            }
-            .or_else(|| {
-                // A row written by `reindex --force`'s marker-first step
-                // stages the target identity alongside the marker; treat it
-                // as a recorded identity.
-                model_id.map(|model_id| ModelIdentity {
-                    model_id,
-                    revision: revision.unwrap_or_default(),
-                })
+            // A row written by `reindex --force`'s marker-first step stages
+            // the target identity alongside the marker; treat a partial row
+            // as a recorded identity too.
+            let identity = model_id.map(|model_id| ModelIdentity {
+                model_id,
+                revision: revision.unwrap_or_default(),
             });
             Ok((identity, marker))
         }
     }
 }
 
-/// Write a "migrating to <id>@<revision>" marker ahead of a `reindex --force`
-/// pass, so interrupted runs leave a marker that makes operations refuse
-/// instead of operating on a half-migrated store.
-///
-/// # Errors
-///
-/// Returns `Error::Sqlite` on write failure.
-pub fn write_migration_marker(conn: &Connection, target: &ModelIdentity) -> Result<(), Error> {
-    let marker = format!("migrating to {}", target.display());
-    conn.execute(
-        &format!(
-            "INSERT INTO {MODEL_IDENTITY_TABLE} (id, migration_marker) VALUES (1, ?1)
-             ON CONFLICT(id) DO UPDATE SET migration_marker = ?1",
-        ),
-        [marker],
-    )
-    .map_err(|e| Error::Sqlite(e.to_string()))?;
-    Ok(())
-}
-
-/// Clear the migration marker after a successful `reindex --force`.
-///
-/// # Errors
-///
-/// Returns `Error::Sqlite` on write failure.
-pub fn clear_migration_marker(conn: &Connection) -> Result<(), Error> {
-    conn.execute(
-        &format!("UPDATE {MODEL_IDENTITY_TABLE} SET migration_marker = NULL WHERE id = 1"),
-        [],
-    )
-    .map_err(|e| Error::Sqlite(e.to_string()))?;
-    Ok(())
-}
-
-/// Whether the database identity (absent row ⇒ default) matches the
-/// configured model, with no migration marker in flight.
-///
-/// # Errors
-///
-/// Returns `Error::Sqlite` if the table cannot be read.
-pub fn identity_matches_configured(
-    conn: &Connection,
-    configured_model_id: &str,
-) -> Result<bool, Error> {
-    let (recorded, marker) = read_identity(conn)?;
-    if marker.is_some() {
-        return Ok(false);
-    }
-    let effective = recorded.unwrap_or_else(default_identity);
-    Ok(effective == configured_identity(configured_model_id))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sqlite::Database;
+
+    /// Test-local mirror of the pre-merge production `identity_matches_configured`:
+    /// recorded (or default) identity equals the configured profile's identity,
+    /// with no migration marker in flight.
+    fn identity_matches_configured(
+        conn: &Connection,
+        configured_model_id: &str,
+    ) -> Result<bool, Error> {
+        let (recorded, marker) = read_identity(conn)?;
+        if marker.is_some() {
+            return Ok(false);
+        }
+        let effective = recorded.unwrap_or_else(default_identity);
+        Ok(effective == configured_identity(configured_model_id))
+    }
 
     fn open_db() -> (tempfile::TempDir, Database) {
         let dir = tempfile::TempDir::new().unwrap();
@@ -176,7 +139,11 @@ mod tests {
     }
 
     fn set_identity(db: &Database, id: &ModelIdentity) {
-        crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), id).unwrap();
+        crate::sqlite::identity::record_identity_and_clear_marker(
+            db.conn(),
+            &crate::sqlite::identity::ModelIdentity::from(id.clone()),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -193,8 +160,7 @@ mod tests {
         let e5 = configured_identity("intfloat/multilingual-e5-small");
         assert_eq!(e5.model_id, "intfloat/multilingual-e5-small");
         assert_eq!(
-            e5.revision,
-            "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+            e5.revision, "614241f622f53c4eeff9890bdc4f31cfecc418b3",
             "e5 profile must resolve to its pinned revision, not an empty one"
         );
         // Unknown id: id kept, revision empty (config validation rejects
@@ -231,11 +197,7 @@ mod tests {
         let (read, marker) = read_identity(db.conn()).unwrap();
         assert_eq!(read, Some(id.clone()));
         assert_eq!(marker, None);
-        assert!(identity_matches_configured(
-            db.conn(),
-            "intfloat/multilingual-e5-small"
-        )
-        .unwrap());
+        assert!(identity_matches_configured(db.conn(), "intfloat/multilingual-e5-small").unwrap());
         // The same id recorded at a different revision must NOT match.
         assert!(!identity_matches_configured(db.conn(), EMBED_MODEL_ID).unwrap());
     }
@@ -263,16 +225,17 @@ mod tests {
         let id = default_identity();
         set_identity(&db, &id);
         assert!(identity_matches_configured(db.conn(), EMBED_MODEL_ID).unwrap());
-        write_migration_marker(db.conn(), &id).unwrap();
+        crate::sqlite::identity::write_marker(db.conn(), &id.clone().into()).unwrap();
         assert!(!identity_matches_configured(db.conn(), EMBED_MODEL_ID).unwrap());
-        clear_migration_marker(db.conn()).unwrap();
+        crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id.clone().into())
+            .unwrap();
         assert!(identity_matches_configured(db.conn(), EMBED_MODEL_ID).unwrap());
     }
 
     #[test]
     fn marker_on_empty_table_refuses() {
         let (_dir, db) = open_db();
-        write_migration_marker(db.conn(), &default_identity()).unwrap();
+        crate::sqlite::identity::write_marker(db.conn(), &default_identity().into()).unwrap();
         // No identity row at all: marker present still refuses.
         assert!(!identity_matches_configured(db.conn(), EMBED_MODEL_ID).unwrap());
         let (_, marker) = read_identity(db.conn()).unwrap();

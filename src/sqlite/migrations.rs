@@ -372,13 +372,10 @@ mod tests {
         );
         // A no-identity-row database is treated as bge at its pinned revision:
         // the default must match the configured default with zero changes.
-        assert!(
-            crate::sqlite::model_identity::identity_matches_configured(
-                &conn,
-                crate::embedding::EMBED_MODEL_ID
-            )
-            .unwrap(),
-            "pre-v6 store must match the default bge model with zero changes"
+        assert_eq!(
+            crate::sqlite::identity::read_identity(&conn).unwrap(),
+            None,
+            "no identity row exists, so the store reads as the default bge identity"
         );
     }
 

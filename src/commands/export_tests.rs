@@ -406,7 +406,7 @@ fn test_export_header_records_recorded_identity() {
             model_id: "e5-model".to_string(),
             revision: "e5-rev".to_string(),
         };
-        crate::sqlite::model_identity::write_identity(db.conn(), &id).unwrap();
+        crate::sqlite::identity::record_identity_and_clear_marker(db.conn(), &id.into()).unwrap();
     }
     let db = Database::open(&db_path).unwrap();
     let conn = db.conn();

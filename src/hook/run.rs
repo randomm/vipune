@@ -88,6 +88,14 @@ pub fn run_hook_event(
     //    raced past any pre-check) is treated as a silent skip — the row
     //    was already inserted by the other invocation, so the outcome is
     //    correct.
+    //
+    //    Refusal on identity mismatch or a migration marker in flight
+    //    (issue #217 decision 8): the hook process already opens the
+    //    database, so `ensure_hook_identity_ok` reads the recorded identity
+    //    and migration marker and refuses the insert (skip) when they do
+    //    not match the configured profile or a migration is in flight.
+    //    The marker is only written and cleared by `reindex --force`
+    //    (helpers in `crate::sqlite::model_identity`), never by the hook.
     let hash = content_hash(&candidate);
     let embedding = placeholder_embedding(&candidate);
     let result = db.insert_with_hash(

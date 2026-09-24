@@ -88,7 +88,7 @@ pub(crate) fn migration_marker_for(identity: &ModelIdentity) -> String {
 /// # Errors
 ///
 /// Returns error if the write fails.
-pub(crate) fn write_marker(conn: &Connection, target: &ModelIdentity) -> Result<(), Error> {
+pub fn write_marker(conn: &Connection, target: &ModelIdentity) -> Result<(), Error> {
     let marker = migration_marker_for(target);
     conn.execute(
         "INSERT INTO model_identity (id, model_id, model_revision, migration_marker)
@@ -273,6 +273,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
 
     fn migrated_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
