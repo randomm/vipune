@@ -73,11 +73,7 @@ pub use sqlite::Database;
 pub use sqlite::Memory;
 pub use sqlite::embedding::EmbeddingClass;
 pub use sqlite::embedding::classify_embedding;
-pub use sqlite::force_preflight::{force_reembed_preflight, force_reembed_preflight_with_engine};
-pub use sqlite::identity::{
-    ModelIdentity, assert_identity_ok, configured_identity, current_identity,
-    force_migrate_database, is_migrating, record_identity_and_clear_marker, write_marker,
-};
+pub use sqlite::identity::ModelIdentity;
 
 #[cfg(test)]
 mod integration_tests {

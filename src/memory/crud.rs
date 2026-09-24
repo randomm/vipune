@@ -464,9 +464,10 @@ impl MemoryStore {
     /// The role selects the model profile's prefix (see
     /// [`crate::embedding_profiles::EmbeddingRole`]): stored content (add /
     /// update / re-index) uses the passage prefix, search uses the query
-    /// prefix. The prefix is prepended *before* `EmbeddingEngine::embed` so
-    /// the 512-token `ContentTooLong` check sees the prefixed text; the
-    /// prefix never touches the stored content, FTS index, or output.
+    /// prefix. The prefix is prepended *before* `EmbeddingEngine::embed` (or
+    /// the test embedder, in test builds) so the 512-token `ContentTooLong`
+    /// check sees the prefixed text; the prefix never touches the stored
+    /// content, FTS index, or output.
     ///
     /// Before embedding, the store refuses if its model identity (recorded
     /// row, or the bge default when unrecorded) does not match the configured
@@ -474,9 +475,9 @@ impl MemoryStore {
     /// the single chokepoint through which add, update, search, hybrid
     /// search, batch ingest and supersede all embed.
     ///
-    /// In test builds, uses the injected `test_embedder` if present (the fake
-    /// embedder ignores the prefix and embeds the raw text); the identity
-    /// check runs before the test embedder is consulted.
+    /// In test builds, the injected `test_embedder` (if present) is
+    /// consulted AFTER the prefix is applied, so it receives exactly the
+    /// text the real engine would embed.
     pub(crate) fn get_embedding(
         &mut self,
         content: &str,
@@ -487,24 +488,38 @@ impl MemoryStore {
         // while a `reindex --force` migration is in flight.
         self.assert_embedding_allowed()?;
 
-        #[cfg(test)]
-        {
-            if let Some(f) = &self.test_embedder {
-                return f(content);
-            }
-        }
-
         // Resolve the profile for this store's configured model. Unknown ids
         // are rejected here too — the chokepoint must never fall through to
         // an unpinned download.
         let profile = profile_for(&self.model_id)?;
         let prefix = role.prefix(profile);
+
         if prefix.is_empty() {
             // No prefix (bge): byte-identical behaviour to the unprefixed path.
-            return self.embedder()?.embed(content);
+            let input = content;
+
+            #[cfg(test)]
+            {
+                if let Some(f) = &self.test_embedder {
+                    return f(input);
+                }
+            }
+
+            return self.embedder()?.embed(input);
         }
 
-        let prefixed = format!("{prefix}{content}");
-        self.embedder()?.embed(&prefixed)
+        // The prefix is applied BEFORE the embedder is consulted — the test
+        // embedder (test builds) and the real engine (production) both see
+        // exactly `prefix + content`.
+        let input = format!("{prefix}{content}");
+
+        #[cfg(test)]
+        {
+            if let Some(f) = &self.test_embedder {
+                return f(&input);
+            }
+        }
+
+        self.embedder()?.embed(&input)
     }
 }

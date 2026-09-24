@@ -127,7 +127,7 @@ pub fn handle_reindex(
             );
             return Ok(ExitCode::from(1));
         }
-        return handle_reindex_force(&db, model_id, &projects, json);
+        return handle_reindex_force(&db, model_id, &all_project_ids, json);
     }
 
     // Plain reindex: mock-only classification path.
@@ -177,17 +177,19 @@ pub fn handle_reindex(
 
 /// `--force` model-switch path (issue #217).
 ///
-/// 1. Marker-first: write the "migrating to `<id>@<revision>`" marker before
-///    any row is touched. A crash mid-run leaves the marker behind; all
-///    embedding operations refuse while the marker is present.
-/// 2. Re-embed every row (bypassing Mock/Real classification) with the
-///    configured profile's passage embedding.
-/// 3. In ONE transaction: record the new identity and clear the marker.
+/// The caller performs the pre-flight token check first (decision 1): every
+/// row's content is token-counted with the target profile's passage prefix
+/// BEFORE the marker is written, and a single row over the token limit
+/// refuses the start. This function then delegates the marker/identity
+/// lifecycle to [`identity::force_migrate_database`] — the single owner of
+/// the per-database migration state — which writes the migration marker once
+/// before any row is touched, re-embeds every row of every project (with the
+/// passage prefix applied exactly once per row), and — only on a fully clean
+/// pass — records the new identity and clears the marker in ONE transaction.
 ///
-/// Re-running after an interruption re-embeds every row from the start
-/// (full idempotent pass). On any per-row failure the marker is left in
-/// place and the exit code is non-zero, so operations refuse until a clean
-/// re-run finishes.
+/// Re-running after an interruption re-embeds every row from the start (full
+/// idempotent pass). On any per-row failure the marker stays in place and the
+/// exit code is non-zero, so operations refuse until a clean re-run finishes.
 fn handle_reindex_force(
     db: &Database,
     model_id: &str,
@@ -202,7 +204,7 @@ fn handle_reindex_force(
         model_id: profile.model_id.to_string(),
         revision: profile.revision.to_string(),
     };
-    let passage_prefix = EmbeddingRole::Passage.prefix(profile);
+    let passage_prefix = EmbeddingRole::Passage.prefix(profile).to_string();
 
     // Pre-check: if the database is already in a migrating state, the marker
     // is already set. Re-running --force is safe (full idempotent pass), so
@@ -234,7 +236,7 @@ fn handle_reindex_force(
         db,
         &engine,
         projects,
-        passage_prefix,
+        &passage_prefix,
     )?;
     if !offending.is_empty() {
         eprintln!(
@@ -250,54 +252,46 @@ fn handle_reindex_force(
         return Ok(ExitCode::from(1));
     }
 
-    let mut total_failed: usize = 0;
-    let mut responses: Vec<ReindexResponse> = vec![];
-    // Re-embed the raw stored content (which never carries a prefix —
-    // prefixes exist only at embed time) with the target profile's passage
-    // prefix applied exactly once; a stored row must never be double-prefixed
+    // The embed closure applies the target profile's passage prefix exactly
+    // once per row: the raw stored content never carries a prefix (prefixes
+    // exist only at embed time), so a stored row must never be double-prefixed
     // (see the no-double-prefixing edge case).
-    let prefix = passage_prefix.to_string();
-    let mut embed_cb = |content: &str| {
+    let prefix = passage_prefix.clone();
+    let embed = |content: &str| -> Result<Vec<f32>, crate::sqlite::Error> {
         let prefixed = format!("{prefix}{content}");
         engine
             .embed(&prefixed)
             .map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
     };
 
-    for project_id in projects {
-        if !json {
-            println!("Project {}: force re-embedding all rows...", project_id);
-        }
+    // Single lifecycle owner (issue #217): marker once, re-embed every row
+    // of every project, then identity + clear marker once — only on a fully
+    // clean pass. A failed pass leaves the marker in place.
+    // `force_migrate_database` only returns Err on a database-level failure
+    // (marker write, row listing, final identity commit); a per-row embed
+    // failure is returned as Ok with a populated `failed` list, so the
+    // per-project failure reporting below stays intact.
+    let (reindexed, skipped, failed_str) =
+        identity::force_migrate_database(db, &target, projects, embed)
+            .map_err(|e| Error::SqliteModule(e.to_string()))?;
 
-        let (reindexed, skipped, failed_str) =
-            identity::force_reembed_project(db, project_id, &mut embed_cb)?;
-
-        let failed: Vec<ReindexFailure> = failed_str
-            .iter()
-            .map(|s| {
-                let parts: Vec<&str> = s.splitn(2, ": ").collect();
-                ReindexFailure {
-                    id: parts.first().copied().unwrap_or("").to_string(),
-                    error: parts.get(1).copied().unwrap_or("").to_string(),
-                }
-            })
-            .collect();
-        let failed_count = failed.len();
-        total_failed += failed_count;
-        responses.push(ReindexResponse {
-            project_id: project_id.clone(),
-            reindexed,
-            skipped,
-            failed,
-        });
-
-        if !json {
-            println!(
-                "  Done: {} reindexed, {} skipped, {} failed",
-                reindexed, skipped, failed_count
-            );
-        }
-    }
+    let failed: Vec<ReindexFailure> = failed_str
+        .iter()
+        .map(|s| {
+            let parts: Vec<&str> = s.splitn(2, ": ").collect();
+            ReindexFailure {
+                id: parts.first().copied().unwrap_or("").to_string(),
+                error: parts.get(1).copied().unwrap_or("").to_string(),
+            }
+        })
+        .collect();
+    let total_failed = failed.len();
+    let responses = vec![ReindexResponse {
+        project_id: total_projects_scope(projects),
+        reindexed,
+        skipped,
+        failed,
+    }];
 
     if total_failed > 0 {
         // Any failure means the re-embed pass did not complete; the marker

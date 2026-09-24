@@ -11,7 +11,7 @@
 //! Every profile is pinned to an exact revision. No profile ever loads a
 //! floating revision.
 
-use crate::embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS};
+use crate::embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION};
 use crate::errors::Error;
 
 /// Built-in embedding model profiles.
@@ -54,18 +54,6 @@ pub struct ModelProfile {
     /// Prefix applied to stored content before embedding. Empty for models
     /// that take bare text (bge).
     pub passage_prefix: &'static str,
-}
-
-impl ModelProfile {
-    /// Embedding dimension for this profile.
-    ///
-    /// All built-in profiles are 384-dimensional; this method is the single
-    /// place callers should read the dimension from, so a future profile with
-    /// different geometry can declare it here.
-    #[allow(dead_code)] // test-only call sites
-    pub fn dims(&self) -> usize {
-        EMBEDDING_DIMS
-    }
 }
 
 /// The role an embedding is computed for.
@@ -131,7 +119,6 @@ mod tests {
         assert_eq!(p.onnx_path, "onnx/model.onnx");
         assert_eq!(p.query_prefix, "");
         assert_eq!(p.passage_prefix, "");
-        assert_eq!(p.dims(), 384);
     }
 
     #[test]
@@ -142,7 +129,6 @@ mod tests {
         assert_eq!(p.onnx_path, "onnx/model.onnx");
         assert_eq!(p.query_prefix, "query: ");
         assert_eq!(p.passage_prefix, "passage: ");
-        assert_eq!(p.dims(), 384);
     }
 
     #[test]

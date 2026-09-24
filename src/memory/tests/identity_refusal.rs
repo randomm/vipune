@@ -4,10 +4,10 @@
 //! refuse with an error naming recorded vs configured identity, or the
 //! interrupted migration target, and pointing at `vipune reindex --force`).
 //!
-//! Also covers the prefix-application contract (M1): the test embedder
-//! receives the raw stored content (no prefix — prefixes live only in the
-//! real engine path), but the identity check and the prefix-free raw text
-//! are still observable through the stored content and FTS.
+//! Also covers the prefix-application contract (M1): the recording embedder
+//! receives the profile-prefixed text exactly as the real engine would (e5:
+//! `passage: <content>` / `query: <text>`; bge: unprefixed), while the
+//! stored content and FTS stay unprefixed.
 
 use crate::config::Config;
 use crate::embedding_profiles::EmbeddingRole;
@@ -223,11 +223,22 @@ fn refusal_does_not_require_the_real_embedder() {
 
 // ---- Prefix application (issue #217 M1: stored content/FTS unprefixed) ----
 //
-// The real engine path applies the profile's passage/query prefix before
-// embedding (see `get_embedding`). The test embedder receives the raw stored
-// content (no prefix), so the prefix itself is not observable through the
-// fake — but we can prove the stored content and FTS never carry a prefix
-// even when the e5 profile is configured, which is the contract that matters.
+// The engine input is `prefix + text` exactly — the profile's passage/query
+// prefix applied before the embedder is consulted, and never after. A
+// recording test embedder proves the exact engine input for both profiles:
+// e5 receives `passage: <content>` / `query: <text>`; bge receives the text
+// unprefixed. The stored content and FTS stay unprefixed in either case.
+
+/// A test embedder that records the exact text it is called with (and returns
+/// a deterministic L2-normalised vector derived from that text).
+fn recording_embedder(
+    recorded: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+) -> crate::memory::store::TestEmbedder {
+    Box::new(move |content: &str| {
+        recorded.lock().unwrap().push(content.to_string());
+        crate::memory::crud::test_fake_embedder(content)
+    })
+}
 
 fn e5_store_with_real_prefix_contract() -> (tempfile::TempDir, MemoryStore) {
     let (dir, store) = prepared_store(e5_model_id(), |_| {});
@@ -264,6 +275,111 @@ fn add_stores_content_without_passage_prefix() {
     // The stored content must be exactly what was passed in — no passage:
     // prefix may leak into the DB (prefixes live only at embed time).
     assert_eq!(memory.content, "the quick brown fox");
+}
+
+#[test]
+fn e5_engine_input_is_exactly_passage_prefixed() {
+    // Under the e5 profile, the engine input for add / update / batch / search
+    // is exactly `passage: <content>` / `query: <text>` — the prefix is
+    // applied before the (test) embedder is consulted, so the recording
+    // embedder sees it.
+    let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (_dir, mut store) = e5_store_with_real_prefix_contract();
+    store.set_test_embedder(recording_embedder(recorded.clone()));
+
+    // add
+    let result = store
+        .add_with_conflict(
+            "p",
+            "fox content",
+            None,
+            false,
+            crate::memory::lifecycle::MemoryType::Fact,
+            crate::memory::lifecycle::MemoryStatus::Active,
+        )
+        .expect("add must succeed when identity matches");
+    let crate::memory_types::AddResult::Added { id } = result else {
+        panic!("expected Added");
+    };
+    assert_eq!(
+        recorded.lock().unwrap().clone(),
+        vec!["passage: fox content"]
+    );
+
+    // update (content change re-embeds)
+    store
+        .update(
+            &id,
+            "p",
+            crate::memory::UpdateParams {
+                text: Some("new fox content"),
+                ..Default::default()
+            },
+        )
+        .expect("update must succeed when identity matches");
+    assert_eq!(
+        recorded.lock().unwrap().clone(),
+        vec!["passage: fox content", "passage: new fox content"]
+    );
+
+    // search
+    store
+        .search("p", "fox", 5, 0.0, SearchOptions::default())
+        .expect("search must succeed when identity matches");
+    assert_eq!(
+        recorded.lock().unwrap().clone(),
+        vec![
+            "passage: fox content",
+            "passage: new fox content",
+            "query: fox"
+        ]
+    );
+
+    // batch ingest
+    let batch = store
+        .batch_ingest(
+            "p",
+            vec![("batch item one", None), ("batch item two", None)],
+            crate::memory_types::IngestPolicy::Force,
+        )
+        .expect("batch_ingest must succeed when identity matches");
+    assert_eq!(batch.results.len(), 2);
+    let recorded_after_batch = recorded.lock().unwrap().clone();
+    assert_eq!(recorded_after_batch.len(), 5);
+    assert_eq!(recorded_after_batch[3], "passage: batch item one");
+    assert_eq!(recorded_after_batch[4], "passage: batch item two");
+}
+
+#[test]
+fn bge_engine_input_is_unprefixed() {
+    // Under the bge profile (no prefixes), the engine input is exactly the
+    // raw content / query — zero-change contract.
+    let recorded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (_dir, mut store) = prepared_store(crate::embedding::EMBED_MODEL_ID, |_| {});
+    store.set_test_embedder(recording_embedder(recorded.clone()));
+
+    let result = store
+        .add_with_conflict(
+            "p",
+            "plain bge content",
+            None,
+            false,
+            crate::memory::lifecycle::MemoryType::Fact,
+            crate::memory::lifecycle::MemoryStatus::Active,
+        )
+        .expect("add must succeed on a fresh store with the default model");
+    let crate::memory_types::AddResult::Added { .. } = result else {
+        panic!("expected Added");
+    };
+    assert_eq!(recorded.lock().unwrap().clone(), vec!["plain bge content"]);
+
+    store
+        .search("p", "plain query", 5, 0.0, SearchOptions::default())
+        .expect("search must succeed on a fresh store with the default model");
+    assert_eq!(
+        recorded.lock().unwrap().clone(),
+        vec!["plain bge content", "plain query"]
+    );
 }
 
 #[test]

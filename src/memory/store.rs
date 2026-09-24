@@ -200,7 +200,7 @@ impl MemoryStore {
         MemoryStore {
             db,
             embedder: None,
-            model_id: String::new(),
+            model_id: crate::embedding::EMBED_MODEL_ID.to_string(),
             config,
             identity_checked: true,
             test_embedder: None,
@@ -239,9 +239,8 @@ impl MemoryStore {
         Self::from_db_with_test_embedder(db)
     }
 
-    /// Set the test-only embedder (test builds only).
+    /// Replace the test-only embedder (test builds only) with a new one.
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn set_test_embedder(&mut self, embedder: TestEmbedder) {
         self.test_embedder = Some(embedder);
     }

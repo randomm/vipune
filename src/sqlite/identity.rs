@@ -51,6 +51,7 @@ impl ModelIdentity {
 }
 
 /// Read the recorded identity. `None` row ⇒ the bge default.
+#[allow(dead_code)]
 pub fn read_identity(conn: &Connection) -> Result<Option<ModelIdentity>, Error> {
     match conn.query_row(
         "SELECT model_id, model_revision FROM model_identity WHERE id = 1",
@@ -67,6 +68,7 @@ pub fn read_identity(conn: &Connection) -> Result<Option<ModelIdentity>, Error> 
 }
 
 /// Read the migration marker, if one is in flight.
+#[allow(dead_code)]
 pub fn read_marker(conn: &Connection) -> Result<Option<String>, Error> {
     match conn.query_row(
         "SELECT migration_marker FROM model_identity WHERE id = 1 AND migration_marker IS NOT NULL",
@@ -80,7 +82,6 @@ pub fn read_marker(conn: &Connection) -> Result<Option<String>, Error> {
 }
 
 /// Format the migration marker for a target identity.
-#[allow(dead_code)] // used only by lib-test call sites (see migration_tests)
 pub(crate) fn migration_marker_for(identity: &ModelIdentity) -> String {
     format!("migrating to {}", identity.display())
 }
@@ -93,7 +94,7 @@ pub(crate) fn migration_marker_for(identity: &ModelIdentity) -> String {
 /// behind and all embedding operations refuse until `reindex --force`
 /// finishes. The upsert also stages the target identity in the same row so a
 /// marker-present database always names the interrupted target.
-#[allow(dead_code)] // production caller is the hook path (crate::hook); bin target has no direct caller
+#[allow(dead_code)]
 pub fn write_marker(conn: &Connection, target: &ModelIdentity) -> Result<(), Error> {
     let marker = migration_marker_for(target);
     conn.execute(
@@ -114,7 +115,7 @@ pub fn write_marker(conn: &Connection, target: &ModelIdentity) -> Result<(), Err
 /// marker updates are atomic: a crash before the commit leaves the previous
 /// state intact (either the old identity with no marker, or the marker still
 /// set with the old identity), never a half-migrated state.
-#[allow(dead_code)] // production caller is `force_migrate_database` (lib); bin target has no direct caller
+#[allow(dead_code)]
 pub fn record_identity_and_clear_marker(
     conn: &Connection,
     identity: &ModelIdentity,
@@ -142,12 +143,14 @@ pub fn record_identity_and_clear_marker(
 }
 
 /// True while a migration marker is present (an interrupted `reindex --force`).
+#[allow(dead_code)]
 pub fn is_migrating(conn: &Connection) -> Result<bool, Error> {
     Ok(read_marker(conn)?.is_some())
 }
 
 /// The identity the store currently has: the recorded identity, or the bge
 /// default when no row is recorded.
+#[allow(dead_code)]
 pub fn current_identity(conn: &Connection) -> Result<ModelIdentity, Error> {
     Ok(read_identity(conn)?.unwrap_or_else(ModelIdentity::default_identity))
 }
@@ -159,6 +162,7 @@ pub fn current_identity(conn: &Connection) -> Result<ModelIdentity, Error> {
 /// built-in profile resolves to the id itself with no revision recorded,
 /// which makes any store with a recorded row mismatch (refused) rather than
 /// silently "matching". Config validation rejects unknown ids anyway.
+#[allow(dead_code)]
 pub fn configured_identity(configured_model_id: &str) -> ModelIdentity {
     match profile_for(configured_model_id) {
         Ok(profile) => ModelIdentity {
@@ -177,6 +181,7 @@ pub fn configured_identity(configured_model_id: &str) -> ModelIdentity {
 /// Returns `(identity, migration_marker)` where `identity` is `None` when no
 /// row exists (callers compare against [`ModelIdentity::default_identity`])
 /// and `migration_marker` is the "migrating to ..." text if one is present.
+#[allow(dead_code)]
 pub fn read_identity_and_marker(
     conn: &Connection,
 ) -> Result<(Option<ModelIdentity>, Option<String>), Error> {
@@ -215,6 +220,7 @@ pub fn read_identity_and_marker(
 ///
 /// `Error::Config` with the refusal message; `Error::SqliteModule` if the
 /// identity table cannot be read.
+#[allow(dead_code)]
 pub fn assert_identity_ok(
     conn: &Connection,
     configured_model_id: &str,
@@ -285,16 +291,17 @@ where
 ///
 /// The caller performs the pre-flight token check on every project first
 /// (see `crate::sqlite::force_preflight`) so the marker is only written when
-/// the pass can complete. This function owns the marker/identity lifecycle:
-/// it writes the migration marker ONCE before any row is touched, re-embeds
-/// every row of every project (bypassing Mock/Real classification), then —
-/// only if every row succeeded — records the new identity and clears the
-/// marker in ONE transaction. If any row failed, the marker stays and the
-/// new identity is NOT recorded (decision 1); the recovery is a clean
-/// re-run of `reindex --force`.
+/// the pass can complete. This function is the SINGLE owner of the
+/// marker/identity lifecycle: it writes the migration marker ONCE before any
+/// row is touched, re-embeds every row of every project (bypassing Mock/Real
+/// classification), then — only if every row succeeded — records the new
+/// identity and clears the marker in ONE transaction. If any row failed, the
+/// marker stays and the new identity is NOT recorded (decision 1); the
+/// recovery is a clean re-run of `reindex --force`.
 ///
 /// The `embed` closure receives the raw stored content (unprefixed —
-/// prefixes live only at embed time, never in the DB).
+/// prefixes live only at embed time, never in the DB; the caller's closure
+/// applies the target profile's passage prefix).
 ///
 /// # Returns
 ///
@@ -304,9 +311,7 @@ where
 ///
 /// Error if the marker write fails, the re-embed pass has any failures, or
 /// the final identity commit fails.
-#[allow(dead_code)] // production caller is the hook path (crate::hook) via the marker/identity
-// lifecycle; the bin target's reindex handler uses the per-project helpers
-// directly, so this database-level entry point is not reachable from the bin.
+#[allow(dead_code)]
 pub fn force_migrate_database<F>(
     db: &Database,
     target: &ModelIdentity,
