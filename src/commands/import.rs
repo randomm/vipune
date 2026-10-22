@@ -21,8 +21,11 @@
 //!   the default bge identity, so legacy exports still import into default
 //!   stores.
 //!
-//! JSONL schema — header line:
-//!   `{"type":"export","version":1,"embedding_dims":384,"model_id":...,"model_revision":...,"exported_at":...,"rows":N}`
+//! JSONL schema — header line, exactly as `vipune export` writes it:
+//!   `{"type":"export","format_version":1,"embedding_dims":384,"model_id":...,"model_revision":...,"exported_at":...,"rows":N}`
+//! The version key is checked presence-only and accepts the legacy alias
+//! `"version"` as well — that was the spelling this module's docs documented
+//! before issue #229, so files written by hand from those docs still import.
 //! Row line (12 fields; DB column `type` is named `memory_type`):
 //!   `id`, `project_id`, `content`, `metadata` (nullable), `embedding`
 //!   (base64 of the exact stored BLOB), `created_at`, `updated_at`,
@@ -151,9 +154,15 @@ impl HeaderIdentity {
     }
 }
 
-/// Validate the header line: must be JSON with `type: "export"`, a version,
-/// and a `rows` count. Returns the declared row count and the header's model
-/// identity (None fields = identity absent, i.e. a legacy export).
+/// Validate the header line: must be JSON with `type: "export"`, a format
+/// version, and a `rows` count. Returns the declared row count and the
+/// header's model identity (None fields = identity absent, i.e. a legacy export).
+///
+/// The version key is matched on either spelling — `format_version` (what
+/// `export::write_jsonl` actually emits) or the legacy alias `version` — and
+/// presence-only: the value is never compared against
+/// [`super::export::EXPORT_FORMAT_VERSION`], so a future v2 export still parses
+/// here rather than being rejected for a number this reader has not seen.
 fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
     let line = line.trim_end_matches('\r');
     let value: serde_json::Value = serde_json::from_str(line)
@@ -167,9 +176,13 @@ fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
             "line 1: not an export file (missing type=export)".to_string(),
         ));
     }
-    if obj.get("version").is_none() {
+    // `export::write_jsonl` emits `format_version`; `version` is the legacy
+    // alias this module's docs used to document. Accepting both is what makes
+    // `vipune export` + `vipune import` agree (issue #229). Presence-only
+    // (`is_none`), so a JSON null or a quoted value still counts as present.
+    if obj.get("format_version").is_none() && obj.get("version").is_none() {
         return Err(Error::InvalidInput(
-            "line 1: header missing version".to_string(),
+            "line 1: header missing format_version (or the legacy alias \"version\")".to_string(),
         ));
     }
     let rows = obj
