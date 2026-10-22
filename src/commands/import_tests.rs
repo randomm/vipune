@@ -79,16 +79,24 @@ fn make_row_json(
     s
 }
 
+/// Canonical header: the key spelling `export::write_jsonl` actually emits.
 fn header(rows: usize) -> String {
     format!(
-        r#"{{"type":"export","version":1,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":{}}}"#,
-        rows
+        r#"{{"type":"export","format_version":1,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":{rows}}}"#,
+    )
+}
+
+/// Pre-#229 header: the legacy `version` alias, which import must keep
+/// accepting so files hand-written from the old module docs still restore.
+fn header_legacy(rows: usize) -> String {
+    format!(
+        r#"{{"type":"export","version":1,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":{rows}}}"#,
     )
 }
 
 fn header_with_identity(rows: usize, model_id: &str, model_revision: &str) -> String {
     format!(
-        r#"{{"type":"export","version":1,"embedding_dims":384,"model_id":"{model_id}","model_revision":"{model_revision}","exported_at":"2024-01-01T00:00:00Z","rows":{rows}}}"#
+        r#"{{"type":"export","format_version":1,"embedding_dims":384,"model_id":"{model_id}","model_revision":"{model_revision}","exported_at":"2024-01-01T00:00:00Z","rows":{rows}}}"#
     )
 }
 
@@ -497,9 +505,9 @@ fn test_import_missing_header_type_fails() {
     let db_path = dir.path().join("test.db");
     let blob = blob_of(&test_embedding());
 
-    // Header with no type field.
-    let bad_header =
-        r#"{"version":1,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":1}"#;
+    // Header with no type field (canonical version key, so the type check is
+    // the only thing that can fail here).
+    let bad_header = r#"{"format_version":1,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":1}"#;
     let mut jsonl = bad_header.to_string() + "\n";
     let row = make_row_json(
         "id-1",
@@ -768,9 +776,9 @@ fn test_import_accepts_matching_identity_header() {
 }
 
 #[test]
-fn test_import_accepts_legacy_header_into_default_store() {
-    // Pre-#217 export (no identity keys) into a store with no identity row:
-    // both resolve to the default bge identity → import proceeds.
+fn test_import_accepts_format_version_header_into_default_store() {
+    // The spelling `vipune export` really writes (issue #229): an export file
+    // whose header says `format_version` must import into a default store.
     let dir = make_db();
     let db_path = db_path_of(&dir);
     let blob = blob_of(&test_embedding());
@@ -789,6 +797,39 @@ fn test_import_accepts_legacy_header_into_default_store() {
         None,
     );
     let jsonl = format!("{}\n{}\n", header(1), row);
+    let file = dir.path().join("input.jsonl");
+    std::fs::write(&file, jsonl).unwrap();
+
+    let resp = import::run_import(&db_path, file.to_str().unwrap())
+        .expect("format_version header must import");
+    assert_eq!(resp.inserted, 1);
+    assert_eq!(resp.skipped, 0);
+    assert_eq!(raw_row_blob(&db_path, "id-1"), blob);
+}
+
+#[test]
+fn test_import_accepts_legacy_header_into_default_store() {
+    // Pre-#217 export (no identity keys) and the pre-#229 `version` key
+    // spelling into a store with no identity row: both resolve to the default
+    // bge identity → import proceeds.
+    let dir = make_db();
+    let db_path = db_path_of(&dir);
+    let blob = blob_of(&test_embedding());
+    let row = make_row_json(
+        "id-1",
+        "proj",
+        "content",
+        None,
+        &blob,
+        "2024-01-01T00:00:00Z",
+        "2024-01-01T00:00:00Z",
+        "fact",
+        "active",
+        None,
+        0,
+        None,
+    );
+    let jsonl = format!("{}\n{}\n", header_legacy(1), row);
     assert!(
         import_stdout_err(&jsonl, &db_path).is_none(),
         "legacy header into default store must import"
