@@ -27,7 +27,7 @@
 // the exit-code contract — that one lives in the CLI-spawn file.
 
 use crate::commands::export::handle_export;
-use crate::commands::export_header::{DeclaredVersion, EXPORT_FORMAT_VERSION, ExportHeader};
+use crate::commands::export_header::{EXPORT_FORMAT_VERSION, ExportHeader};
 use crate::commands::import::run_import;
 use crate::embedding::EMBEDDING_DIMS;
 use crate::sqlite::Database;
@@ -216,16 +216,27 @@ fn header_line_of(export_path: &Path) -> String {
         .to_string()
 }
 
+/// Seed a source store and run the real export, returning the source temp
+/// dir (its lifetime is the export file's), the seeded rows, and the export
+/// path.
+///
+/// Every real-path test starts identically; spelling it out four times is
+/// four places to update when the fixture grows, and a fixture that is
+/// copy-pasted is a fixture that drifts.
+fn seeded_export() -> (tempfile::TempDir, Vec<SeedRow>, std::path::PathBuf) {
+    let (src_dir, src_path) = create_test_db();
+    let seeded = seed_source(&src_path);
+    let export_path = src_dir.path().join("export.jsonl");
+    export(&src_path, &export_path);
+    (src_dir, seeded, export_path)
+}
+
 /// The bug itself: an export written by the real writer must be importable by
 /// the real importer. Pre-#229 this aborted with
 /// `line 1: header missing version` on every release from v0.10.0 to v0.15.0.
 #[test]
 fn test_real_export_imports_into_fresh_store() {
-    let (src_dir, src_path) = create_test_db();
-    let seeded = seed_source(&src_path);
-
-    let export_path = src_dir.path().join("export.jsonl");
-    export(&src_path, &export_path);
+    let (_src_dir, seeded, export_path) = seeded_export();
 
     let (_dst_dir, dst_path) = create_test_db();
     let response = run_import(&dst_path, export_path.to_str().unwrap()).expect("real import ok");
@@ -241,60 +252,61 @@ fn test_real_export_imports_into_fresh_store() {
 
 /// The writer↔reader schema pin: the header `write_jsonl` produces must
 /// deserialise through the shared [`ExportHeader`] with every field the
-/// reader needs populated — and each mandatory key must be one the reader
-/// actually refuses to do without. Key names are single-sourced (the #229
-/// fix); this test is what keeps the two sides agreeing on requiredness
-/// too, which the all-`Option` reader-side leniency cannot express by type.
+/// reader needs populated, and each key the reader refuses to do without
+/// must still be refused when the writer's own header loses it.
+///
+/// Requiredness is enforced by the READER's accessors (`is_export`,
+/// `has_version_key`, `declared_rows`), not by serde — see the module doc of
+/// `export_header` for why — so this pin drives the real `run_import` and
+/// asserts the refusal, which is the only place requiredness actually lives.
 #[test]
 fn test_writer_header_deserialises_through_the_shared_schema() {
-    let (src_dir, src_path) = create_test_db();
-    let seeded = seed_source(&src_path);
-
-    let export_path = src_dir.path().join("export.jsonl");
-    export(&src_path, &export_path);
+    let (_src_dir, seeded, export_path) = seeded_export();
 
     let header_line = header_line_of(&export_path);
     let header: ExportHeader = serde_json::from_str(&header_line)
         .expect("the real writer's header is a valid ExportHeader");
-    assert_eq!(header.kind, "export");
-    assert_eq!(header.rows, seeded.len() as u64);
-    assert_eq!(
-        header.declared_version(),
-        DeclaredVersion::Numeric(u64::from(EXPORT_FORMAT_VERSION)),
-        "the real writer declares the current format version numerically"
-    );
-    assert!(header.embedding_dims.is_some(), "dims recorded");
+    assert!(header.is_export());
+    assert_eq!(header.declared_rows(), Some(seeded.len() as u64));
     assert!(
-        header.model_id.is_some() && header.model_revision.is_some(),
-        "identity recorded"
+        header.has_version_key(),
+        "the real writer declares the format version"
     );
 
-    // The writer emits the canonical key, never the legacy one.
+    // The writer's OUTPUT is asserted on the wire, not through the type: the
+    // point is what a v0.16.0 importer will find in the file. The canonical
+    // key carries the version numerically, and the legacy key is absent.
     let raw: serde_json::Value = serde_json::from_str(&header_line).unwrap();
+    assert_eq!(
+        raw.get("format_version"),
+        Some(&serde_json::Value::from(EXPORT_FORMAT_VERSION)),
+        "the version is declared numerically under the canonical key"
+    );
     assert!(
         raw.get("version").is_none(),
         "the real writer emits format_version, not the legacy key: {raw}"
     );
+    assert_eq!(raw["embedding_dims"], EMBEDDING_DIMS);
+    assert!(
+        raw["model_id"].is_string() && raw["model_revision"].is_string(),
+        "identity recorded: {raw}"
+    );
 
-    // Dropping a key the reader requires must make the reader refuse:
-    // `type` and `rows` fail the ExportHeader type itself; the version key
-    // is presence-checked by the reader, so its removal must surface as
-    // DeclaredVersion::Absent.
+    // Dropping a key the reader requires must make the REAL reader refuse.
     let map: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&header_line).unwrap();
-    for key in ["type", "rows"] {
+    for key in ["type", "rows", "format_version"] {
         let mut mutilated = map.clone();
         mutilated.remove(key);
+        let line = serde_json::to_string(&serde_json::Value::Object(mutilated)).unwrap();
+        let (outcome, rows) = import_with_header(&line, &format!("mutilated-{key}"));
+        let msg = refused(outcome);
         assert!(
-            serde_json::from_value::<ExportHeader>(serde_json::Value::Object(mutilated)).is_err(),
-            "reader schema must require the key the writer emits: {key}"
+            msg.contains(key) || msg.contains("not an export file"),
+            "removing the key the writer emits ({key}) must be refused; got: {msg}"
         );
+        assert_eq!(rows, 0, "a refused import writes nothing (missing {key})");
     }
-    let mut no_version = map.clone();
-    no_version.remove("format_version");
-    let header: ExportHeader = serde_json::from_value(serde_json::Value::Object(no_version))
-        .expect("version is optional to the type");
-    assert_eq!(header.declared_version(), DeclaredVersion::Absent);
 }
 
 /// #195's contract, now actually exercised on the production path: every
@@ -302,11 +314,7 @@ fn test_writer_header_deserialises_through_the_shared_schema() {
 /// export → import unchanged. One struct comparison, one fixture.
 #[test]
 fn test_real_roundtrip_restores_all_columns_verbatim() {
-    let (src_dir, src_path) = create_test_db();
-    let seeded = seed_source(&src_path);
-
-    let export_path = src_dir.path().join("export.jsonl");
-    export(&src_path, &export_path);
+    let (_src_dir, seeded, export_path) = seeded_export();
 
     let (_dst_dir, dst_path) = create_test_db();
     run_import(&dst_path, export_path.to_str().unwrap()).expect("import ok");
@@ -328,11 +336,7 @@ fn test_real_roundtrip_restores_all_columns_verbatim() {
 /// counts every row, and leaves the restored telemetry untouched.
 #[test]
 fn test_real_roundtrip_reimport_skips_and_preserves_telemetry() {
-    let (src_dir, src_path) = create_test_db();
-    let seeded = seed_source(&src_path);
-
-    let export_path = src_dir.path().join("export.jsonl");
-    export(&src_path, &export_path);
+    let (_src_dir, seeded, export_path) = seeded_export();
 
     let (_dst_dir, dst_path) = create_test_db();
     run_import(&dst_path, export_path.to_str().unwrap()).expect("first import ok");
@@ -472,15 +476,34 @@ fn test_import_accepts_null_valued_version_keys() {
     }
 }
 
-/// A header carrying BOTH spellings of the version key is ambiguous — no
-/// released writer ever emitted two version keys, so the reader refuses it
-/// with an explicit rule that names both keys and the remedy (not serde's
-/// duplicate-field error under a "malformed header JSON" prefix, which
-/// would mislabel syntactically valid JSON as a syntax failure).
+/// The file the #229 report actually recorded: a real export whose header
+/// was hand-patched by ADDING `"version": 1` — so it carries BOTH
+/// spellings, agreeing. That shape imported under v0.15.0 (it is the
+/// workaround the user ran 46,168 rows through) and must keep importing.
+///
+/// Agreement is the whole test: the two keys are the same field of the same
+/// schema, so there is nothing ambiguous to refuse.
 #[test]
-fn test_import_refuses_header_carrying_both_version_spellings() {
+fn test_import_accepts_header_carrying_both_agreeing_spellings() {
     let (outcome, rows) =
-        import_with_header(&header_line(r#""format_version":1,"version":2"#), "both-1");
+        import_with_header(&header_line(r#""format_version":1,"version":1"#), "both-1");
+    assert_eq!(
+        outcome.unwrap_or_else(|e| panic!("both spellings agreeing must import: {e}")),
+        (1, 0)
+    );
+    assert_eq!(rows, 1);
+}
+
+/// The one genuinely ambiguous header: the two spellings declaring TWO
+/// DIFFERENT versions. Refused, with a message that names both keys and the
+/// remedy (and does not mislabel syntactically valid JSON as a syntax
+/// failure — the diagnostic that made #229 hard to self-resolve).
+#[test]
+fn test_import_refuses_header_carrying_conflicting_version_spellings() {
+    let (outcome, rows) = import_with_header(
+        &header_line(r#""format_version":1,"version":2"#),
+        "conflict-1",
+    );
     let msg = refused(outcome);
     assert!(
         !msg.starts_with("line 1: malformed header JSON"),
@@ -497,37 +520,38 @@ fn test_import_refuses_header_carrying_both_version_spellings() {
     assert_eq!(rows, 0, "refused import writes nothing");
 }
 
-/// A header declaring a NEWER format version than this build understands is
-/// refused up front with a dedicated message, instead of failing later at
-/// line 2 with a generic `missing field` error — or, for an additive change,
-/// importing rows whose BLOBs were interpreted under the wrong schema.
+/// Presence, not value: the version key's VALUE is never inspected, so
+/// nothing about it changes the verdict — not a number this build has never
+/// seen, nor a quoted, negative, fractional, boolean, or structured spelling
+/// of one.
+///
+/// This is the acceptance criterion most likely to be re-broken by a future
+/// "forward-compat hardening" pass, which is why it is pinned as a matrix
+/// here rather than left to a doc comment. An earlier revision of this fix
+/// refused `format_version: 99` and refused the non-numeric spellings; the AC
+/// says the opposite, and the gate was unenforceable anyway (a quoted `"99"`
+/// walked straight past it). Recording these as ACCEPTED is the honest
+/// statement of what the reader guarantees — pinning them as refused would
+/// claim a gate the format does not have.
 #[test]
-fn test_import_rejects_format_version_ahead_of_this_build() {
-    let (outcome, rows) = import_with_header(&header_line(r#""format_version":99"#), "future-1");
-    let msg = refused(outcome);
-    assert!(
-        msg.contains("unsupported export format version 99"),
-        "got: {msg}"
-    );
-    assert_eq!(rows, 0, "refused import writes nothing");
-}
-
-/// The forward-compat gate is total: a version that is neither a non-negative
-/// integer nor `null` cannot bypass it by quoting or mangling the number.
-/// Every spelling here previously produced a silent ACCEPT (the gate read
-/// `as_u64` and skipped whenever that returned `None`).
-#[test]
-fn test_import_rejects_non_numeric_format_version() {
-    for spelling in [r#""2""#, "-1", "1.5", "true", "{}", "[]"] {
+fn test_import_ignores_the_value_under_the_version_key() {
+    for (idx, spelling) in ["99", r#""2""#, "-1", "1.5", "true", "{}", "[]"]
+        .iter()
+        .enumerate()
+    {
         let (outcome, rows) = import_with_header(
             &header_line(&format!(r#""format_version":{spelling}"#)),
-            &format!("nonnum-{spelling}"),
+            // The id must not embed the spelling itself: `{}`/`[]`/`"2"`
+            // contain JSON punctuation that would break the ROW line and make
+            // the test fail for the wrong reason.
+            &format!("nonnum-{idx}"),
         );
-        let msg = refused(outcome);
-        assert!(
-            msg.contains("format_version must be a non-negative integer"),
-            "`{spelling}` must be refused by the total version gate, got: {msg}"
+        assert_eq!(
+            outcome
+                .unwrap_or_else(|e| panic!("`{spelling}` must import (presence is the rule): {e}")),
+            (1, 0),
+            "the value under the version key is never inspected"
         );
-        assert_eq!(rows, 0, "refused import writes nothing");
+        assert_eq!(rows, 1);
     }
 }

@@ -23,7 +23,8 @@
 //!
 //! JSONL schema — header line (issue #229: the version key is
 //! `format_version`, which is what `vipune export` writes; the legacy
-//! spelling `version` is still accepted for pre-#217 files):
+//! spelling `version` is accepted as an alias, and its VALUE is never
+//! inspected — presence of either spelling is the whole rule):
 //!   `{"type":"export","format_version":1,"embedding_dims":384,"model_id":...,"model_revision":...,"exported_at":...,"rows":N}`
 //! Row line (12 fields; DB column `type` is named `memory_type`):
 //!   `id`, `project_id`, `content`, `metadata` (nullable), `embedding`
@@ -43,7 +44,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use super::ImportResponse;
-use super::export_header::{DeclaredVersion, EXPORT_FORMAT_VERSION, ExportHeader};
+use super::export_header::{ExportHeader, FORMAT_VERSION_KEY, LEGACY_VERSION_KEY};
 
 use crate::embedding::EMBEDDING_DIMS;
 
@@ -160,41 +161,27 @@ impl HeaderIdentity {
 /// the header's model identity (None fields = identity absent, i.e. a legacy
 /// export).
 ///
-/// Two version rules, both inherited from #229's compatibility contract:
+/// The version rule is PRESENCE and nothing else: the header must carry the
+/// version key under `format_version` (what `vipune export` writes) or the
+/// legacy alias `version`, under any value. Every part of that rule — and
+/// the one exception (two spellings declaring two different numbers) — lives
+/// on [`ExportHeader`] itself, so the contract module is the whole contract:
+/// `is_export()`, `declared_rows()`, `has_version_key()` and
+/// `version_conflict()` are the only readers of the header fields anywhere
+/// outside `export_header`.
 ///
-/// - PRESENCE (hard requirement): the header must carry the version key
-///   under `format_version` or the legacy alias `version`. The
-///   presence-not-shape contract is stated once at [`DeclaredVersion`].
-/// - FORWARD COMPAT (total, not best-effort): the version must be a
-///   non-negative integer (an explicit `null` is the documented legacy
-///   shape). Any other spelling — `"2"`, `-1`, `1.5`, `true` — is refused,
-///   so the gate cannot be bypassed by quoting or mangling the number.
-///   A numeric version above [`EXPORT_FORMAT_VERSION`] is likewise refused:
-///   the version is not decorative — accepting a future row schema under
-///   this build's parser would either fail later with a generic
-///   `missing field` error or, worse, import rows whose fields were
-///   interpreted under the wrong schema.
-///
-/// A header carrying BOTH version spellings at once is refused by an
-/// explicit key check (not a serde side effect): no released writer ever
-/// emitted two version keys, so that file is hand-edited and ambiguous
-/// about which schema it declares — refusing it is safer than picking one
-/// spelling silently, and the refusal names both keys and the remedy.
+/// There is deliberately NO comparison against the format version.
+/// #229's acceptance criteria require that "a future v2 export still
+/// parses", and a numeric check the reader cannot enforce anyway (spelling
+/// the number as `"2"` stepped around it) buys a false sense of a gate
+/// while breaking the restore path it claims to protect.
 fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
     let line = line.trim_end_matches('\r');
     let value: serde_json::Value = serde_json::from_str(line)
         .map_err(|e| Error::InvalidInput(format!("line 1: malformed header JSON: {}", e)))?;
-    let Some(map) = value.as_object() else {
+    if !value.is_object() {
         return Err(Error::InvalidInput(
             "line 1: header must be a JSON object".to_string(),
-        ));
-    };
-    // Stated as an explicit rule, not delegated to serde's duplicate-field
-    // error (which names only one key and would surface under the
-    // "schema" wrapper below).
-    if map.contains_key("format_version") && map.contains_key("version") {
-        return Err(Error::InvalidInput(
-            r#"line 1: header carries both "format_version" and the legacy "version" — remove the duplicate "version" key"#.to_string(),
         ));
     }
     // Syntax passed above; every refusal from here on is a schema mismatch,
@@ -206,39 +193,62 @@ fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
         ))
     })?;
 
-    if header.kind != "export" {
+    // `kind` is optional on the type so a header missing it entirely gets
+    // this message rather than serde's "missing field `type`" under the
+    // schema wrapper — the released reader's wording, kept for the senders
+    // that have already learned to read it.
+    if !header.is_export() {
+        let shown = match header.kind() {
+            Some(kind) => format!(
+                "type is {}, expected \"export\"",
+                shown_value(&serde_json::Value::String(kind.to_string()))
+            ),
+            None => "missing type=export".to_string(),
+        };
         return Err(Error::InvalidInput(format!(
-            "line 1: not an export file (type is {:?}, expected \"export\")",
-            header.kind
+            "line 1: not an export file ({shown})"
         )));
     }
-    match header.declared_version() {
-        DeclaredVersion::Absent => {
-            return Err(Error::InvalidInput(
-                r#"line 1: header missing format_version (or the legacy alias "version")"#
-                    .to_string(),
-            ));
-        }
-        DeclaredVersion::AcceptedNull => {}
-        DeclaredVersion::Numeric(declared) => {
-            if declared > u64::from(EXPORT_FORMAT_VERSION) {
-                return Err(Error::InvalidInput(format!(
-                    "line 1: unsupported export format version {declared}; this build supports <= {EXPORT_FORMAT_VERSION}"
-                )));
-            }
-        }
-        DeclaredVersion::NonNumeric(value) => {
-            return Err(Error::InvalidInput(format!(
-                "line 1: format_version must be a non-negative integer (or null), got {value}"
-            )));
-        }
+    // Key names are interpolated from the contract module, never re-spelled
+    // here: a rename in export_header must move these messages with it
+    // rather than leave them naming a key that no longer exists.
+    if let Some((canonical, legacy)) = header.version_conflict() {
+        return Err(Error::InvalidInput(format!(
+            "line 1: header declares a conflicting version: {FORMAT_VERSION_KEY} is {} but the legacy {LEGACY_VERSION_KEY} is {} — remove the legacy {LEGACY_VERSION_KEY} key",
+            shown_value(canonical),
+            shown_value(legacy)
+        )));
     }
-    let rows = header.rows;
+    if !header.has_version_key() {
+        return Err(Error::InvalidInput(format!(
+            "line 1: header missing {FORMAT_VERSION_KEY} (or the legacy alias \"{LEGACY_VERSION_KEY}\")"
+        )));
+    }
+    let rows = header
+        .declared_rows()
+        .ok_or_else(|| Error::InvalidInput("line 1: header missing rows".to_string()))?;
     let identity = HeaderIdentity {
-        model_id: header.model_id,
-        model_revision: header.model_revision,
+        model_id: header.model_id().map(str::to_string),
+        model_revision: header.model_revision().map(str::to_string),
     };
     Ok((rows as usize, identity))
+}
+
+/// Render an untrusted header value for an error message.
+///
+/// The header comes from a file the caller controls. `Value`'s `Display`
+/// writes strings through verbatim — a control character (or a 200 KB
+/// string) in the header would land on the operator's terminal unescaped,
+/// which is how a refusal message becomes its own second bug. `Debug`
+/// escapes them, and the length cap bounds the echo.
+fn shown_value(value: &serde_json::Value) -> String {
+    const MAX_SHOWN_CHARS: usize = 60;
+    let rendered = format!("{value:?}");
+    let mut shown: String = rendered.chars().take(MAX_SHOWN_CHARS).collect();
+    if rendered.chars().count() > MAX_SHOWN_CHARS {
+        shown.push('…');
+    }
+    shown
 }
 
 /// Run the import. Returns the response on success, or an `Err` whose
