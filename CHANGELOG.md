@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-10-22
+
+### Bug Fixes
+
+- Accept the format_version header key on import ([#234](https://github.com/randomm/vipune/pull/234))
+
+
 ## [0.15.1] - 2026-10-22
 
 ### Bug Fixes
