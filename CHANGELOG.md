@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-22
+
+### Bug Fixes
+
+- *(work)* Scheduled CI on main fails since 2026-10-02 ([#230](https://github.com/randomm/vipune/pull/230))
+
+
 ## [0.15.0] - 2026-09-24
 
 ### Features
