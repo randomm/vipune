@@ -1,33 +1,33 @@
 //! Real export → import round-trip tests (issue #229).
 //!
-//! Issue #229 was invisible to the suite because every test on both sides
-//! hand-crafted its own header: `import_tests.rs` wrote `"version":1` while
-//! `write_jsonl` emits `"format_version":1`, and
-//! `tests/backup_roundtrip_integration.rs` re-implemented both directions
-//! locally, so neither pair ever met the production code.
-//!
-//! These tests close that gap: they call `handle_export` and `run_import`
-//! directly (both reachable in-crate under the bin-only `commands` module),
-//! with no hand-written header anywhere. Model-free — rows are seeded with
-//! raw `vec_to_blob` BLOBs, so no ONNX model is downloaded.
-//!
-//! Contract covered here (issue #195, re-established on the real path):
-//! the embedding BLOB survives the round trip byte-for-byte, and
-//! `retrieval_count` / `last_retrieved_at` restore verbatim.
-//!
-//! # Division of labour with `tests/backup_roundtrip_integration.rs`
-//!
-//! Deliberate layer split, not duplication: THIS file owns the column-level
-//! contracts (BLOB byte-identity, telemetry verbatim, re-import
-//! skip-and-preserve) by calling `handle_export` / `run_import` directly, so
-//! a schema change is edited here once. The CLI-spawn file owns the
-//! process-level contracts around the same production path — exit code,
-//! `Exported` stdout, the `--json` response shape, LF line endings, and the
-//! export-side-only corrupt/NULL BLOB shapes.
+//! Drives `handle_export` → `run_import` on the production path with no
+//! hand-written header anywhere; model-free (rows are seeded with raw
+//! `vec_to_blob` BLOBs, so no ONNX model is downloaded).
 
 #![cfg(test)]
 
+// # Contract covered here (issue #195, re-established on the real path)
+//
+// The embedding BLOB survives export → import byte-for-byte, and
+// `retrieval_count` / `last_retrieved_at` restore verbatim.
+//
+// # Division of labour with `tests/backup_roundtrip_integration.rs`
+//
+// Deliberate layer split, not duplication — THIS file owns:
+// - column-level contracts: BLOB byte-identity, telemetry verbatim, and
+//   re-import skip-and-preserve, by calling `handle_export` / `run_import`
+//   directly, so a schema change is edited here once;
+// - the writer↔reader header-schema pin (`ExportHeader` on both sides).
+//
+// The CLI-spawn file owns the process-level contracts around the same
+// production path — the real binary's exit code, `Exported` stdout, the
+// `--json` response shape, LF line endings, and the export-side-only
+// corrupt/NULL BLOB shapes. The `ExitCode::SUCCESS` asserted by the
+// `export` fixture below is a fixture precondition (the handler ran), not
+// the exit-code contract — that one lives in the CLI-spawn file.
+
 use crate::commands::export::handle_export;
+use crate::commands::export_header::{DeclaredVersion, EXPORT_FORMAT_VERSION, ExportHeader};
 use crate::commands::import::run_import;
 use crate::embedding::EMBEDDING_DIMS;
 use crate::sqlite::Database;
@@ -81,10 +81,13 @@ struct SeedRow {
     last_retrieved_at: Option<String>,
 }
 
-/// Seed one row through the production all-columns insert
-/// (`Database::insert_with_id`, the import path's own insert) rather than a
-/// fixture-local INSERT literal: a column added to the real insert cannot
-/// drift past this fixture unnoticed.
+/// Seed one row through `Database::insert_with_id`, the crate's all-columns
+/// insert with a caller-supplied id. Note this is NOT the importer's own
+/// statement — `run_import` executes its own inline all-columns INSERT
+/// inside its transaction. What guards the importer's INSERT against
+/// dropped columns is the whole-row `read_row` comparison in
+/// `test_real_roundtrip_restores_all_columns_verbatim`, which asserts every
+/// column (including the BLOB) comes back unchanged.
 fn insert_seed_row(db: &Database, row: &SeedRow) {
     db.insert_with_id(
         &row.id,
@@ -161,7 +164,7 @@ fn seed_source(db_path: &Path) -> Vec<SeedRow> {
 /// Run the real `vipune export` handler into `out_path`.
 fn export(db_path: &Path, out_path: &Path) {
     let code = handle_export(db_path, out_path, None, true).expect("handle_export ok");
-    assert_eq!(code, ExitCode::SUCCESS);
+    assert_eq!(code, ExitCode::SUCCESS, "fixture precondition");
 }
 
 /// Read a row back from the destination, shaped exactly like a seeded
@@ -194,13 +197,23 @@ fn read_row(db_path: &Path, id: &str) -> SeedRow {
             })
         },
     )
-    .unwrap()
+    .unwrap_or_else(|e| panic!("no row {id} in {}: {e}", db_path.display()))
 }
 
 fn count_rows(db_path: &Path) -> i64 {
     let conn = rusqlite::Connection::open(db_path).unwrap();
     conn.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
         .unwrap()
+}
+
+/// Read the header line of `export_path` as text.
+fn header_line_of(export_path: &Path) -> String {
+    std::fs::read_to_string(export_path)
+        .unwrap_or_else(|e| panic!("cannot read export {}: {e}", export_path.display()))
+        .lines()
+        .next()
+        .expect("header line")
+        .to_string()
 }
 
 /// The bug itself: an export written by the real writer must be importable by
@@ -214,23 +227,6 @@ fn test_real_export_imports_into_fresh_store() {
     let export_path = src_dir.path().join("export.jsonl");
     export(&src_path, &export_path);
 
-    // The real writer's header spells the key `format_version` — this is the
-    // pin that would have caught #229 on the export side.
-    let header_line = std::fs::read_to_string(&export_path)
-        .unwrap()
-        .lines()
-        .next()
-        .expect("header line")
-        .to_string();
-    let header: serde_json::Value = serde_json::from_str(&header_line).unwrap();
-    assert_eq!(header["type"], "export");
-    assert_eq!(header["format_version"], 1);
-    assert!(
-        header.get("version").is_none(),
-        "the real writer emits format_version, not the legacy key: {header}"
-    );
-    assert_eq!(header["rows"], seeded.len() as u64);
-
     let (_dst_dir, dst_path) = create_test_db();
     let response = run_import(&dst_path, export_path.to_str().unwrap()).expect("real import ok");
 
@@ -243,38 +239,67 @@ fn test_real_export_imports_into_fresh_store() {
     assert_eq!(count_rows(&dst_path), seeded.len() as i64);
 }
 
-/// #195's contract, now actually exercised on the production path: the
-/// embedding BLOB survives export → import byte-for-byte.
+/// The writer↔reader schema pin: the header `write_jsonl` produces must
+/// deserialise through the shared [`ExportHeader`] with every field the
+/// reader needs populated — and each mandatory key must be one the reader
+/// actually refuses to do without. Key names are single-sourced (the #229
+/// fix); this test is what keeps the two sides agreeing on requiredness
+/// too, which the all-`Option` reader-side leniency cannot express by type.
 #[test]
-fn test_real_roundtrip_embedding_blob_is_byte_identical() {
+fn test_writer_header_deserialises_through_the_shared_schema() {
     let (src_dir, src_path) = create_test_db();
     let seeded = seed_source(&src_path);
 
     let export_path = src_dir.path().join("export.jsonl");
     export(&src_path, &export_path);
 
-    let (_dst_dir, dst_path) = create_test_db();
-    run_import(&dst_path, export_path.to_str().unwrap()).expect("import ok");
+    let header_line = header_line_of(&export_path);
+    let header: ExportHeader = serde_json::from_str(&header_line)
+        .expect("the real writer's header is a valid ExportHeader");
+    assert_eq!(header.kind, "export");
+    assert_eq!(header.rows, seeded.len() as u64);
+    assert_eq!(
+        header.declared_version(),
+        DeclaredVersion::Numeric(u64::from(EXPORT_FORMAT_VERSION)),
+        "the real writer declares the current format version numerically"
+    );
+    assert!(header.embedding_dims.is_some(), "dims recorded");
+    assert!(
+        header.model_id.is_some() && header.model_revision.is_some(),
+        "identity recorded"
+    );
 
-    for row in &seeded {
-        let restored = read_row(&dst_path, &row.id);
-        assert_eq!(
-            restored.blob, row.blob,
-            "embedding BLOB must be byte-identical for {}",
-            row.id
-        );
-        assert_eq!(
-            restored.blob.len(),
-            EMBEDDING_DIMS * 4,
-            "{}-byte {}xf32-LE blob survives intact",
-            EMBEDDING_DIMS * 4,
-            EMBEDDING_DIMS
+    // The writer emits the canonical key, never the legacy one.
+    let raw: serde_json::Value = serde_json::from_str(&header_line).unwrap();
+    assert!(
+        raw.get("version").is_none(),
+        "the real writer emits format_version, not the legacy key: {raw}"
+    );
+
+    // Dropping a key the reader requires must make the reader refuse:
+    // `type` and `rows` fail the ExportHeader type itself; the version key
+    // is presence-checked by the reader, so its removal must surface as
+    // DeclaredVersion::Absent.
+    let map: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&header_line).unwrap();
+    for key in ["type", "rows"] {
+        let mut mutilated = map.clone();
+        mutilated.remove(key);
+        assert!(
+            serde_json::from_value::<ExportHeader>(serde_json::Value::Object(mutilated)).is_err(),
+            "reader schema must require the key the writer emits: {key}"
         );
     }
+    let mut no_version = map.clone();
+    no_version.remove("format_version");
+    let header: ExportHeader = serde_json::from_value(serde_json::Value::Object(no_version))
+        .expect("version is optional to the type");
+    assert_eq!(header.declared_version(), DeclaredVersion::Absent);
 }
 
-/// Retrieval telemetry (and the rest of the 12 columns) restore verbatim —
-/// asserted column by column, not just the BLOB.
+/// #195's contract, now actually exercised on the production path: every
+/// column — the embedding BLOB byte-identity included — survives
+/// export → import unchanged. One struct comparison, one fixture.
 #[test]
 fn test_real_roundtrip_restores_all_columns_verbatim() {
     let (src_dir, src_path) = create_test_db();
@@ -293,7 +318,7 @@ fn test_real_roundtrip_restores_all_columns_verbatim() {
         assert_eq!(
             read_row(&dst_path, &row.id),
             *row,
-            "all columns must restore verbatim for {}",
+            "all columns (BLOB byte-identity included) must restore verbatim for {}",
             row.id
         );
     }
@@ -344,6 +369,18 @@ fn row_line(id: &str) -> String {
     )
 }
 
+/// One header line with the given version-key fragment, so the header-key
+/// matrix reads as a list of variations instead of repeating the four
+/// invariant keys (`type`, `embedding_dims`, `exported_at`, `rows`) per
+/// test. `version_field` is e.g. `r#""format_version":1"#`, or `""` for no
+/// version key at all.
+fn header_line(version_field: &str) -> String {
+    let sep = if version_field.is_empty() { "" } else { "," };
+    format!(
+        r#"{{"type":"export"{sep}{version_field},"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":1}}"#
+    )
+}
+
 /// Import a one-row file whose header line is exactly `header`, into a fresh
 /// default store, and return `((inserted, skipped), rows_written)`.
 ///
@@ -388,10 +425,7 @@ const MISSING_VERSION_MSG: &str =
 /// Import accepts the canonical key the export writer emits.
 #[test]
 fn test_import_accepts_format_version_header_into_default_store() {
-    let (outcome, rows) = import_with_header(
-        r#"{"type":"export","format_version":1,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":1}"#,
-        "fmt-1",
-    );
+    let (outcome, rows) = import_with_header(&header_line(r#""format_version":1"#), "fmt-1");
     assert_eq!(
         outcome.unwrap(),
         (1, 0),
@@ -405,10 +439,7 @@ fn test_import_accepts_format_version_header_into_default_store() {
 /// other; dropping either would break restores).
 #[test]
 fn test_import_accepts_legacy_version_header_alias() {
-    let (outcome, rows) = import_with_header(
-        r#"{"type":"export","version":1,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":1}"#,
-        "legacy-1",
-    );
+    let (outcome, rows) = import_with_header(&header_line(r#""version":1"#), "legacy-1");
     assert_eq!(outcome.unwrap(), (1, 0), "legacy version alias must import");
     assert_eq!(rows, 1);
 }
@@ -416,10 +447,7 @@ fn test_import_accepts_legacy_version_header_alias() {
 /// A header carrying NEITHER spelling fails with the exact message.
 #[test]
 fn test_import_rejects_header_missing_both_version_keys() {
-    let (outcome, rows) = import_with_header(
-        r#"{"type":"export","embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":1}"#,
-        "none-1",
-    );
+    let (outcome, rows) = import_with_header(&header_line(""), "none-1");
     assert_eq!(refused(outcome), MISSING_VERSION_MSG);
     assert_eq!(rows, 0, "refused import writes nothing");
 }
@@ -432,10 +460,10 @@ fn test_import_rejects_header_missing_both_version_keys() {
 #[test]
 fn test_import_accepts_null_valued_version_keys() {
     for key in ["format_version", "version"] {
-        let header = format!(
-            r#"{{"type":"export","{key}":null,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":1}}"#
+        let (outcome, rows) = import_with_header(
+            &header_line(&format!(r#""{key}":null"#)),
+            &format!("null-{key}"),
         );
-        let (outcome, rows) = import_with_header(&header, &format!("null-{key}"));
         assert_eq!(
             outcome.unwrap_or_else(|e| panic!("a null-valued `{key}` must satisfy presence: {e}")),
             (1, 0)
@@ -445,18 +473,26 @@ fn test_import_accepts_null_valued_version_keys() {
 }
 
 /// A header carrying BOTH spellings of the version key is ambiguous — no
-/// released writer ever emitted two version keys, so the shared schema
-/// refuses it instead of silently preferring one.
+/// released writer ever emitted two version keys, so the reader refuses it
+/// with an explicit rule that names both keys and the remedy (not serde's
+/// duplicate-field error under a "malformed header JSON" prefix, which
+/// would mislabel syntactically valid JSON as a syntax failure).
 #[test]
 fn test_import_refuses_header_carrying_both_version_spellings() {
-    let (outcome, rows) = import_with_header(
-        r#"{"type":"export","format_version":1,"version":2,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":1}"#,
-        "both-1",
-    );
+    let (outcome, rows) =
+        import_with_header(&header_line(r#""format_version":1,"version":2"#), "both-1");
     let msg = refused(outcome);
     assert!(
-        msg.contains("duplicate field"),
-        "expected a duplicate-field refusal, got: {msg}"
+        !msg.starts_with("line 1: malformed header JSON"),
+        "the header IS valid JSON; the refusal must not claim syntax failure: {msg}"
+    );
+    assert!(
+        msg.contains("format_version") && msg.contains("version"),
+        "the refusal must name both offending keys: {msg}"
+    );
+    assert!(
+        msg.contains("remove"),
+        "the refusal must state the remedy: {msg}"
     );
     assert_eq!(rows, 0, "refused import writes nothing");
 }
@@ -467,14 +503,31 @@ fn test_import_refuses_header_carrying_both_version_spellings() {
 /// importing rows whose BLOBs were interpreted under the wrong schema.
 #[test]
 fn test_import_rejects_format_version_ahead_of_this_build() {
-    let (outcome, rows) = import_with_header(
-        r#"{"type":"export","format_version":99,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":1}"#,
-        "future-1",
-    );
+    let (outcome, rows) = import_with_header(&header_line(r#""format_version":99"#), "future-1");
     let msg = refused(outcome);
     assert!(
         msg.contains("unsupported export format version 99"),
         "got: {msg}"
     );
     assert_eq!(rows, 0, "refused import writes nothing");
+}
+
+/// The forward-compat gate is total: a version that is neither a non-negative
+/// integer nor `null` cannot bypass it by quoting or mangling the number.
+/// Every spelling here previously produced a silent ACCEPT (the gate read
+/// `as_u64` and skipped whenever that returned `None`).
+#[test]
+fn test_import_rejects_non_numeric_format_version() {
+    for spelling in [r#""2""#, "-1", "1.5", "true", "{}", "[]"] {
+        let (outcome, rows) = import_with_header(
+            &header_line(&format!(r#""format_version":{spelling}"#)),
+            &format!("nonnum-{spelling}"),
+        );
+        let msg = refused(outcome);
+        assert!(
+            msg.contains("format_version must be a non-negative integer"),
+            "`{spelling}` must be refused by the total version gate, got: {msg}"
+        );
+        assert_eq!(rows, 0, "refused import writes nothing");
+    }
 }

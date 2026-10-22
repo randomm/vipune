@@ -4,6 +4,7 @@ mod backup;
 mod doctor;
 mod doctor_fts;
 mod export;
+mod export_header;
 mod handlers;
 pub mod hook_install;
 pub mod hook_run;

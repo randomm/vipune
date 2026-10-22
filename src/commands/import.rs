@@ -43,7 +43,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use super::ImportResponse;
-use super::export::{EXPORT_FORMAT_VERSION, ExportHeader};
+use super::export_header::{DeclaredVersion, EXPORT_FORMAT_VERSION, ExportHeader};
 
 use crate::embedding::EMBEDDING_DIMS;
 
@@ -162,55 +162,78 @@ impl HeaderIdentity {
 ///
 /// Two version rules, both inherited from #229's compatibility contract:
 ///
-/// - PRESENCE (hard requirement): the header must carry the version key under
-///   `format_version` (what `write_jsonl` emits) or the legacy alias
-///   `version`, so backups from v0.10.0–v0.15.0 and pre-#217 files keep
-///   importing. A key present with an explicit JSON `null` counts — it is the
-///   shape those old files carry, and rejecting it would recreate the very
-///   bug #229 fixed. This is deliberate presence-not-shape semantics, not an
-///   omission.
-/// - FORWARD COMPAT (deliberate decision, not an omission): a *numeric*
-///   version above [`EXPORT_FORMAT_VERSION`] is refused. The version is not
-///   decorative — accepting a future row schema under this build's parser
-///   would either fail later with a generic `missing field` error or, worse,
-///   import rows whose fields were interpreted under the wrong schema.
+/// - PRESENCE (hard requirement): the header must carry the version key
+///   under `format_version` or the legacy alias `version`. The
+///   presence-not-shape contract is stated once at [`DeclaredVersion`].
+/// - FORWARD COMPAT (total, not best-effort): the version must be a
+///   non-negative integer (an explicit `null` is the documented legacy
+///   shape). Any other spelling — `"2"`, `-1`, `1.5`, `true` — is refused,
+///   so the gate cannot be bypassed by quoting or mangling the number.
+///   A numeric version above [`EXPORT_FORMAT_VERSION`] is likewise refused:
+///   the version is not decorative — accepting a future row schema under
+///   this build's parser would either fail later with a generic
+///   `missing field` error or, worse, import rows whose fields were
+///   interpreted under the wrong schema.
 ///
-/// A header carrying BOTH spellings at once is refused as a duplicate field:
-/// no released writer ever emitted two version keys, so that file is
-/// hand-edited and ambiguous about which schema it declares — refusing it is
-/// safer than picking one spelling silently.
+/// A header carrying BOTH version spellings at once is refused by an
+/// explicit key check (not a serde side effect): no released writer ever
+/// emitted two version keys, so that file is hand-edited and ambiguous
+/// about which schema it declares — refusing it is safer than picking one
+/// spelling silently, and the refusal names both keys and the remedy.
 fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
     let line = line.trim_end_matches('\r');
     let value: serde_json::Value = serde_json::from_str(line)
         .map_err(|e| Error::InvalidInput(format!("line 1: malformed header JSON: {}", e)))?;
-    if !value.is_object() {
+    let Some(map) = value.as_object() else {
         return Err(Error::InvalidInput(
             "line 1: header must be a JSON object".to_string(),
         ));
+    };
+    // Stated as an explicit rule, not delegated to serde's duplicate-field
+    // error (which names only one key and would surface under the
+    // "schema" wrapper below).
+    if map.contains_key("format_version") && map.contains_key("version") {
+        return Err(Error::InvalidInput(
+            r#"line 1: header carries both "format_version" and the legacy "version" — remove the duplicate "version" key"#.to_string(),
+        ));
     }
-    let header: ExportHeader = serde_json::from_value(value)
-        .map_err(|e| Error::InvalidInput(format!("line 1: malformed header JSON: {}", e)))?;
+    // Syntax passed above; every refusal from here on is a schema mismatch,
+    // so the message must not claim the JSON is malformed.
+    let header: ExportHeader = serde_json::from_value(value).map_err(|e| {
+        Error::InvalidInput(format!(
+            "line 1: header does not match the export schema: {}",
+            e
+        ))
+    })?;
 
-    if header.kind.as_deref() != Some("export") {
-        return Err(Error::InvalidInput(
-            "line 1: not an export file (missing type=export)".to_string(),
-        ));
+    if header.kind != "export" {
+        return Err(Error::InvalidInput(format!(
+            "line 1: not an export file (type is {:?}, expected \"export\")",
+            header.kind
+        )));
     }
-    if !header.has_version_key() {
-        return Err(Error::InvalidInput(
-            r#"line 1: header missing format_version (or the legacy alias "version")"#.to_string(),
-        ));
-    }
-    if let Some(declared) = header.declared_version() {
-        if declared > u64::from(EXPORT_FORMAT_VERSION) {
+    match header.declared_version() {
+        DeclaredVersion::Absent => {
+            return Err(Error::InvalidInput(
+                r#"line 1: header missing format_version (or the legacy alias "version")"#
+                    .to_string(),
+            ));
+        }
+        DeclaredVersion::AcceptedNull => {}
+        DeclaredVersion::Numeric(declared) => {
+            if declared > u64::from(EXPORT_FORMAT_VERSION) {
+                return Err(Error::InvalidInput(format!(
+                    "line 1: unsupported export format version {declared}; this build supports <= {EXPORT_FORMAT_VERSION}"
+                )));
+            }
+        }
+        DeclaredVersion::NonNumeric(value) => {
             return Err(Error::InvalidInput(format!(
-                "line 1: unsupported export format version {declared}; this build supports <= {EXPORT_FORMAT_VERSION}"
+                "line 1: format_version must be a non-negative integer (or null), got {value}"
             )));
         }
     }
-    let rows = header
-        .rows
-        .ok_or_else(|| Error::InvalidInput("line 1: header missing rows".to_string()))?;
+    let rows = header.rows;
     let identity = HeaderIdentity {
         model_id: header.model_id,
         model_revision: header.model_revision,
