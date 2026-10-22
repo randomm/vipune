@@ -132,8 +132,8 @@ impl EmbeddingEngine {
             .get(profile.onnx_path)
             .or_else(|_| repo.get("onnx/model.onnx"))
             .or_else(|_| repo.get("model.onnx"))
-            .map_err(&wrap_download_err)?;
-        let tokenizer_path = repo.get("tokenizer.json").map_err(&wrap_download_err)?;
+            .map_err(wrap_download_err)?;
+        let tokenizer_path = repo.get("tokenizer.json").map_err(wrap_download_err)?;
 
         let mut tokenizer = Tokenizer::from_file(tokenizer_path)?;
         tokenizer
