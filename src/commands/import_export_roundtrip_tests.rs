@@ -168,7 +168,7 @@ fn fetch_all(db_path: &Path) -> Vec<StoredRow> {
         .expect("read rows");
     assert!(
         rows.iter().all(|r| r.blob.len() == EMBEDDING_DIMS * 4),
-        "fixture must carry only full 1536-byte blobs"
+        "fixture must carry only full-width blobs"
     );
     rows
 }
