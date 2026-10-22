@@ -20,24 +20,24 @@ use crate::memory::crud::test_fake_embedder;
 use crate::sqlite::Database;
 use crate::sqlite::identity;
 
-/// Every `VIPUNE_*` knob `Config::load()` parses. The spawned child inherits
-/// the parent's environment, so a sibling test that holds a malformed knob at
-/// spawn time would make the child's `Config::load()` fail and turn a clean
-/// pass into a non-zero exit. Each is removed from the child's environment
-/// instead of being cleared in the parent: the tests never read these knobs
-/// back (they pass `--db-path` and expect the default model), and removing
-/// them per-child mutates no process-global state at all.
-const CONFIG_ENV_VARS: &[&str] = &[
-    "VIPUNE_DATABASE_PATH",
-    "VIPUNE_EMBEDDING_MODEL",
-    "VIPUNE_SIMILARITY_THRESHOLD",
-    "VIPUNE_RECENCY_WEIGHT",
-    "VIPUNE_HYBRID",
-    "VIPUNE_DECAY_REFRESH_DAYS",
-    "VIPUNE_PROMOTION_THRESHOLD",
-    "VIPUNE_PRUNE_RETRIEVAL_LIMIT",
-    "VIPUNE_PRUNE_MIN_AGE_DAYS",
-];
+/// Knobs the spawned child must not inherit — group 1: every knob
+/// `Config::load()` parses, from the one authoritative list in
+/// `tests_utils::CONFIG_ENV_VARS`.
+///
+/// The child inherits the parent's environment, so a single malformed value held
+/// by a sibling test at spawn time (`-1`, `abc`) makes the child's
+/// `Config::load()` fail and turns a clean pass into a non-zero exit. Removal
+/// happens per child rather than by clearing in the parent: these tests never
+/// read the knobs back (they pass `--db-path` and expect the default model), and
+/// `Command::env_remove` mutates no process-global state, so it cannot race a
+/// sibling thread's `getenv`.
+const CONFIG_ENV_VARS_EXCLUDED: &[&str] = crate::config::tests_utils::CONFIG_ENV_VARS;
+
+/// Group 2: the two knobs `project.rs::detect_project` reads on every
+/// invocation (`main.rs` calls it before dispatch), which are outside the
+/// `Config` knob list. Harmless for `--all-projects` today, but `VIPUNE_DEBUG`
+/// makes `project.rs` `eprintln!` and these tests assert on stderr byte-for-byte.
+const PROJECT_ENV_VARS_EXCLUDED: &[&str] = &["VIPUNE_PROJECT", "VIPUNE_DEBUG"];
 
 fn create_test_db() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::TempDir::new().unwrap();
@@ -102,7 +102,10 @@ fn capture_force_output(db_path: &std::path::Path, json: bool) -> (i32, String, 
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
-    for var in CONFIG_ENV_VARS {
+    for var in CONFIG_ENV_VARS_EXCLUDED
+        .iter()
+        .chain(PROJECT_ENV_VARS_EXCLUDED.iter())
+    {
         cmd.env_remove(var);
     }
 
