@@ -79,6 +79,10 @@ fn make_row_json(
     s
 }
 
+/// Header fixture using the LEGACY `version` key — the legacy alias of
+/// `format_version` (issue #229), which is the key `vipune export` actually
+/// writes. Unrelated to the pre-#217 legacy tests, which omit the identity
+/// keys.
 fn header(rows: usize) -> String {
     format!(
         r#"{{"type":"export","version":1,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":{}}}"#,
@@ -86,6 +90,8 @@ fn header(rows: usize) -> String {
     )
 }
 
+/// Header fixture using the LEGACY `version` key (alias of `format_version`,
+/// see [`header`]) plus explicit model identity keys.
 fn header_with_identity(rows: usize, model_id: &str, model_revision: &str) -> String {
     format!(
         r#"{{"type":"export","version":1,"embedding_dims":384,"model_id":"{model_id}","model_revision":"{model_revision}","exported_at":"2024-01-01T00:00:00Z","rows":{rows}}}"#

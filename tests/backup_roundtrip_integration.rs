@@ -4,50 +4,40 @@
 //! export → import round trip byte-for-byte (NOT cosine similarity), and that
 //! retrieval_count / last_retrieved_at are restored verbatim.
 //!
-//! Uses the fake-embedder / seeded-raw-blob pattern (no ONNX model required),
-//! mirroring `reindex_tests.rs`.
+//! # Why this file spawns the binary (issue #229)
 //!
-//! This test runs in the external `vipune` crate's public API surface. It does
-//! NOT use `db.conn()` (pub(crate)), `test_fake_embedder` (pub(crate),
-//! test-only), or the crate's private `rusqlite` re-export. Instead it uses:
-//! - A self-contained fake embedder (deterministic 384-dim f32 vector)
-//! - Raw `rusqlite::Connection` (dev-dependency) for BLOB-level assertions
-//! - A hand-rolled base64 codec (no `base64` crate dependency)
+//! It used to define its own `export_to_jsonl` / `import_from_jsonl` helpers
+//! that re-implemented both directions locally — including a hand-written
+//! `"version":1` header. That meant the file could never observe the real
+//! writer or the real importer, which is exactly how the #229 header-key
+//! mismatch (export wrote `format_version`, import required `version`) stayed
+//! green while every release from v0.10.0 to v0.15.0 shipped a restore path
+//! that aborted on its own exports. The fakes are gone: every export and
+//! import here runs the compiled `vipune` binary.
+//!
+//! Rows with an empty or wrong-dimension BLOB are no longer imported here:
+//! the real importer rejects them all-or-nothing BY CONTRACT
+//! (`empty embedding (NULL/empty blobs are not restorable)` /
+//! `wrong-dimension embedding`), so those two cases are asserted on the
+//! export side only. The happy-path importer is covered again by
+//! `src/commands/import_export_roundtrip_tests.rs`, which drives
+//! `handle_export` → `run_import` in-crate.
+//!
+//! Model-free: rows are seeded through the public `Database::insert` API with
+//! a self-contained fake embedder (no ONNX model, no `test_fake_embedder`),
+//! and BLOB-level assertions go through the dev-dependency `rusqlite`
+//! connection because `Database::conn()` is `pub(crate)`.
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use rusqlite::{Connection, params};
 use vipune::Database;
 
-// ── Self-contained base64 codec (no external dependency) ──
-
-const B64_ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-fn base64_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(B64_ALPHA[((n >> 18) & 0x3F) as usize] as char);
-        out.push(B64_ALPHA[((n >> 12) & 0x3F) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(B64_ALPHA[((n >> 6) & 0x3F) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(B64_ALPHA[(n & 0x3F) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
-}
-
+/// Standard-alphabet base64 decoder, vendored so the corrupt-BLOB assertion
+/// needs no extra dependency. Only used to read the exported `embedding`
+/// field back; the encoder side is exercised by the binary itself.
 fn base64_decode(s: &str) -> Vec<u8> {
     fn val(c: u8) -> u32 {
         match c {
@@ -78,8 +68,9 @@ fn base64_decode(s: &str) -> Vec<u8> {
     out
 }
 
-// ── Self-contained fake embedder (no ONNX model, no test_fake_embedder) ──
-
+/// Self-contained deterministic fake embedder: 384-dim f32 vector derived
+/// from the content, so a seeded row carries a full 1536-byte BLOB without
+/// downloading the ONNX model.
 fn fake_embedder(content: &str) -> Vec<f32> {
     let mut hash: u64 = 0x123456789abcdef;
     for byte in content.bytes() {
@@ -105,7 +96,7 @@ fn l2_normalize(vec: &[f32]) -> Vec<f32> {
     vec.iter().map(|x| x / norm).collect()
 }
 
-// ── Test fixtures ──
+// ── Fixtures ──
 
 fn create_test_db() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::TempDir::new().unwrap();
@@ -145,6 +136,8 @@ fn count_rows(db_path: &Path) -> usize {
     .unwrap() as usize
 }
 
+/// Seed six rows across two projects with full 1536-byte BLOBs and explicit
+/// retrieval telemetry. Returns `(id, blob, retrieval_count, last_retrieved_at)`.
 fn seed_source_with_path(
     db: &Database,
     db_path: &Path,
@@ -179,157 +172,86 @@ fn seed_source_with_path(
     seeded
 }
 
-// ── Export / Import (mirrors task-a export + task-b import) ──
+// ── Real CLI driver (the code path a user actually runs) ──
 
-fn export_to_jsonl(db_path: &Path, out_path: &Path) -> usize {
-    let conn = Connection::open(db_path).unwrap();
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at FROM memories",
-        )
-        .unwrap();
-
-    type Row12 = (
-        String,
-        String,
-        String,
-        Option<String>,
-        Vec<u8>,
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        i64,
-        Option<String>,
-    );
-    let rows: Vec<Row12> = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Vec<u8>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, String>(8)?,
-                row.get::<_, Option<String>>(9)?,
-                row.get::<_, i64>(10)?,
-                row.get::<_, Option<String>>(11)?,
-            ))
-        })
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-
-    let rows_total = rows.len();
-    let mut out = String::new();
-
-    out.push_str(&format!(
-        "{{\"type\":\"export\",\"version\":1,\"embedding_dims\":384,\"exported_at\":\"2024-01-01T00:00:00Z\",\"rows\":{}}}\n",
-        rows_total
-    ));
-
-    for r in &rows {
-        let embedding_b64 = if r.4.is_empty() {
-            String::new()
-        } else {
-            base64_encode(&r.4)
-        };
-        let row_json = serde_json::json!({
-            "id": r.0,
-            "project_id": r.1,
-            "content": r.2,
-            "metadata": r.3,
-            "embedding": embedding_b64,
-            "created_at": r.5,
-            "updated_at": r.6,
-            "memory_type": r.7,
-            "status": r.8,
-            "superseded_by": r.9,
-            "retrieval_count": r.10,
-            "last_retrieved_at": r.11,
-        });
-        out.push_str(&row_json.to_string());
-        out.push('\n');
+/// Path to the compiled `vipune` binary (the test harness builds it).
+/// Walks up from `target/debug/deps/<test>-<hash>` to `target/debug/vipune`.
+fn vipune_bin() -> std::path::PathBuf {
+    let exe = std::env::current_exe().expect("current_exe");
+    let mut path = exe;
+    for _ in 0..4 {
+        if let Some(parent) = path.parent() {
+            let candidate = parent.join("vipune");
+            if candidate.exists() {
+                return candidate;
+            }
+            path = parent.to_path_buf();
+        }
     }
-
-    fs::write(out_path, out).unwrap();
-    rows_total
+    panic!("could not locate the vipune binary for subprocess capture");
 }
 
-fn import_from_jsonl(db_path: &Path, jsonl_path: &Path) -> (usize, usize, usize) {
-    let content = fs::read_to_string(jsonl_path).unwrap();
-    let mut lines = content.lines();
+/// Run `vipune [global flags] <args...>` and return (exit code, stdout, stderr).
+///
+/// Both `export` and `import` print informational warnings on stderr even on
+/// success (`--project ... is ignored`), so assertions belong on the exit
+/// code and stdout, never on an empty stderr.
+fn run_vipune(db_path: &Path, args: &[&str]) -> (i32, String, String) {
+    let mut cmd = Command::new(vipune_bin());
+    cmd.arg("--db-path")
+        .arg(db_path)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = cmd.output().expect("spawn vipune");
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
 
-    let header = lines.next().expect("expected a header line");
-    let header_json: serde_json::Value = serde_json::from_str(header).unwrap();
-    let _header_rows = header_json["rows"].as_u64().unwrap() as usize;
+/// Run the real `vipune export` and return the JSONL lines.
+fn cli_export(db_path: &Path, out_path: &Path) -> Vec<String> {
+    let out_arg = out_path.to_str().expect("utf-8 out path");
+    let (code, stdout, stderr) = run_vipune(db_path, &["export", out_arg]);
+    assert_eq!(code, 0, "vipune export failed: {stderr}");
+    let text = fs::read_to_string(out_path).expect("export file must exist");
+    assert!(
+        stdout.contains("Exported"),
+        "export must report the row count on stdout: {stdout}"
+    );
+    text.lines().map(str::to_string).collect()
+}
 
-    let mut conn = Connection::open(db_path).unwrap();
+/// Run the real `vipune import --json` and return `(inserted, skipped)`
+/// parsed from the machine-readable response.
+fn cli_import(db_path: &Path, jsonl_path: &Path) -> (usize, usize) {
+    let src_arg = jsonl_path.to_str().expect("utf-8 source path");
+    let (code, stdout, stderr) = run_vipune(db_path, &["import", src_arg, "--json"]);
+    assert_eq!(code, 0, "vipune import failed: {stderr}");
+    let value: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("import --json must print one JSON object");
+    (
+        value["inserted"].as_u64().expect("inserted count") as usize,
+        value["skipped"].as_u64().expect("skipped count") as usize,
+    )
+}
 
-    let mut existing_ids: HashSet<String> = {
-        let mut stmt = conn.prepare("SELECT id FROM memories").unwrap();
-        stmt.query_map([], |row| row.get::<_, String>(0))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap()
-            .into_iter()
-            .collect()
-    };
-
-    let mut inserted = 0usize;
-    let mut skipped = 0usize;
-    let mut rows_total = 0usize;
-
-    let tx = conn.transaction().unwrap();
-    for line in lines {
-        if line.is_empty() {
-            continue;
-        }
-        rows_total += 1;
-        let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        let id = v["id"].as_str().unwrap().to_string();
-        let project_id = v["project_id"].as_str().unwrap().to_string();
-        let row_content = v["content"].as_str().unwrap().to_string();
-        let metadata = v["metadata"].as_str().map(|s| s.to_string());
-        let embedding_b64 = v["embedding"].as_str().unwrap().to_string();
-        let created_at = v["created_at"].as_str().unwrap().to_string();
-        let updated_at = v["updated_at"].as_str().unwrap().to_string();
-        let memory_type = v["memory_type"].as_str().unwrap().to_string();
-        let status = v["status"].as_str().unwrap().to_string();
-        let superseded_by = v["superseded_by"].as_str().map(|s| s.to_string());
-        let retrieval_count = v["retrieval_count"].as_i64().unwrap();
-        let last_retrieved_at = v["last_retrieved_at"].as_str().map(|s| s.to_string());
-
-        let embedding_blob: Vec<u8> = if embedding_b64.is_empty() {
-            Vec::new()
-        } else {
-            base64_decode(&embedding_b64)
-        };
-
-        if existing_ids.contains(&id) {
-            skipped += 1;
-            continue;
-        }
-
-        tx.execute(
-            "INSERT INTO memories (id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                id, project_id, row_content, metadata, embedding_blob,
-                created_at, updated_at, memory_type, status, superseded_by,
-                retrieval_count, last_retrieved_at,
-            ],
-        )
-        .unwrap();
-        existing_ids.insert(id);
-        inserted += 1;
-    }
-    tx.commit().unwrap();
-
-    (inserted, skipped, rows_total)
+/// Seed a source store, export it with the real CLI, and open a fresh
+/// destination. Returns the seeded rows, the export path, and the destination.
+fn export_from_seeded_source(
+    src_dir: &tempfile::TempDir,
+    src_path: &Path,
+) -> Vec<(String, Vec<u8>, i64, Option<String>)> {
+    let db = Database::open(src_path).unwrap();
+    let seeded = seed_source_with_path(&db, src_path);
+    assert_eq!(seeded.len(), 6);
+    let export_path = src_dir.path().join("export.jsonl");
+    let lines = cli_export(src_path, &export_path);
+    assert_eq!(lines.len(), 7, "1 header + 6 data rows");
+    seeded
 }
 
 // ── Acceptance tests ──
@@ -337,33 +259,29 @@ fn import_from_jsonl(db_path: &Path, jsonl_path: &Path) -> (usize, usize, usize)
 #[test]
 fn test_roundtrip_embedding_blob_byte_identical() {
     let (src_dir, src_path) = create_test_db();
-    let src = Database::open(&src_path).unwrap();
-    let seeded = seed_source_with_path(&src, &src_path);
-    assert_eq!(seeded.len(), 6);
-
-    let source_blobs: Vec<(String, Vec<u8>)> = seeded
-        .iter()
-        .map(|(id, blob, _, _)| (id.clone(), blob.clone()))
-        .collect();
-
+    let seeded = export_from_seeded_source(&src_dir, &src_path);
     let export_path = src_dir.path().join("export.jsonl");
-    let rows_written = export_to_jsonl(&src_path, &export_path);
-    assert_eq!(rows_written, 6);
+
+    // The header the real writer produced is the thing that used to break the
+    // round trip: `format_version`, never the legacy `version`.
+    let header: serde_json::Value = serde_json::from_str(&lines_of(&export_path)[0]).unwrap();
+    assert_eq!(header["type"], "export");
+    assert_eq!(
+        header["format_version"], 1,
+        "export writes format_version; import must accept it (#229)"
+    );
+    assert_eq!(header["rows"], 6);
 
     let (_dst_dir, dst_path) = create_test_db();
-    {
-        let _dst = Database::open(&dst_path).unwrap();
-    }
-    let (inserted, skipped, rows_total) = import_from_jsonl(&dst_path, &export_path);
-    assert_eq!(inserted, 6);
+    let (inserted, skipped) = cli_import(&dst_path, &export_path);
+    assert_eq!(inserted, 6, "every exported row must import");
     assert_eq!(skipped, 0);
-    assert_eq!(rows_total, 6);
 
-    for (id, src_blob) in &source_blobs {
+    for (id, src_blob, _, _) in &seeded {
         let dst_blob =
             raw_embedding_blob(&dst_path, id).expect("row must exist in destination after import");
         assert_eq!(
-            src_blob, &dst_blob,
+            *src_blob, dst_blob,
             "embedding BLOB must be byte-identical for id {}",
             id
         );
@@ -378,17 +296,11 @@ fn test_roundtrip_embedding_blob_byte_identical() {
 #[test]
 fn test_roundtrip_retrieval_telemetry_verbatim() {
     let (src_dir, src_path) = create_test_db();
-    let src = Database::open(&src_path).unwrap();
-    let seeded = seed_source_with_path(&src, &src_path);
-
+    let seeded = export_from_seeded_source(&src_dir, &src_path);
     let export_path = src_dir.path().join("export.jsonl");
-    export_to_jsonl(&src_path, &export_path);
 
     let (_dst_dir, dst_path) = create_test_db();
-    {
-        let _dst = Database::open(&dst_path).unwrap();
-    }
-    import_from_jsonl(&dst_path, &export_path);
+    cli_import(&dst_path, &export_path);
 
     for (id, _blob, rc, lr) in &seeded {
         let (dst_rc, dst_lr) = fetch_telemetry(&dst_path, id);
@@ -405,21 +317,11 @@ fn test_roundtrip_retrieval_telemetry_verbatim() {
 #[test]
 fn test_import_rerun_skips_existing_and_counts() {
     let (src_dir, src_path) = create_test_db();
-    {
-        let src = Database::open(&src_path).unwrap();
-        seed_source_with_path(&src, &src_path);
-    }
-
+    export_from_seeded_source(&src_dir, &src_path);
     let export_path = src_dir.path().join("export.jsonl");
-    export_to_jsonl(&src_path, &export_path);
 
     let (_dst_dir, dst_path) = create_test_db();
-    {
-        let _dst = Database::open(&dst_path).unwrap();
-    }
-
-    let (ins1, sk1, tot1) = import_from_jsonl(&dst_path, &export_path);
-    assert_eq!((ins1, sk1, tot1), (6, 0, 6));
+    assert_eq!(cli_import(&dst_path, &export_path), (6, 0));
 
     let probe_id: String = {
         let conn = Connection::open(&dst_path).unwrap();
@@ -428,11 +330,10 @@ fn test_import_rerun_skips_existing_and_counts() {
     };
     let (rc_before, lr_before) = fetch_telemetry(&dst_path, &probe_id);
 
-    let (ins2, sk2, tot2) = import_from_jsonl(&dst_path, &export_path);
-    assert_eq!((ins2, sk2, tot2), (0, 6, 6));
+    assert_eq!(cli_import(&dst_path, &export_path), (0, 6));
 
     let (rc_after, lr_after) = fetch_telemetry(&dst_path, &probe_id);
-    assert_eq!(rc_before, rc_after);
+    assert_eq!(rc_before, rc_after, "re-import must not touch counters");
     assert_eq!(lr_before, lr_after);
 
     assert_eq!(count_rows(&dst_path), 6);
@@ -441,44 +342,42 @@ fn test_import_rerun_skips_existing_and_counts() {
 #[test]
 fn test_header_line_not_counted_and_lf_endings() {
     let (src_dir, src_path) = create_test_db();
-    {
-        let src = Database::open(&src_path).unwrap();
-        seed_source_with_path(&src, &src_path);
-    }
-
+    export_from_seeded_source(&src_dir, &src_path);
     let export_path = src_dir.path().join("export.jsonl");
-    export_to_jsonl(&src_path, &export_path);
 
     let raw = fs::read_to_string(&export_path).unwrap();
     assert!(
         !raw.contains("\r\n"),
         "export must use LF line endings, not CRLF"
     );
-
-    let line_count = raw.lines().count();
     assert_eq!(
-        line_count, 7,
-        "expected 1 header + 6 data rows = 7 lines, got {}",
-        line_count
+        raw.lines().count(),
+        7,
+        "expected 1 header + 6 data rows = 7 lines"
     );
 
     let (_dst_dir, dst_path) = create_test_db();
-    {
-        let _dst = Database::open(&dst_path).unwrap();
-    }
-    let (_ins, _sk, rows_total) = import_from_jsonl(&dst_path, &export_path);
+    let (inserted, skipped) = cli_import(&dst_path, &export_path);
     assert_eq!(
-        rows_total, 6,
-        "header line must not be counted as a data row"
+        (inserted, skipped),
+        (6, 0),
+        "header line must not be imported as a data row"
     );
 }
+
+// ── Export-side-only contracts ──
+//
+// The real importer refuses empty and wrong-dimension BLOBs all-or-nothing,
+// so these two shapes are pinned on the export side only. Their import-side
+// counterparts live in `src/commands/import_tests.rs`
+// (`test_import_empty_embedding_aborts`, `test_import_wrong_dimension_embedding_aborts`).
 
 #[test]
 fn test_export_passes_through_corrupt_blob_without_decoding() {
     let (src_dir, src_path) = create_test_db();
     {
-        let src = Database::open(&src_path).unwrap();
-        seed_source_with_path(&src, &src_path);
+        let db = Database::open(&src_path).unwrap();
+        seed_source_with_path(&db, &src_path);
     }
 
     let corrupt_blob = vec![0xABu8; 1535];
@@ -493,35 +392,25 @@ fn test_export_passes_through_corrupt_blob_without_decoding() {
     }
 
     let export_path = src_dir.path().join("export.jsonl");
-    let rows_written = export_to_jsonl(&src_path, &export_path);
-    assert_eq!(rows_written, 7, "corrupt row must be included in export");
+    let lines = cli_export(&src_path, &export_path);
+    assert_eq!(lines.len(), 8, "corrupt row must be included in export");
 
-    let raw = fs::read_to_string(&export_path).unwrap();
-    let lines: Vec<&str> = raw.lines().collect();
     let corrupt_line = lines
         .iter()
-        .find(|l| l.contains(&format!("\"id\":\"{}\"", corrupt_id)))
+        .find(|l| l.contains(&format!("\"id\":\"{corrupt_id}\"")))
         .expect("corrupt row must be present in export");
     let v: serde_json::Value = serde_json::from_str(corrupt_line).unwrap();
-    let emb_b64 = v["embedding"].as_str().unwrap().to_string();
-    let decoded = base64_decode(&emb_b64);
-    assert_eq!(
-        decoded.len(),
-        1535,
-        "corrupt blob must round-trip its exact byte length"
-    );
-    assert_eq!(
-        decoded, corrupt_blob,
-        "corrupt blob bytes must be preserved faithfully"
-    );
+    let decoded = base64_decode(v["embedding"].as_str().unwrap());
+    assert_eq!(decoded.len(), 1535, "byte length must survive verbatim");
+    assert_eq!(decoded, corrupt_blob, "corrupt bytes must be preserved");
 }
 
 #[test]
 fn test_export_null_blob_exports_as_empty_string() {
     let (src_dir, src_path) = create_test_db();
     {
-        let src = Database::open(&src_path).unwrap();
-        seed_source_with_path(&src, &src_path);
+        let db = Database::open(&src_path).unwrap();
+        seed_source_with_path(&db, &src_path);
     }
 
     let null_id = uuid::Uuid::new_v4().to_string();
@@ -536,14 +425,12 @@ fn test_export_null_blob_exports_as_empty_string() {
     }
 
     let export_path = src_dir.path().join("export.jsonl");
-    let rows_written = export_to_jsonl(&src_path, &export_path);
-    assert_eq!(rows_written, 7);
+    let lines = cli_export(&src_path, &export_path);
+    assert_eq!(lines.len(), 8);
 
-    let raw = fs::read_to_string(&export_path).unwrap();
-    let lines: Vec<&str> = raw.lines().collect();
     let null_line = lines
         .iter()
-        .find(|l| l.contains(&format!("\"id\":\"{}\"", null_id)))
+        .find(|l| l.contains(&format!("\"id\":\"{null_id}\"")))
         .expect("null-blob row must be present");
     let v: serde_json::Value = serde_json::from_str(null_line).unwrap();
     assert_eq!(
@@ -556,17 +443,11 @@ fn test_export_null_blob_exports_as_empty_string() {
 #[test]
 fn test_export_row_uses_memory_type_not_type() {
     let (src_dir, src_path) = create_test_db();
-    {
-        let src = Database::open(&src_path).unwrap();
-        seed_source_with_path(&src, &src_path);
-    }
-
+    export_from_seeded_source(&src_dir, &src_path);
     let export_path = src_dir.path().join("export.jsonl");
-    export_to_jsonl(&src_path, &export_path);
 
-    let raw = fs::read_to_string(&export_path).unwrap();
-    let lines: Vec<&str> = raw.lines().collect();
-    let first_data_line = lines[1];
+    let lines = lines_of(&export_path);
+    let first_data_line = &lines[1];
     assert!(
         first_data_line.contains("\"memory_type\":"),
         "row line must use memory_type"
@@ -575,4 +456,13 @@ fn test_export_row_uses_memory_type_not_type() {
         !first_data_line.contains("\"type\":"),
         "row line must NOT contain a bare \"type\" key"
     );
+}
+
+/// Read a JSONL file back as owned lines.
+fn lines_of(path: &Path) -> Vec<String> {
+    fs::read_to_string(path)
+        .expect("jsonl file")
+        .lines()
+        .map(str::to_string)
+        .collect()
 }

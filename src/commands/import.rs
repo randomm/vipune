@@ -21,8 +21,10 @@
 //!   the default bge identity, so legacy exports still import into default
 //!   stores.
 //!
-//! JSONL schema — header line:
-//!   `{"type":"export","version":1,"embedding_dims":384,"model_id":...,"model_revision":...,"exported_at":...,"rows":N}`
+//! JSONL schema — header line (issue #229: the version key is
+//! `format_version`, which is what `vipune export` writes; the legacy
+//! spelling `version` is still accepted for pre-#217 files):
+//!   `{"type":"export","format_version":1,"embedding_dims":384,"model_id":...,"model_revision":...,"exported_at":...,"rows":N}`
 //! Row line (12 fields; DB column `type` is named `memory_type`):
 //!   `id`, `project_id`, `content`, `metadata` (nullable), `embedding`
 //!   (base64 of the exact stored BLOB), `created_at`, `updated_at`,
@@ -151,9 +153,16 @@ impl HeaderIdentity {
     }
 }
 
-/// Validate the header line: must be JSON with `type: "export"`, a version,
-/// and a `rows` count. Returns the declared row count and the header's model
-/// identity (None fields = identity absent, i.e. a legacy export).
+/// Validate the header line: must be JSON with `type: "export"`, a version
+/// key, and a `rows` count. Returns the declared row count and the header's
+/// model identity (None fields = identity absent, i.e. a legacy export).
+///
+/// The version key is `format_version` — the spelling `vipune export` writes
+/// (issue #229: import used to require the legacy `version` alone, so an
+/// export could not be re-imported). `version` remains accepted as the legacy
+/// alias so backups from v0.10.0–v0.15.0 and pre-#217 files keep importing.
+/// Neither value is compared against `EXPORT_FORMAT_VERSION`: the check is
+/// presence-only, so a future v2 header still parses.
 fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
     let line = line.trim_end_matches('\r');
     let value: serde_json::Value = serde_json::from_str(line)
@@ -167,9 +176,12 @@ fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
             "line 1: not an export file (missing type=export)".to_string(),
         ));
     }
-    if obj.get("version").is_none() {
+    // Presence-only, and BOTH spellings count: `format_version` is what
+    // `write_jsonl` emits, `version` is the legacy alias kept for backups
+    // written before the two diverged (issue #229).
+    if obj.get("format_version").is_none() && obj.get("version").is_none() {
         return Err(Error::InvalidInput(
-            "line 1: header missing version".to_string(),
+            r#"line 1: header missing format_version (or the legacy alias "version")"#.to_string(),
         ));
     }
     let rows = obj
