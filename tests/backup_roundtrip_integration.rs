@@ -27,6 +27,18 @@
 //! a self-contained fake embedder (no ONNX model, no `test_fake_embedder`),
 //! and BLOB-level assertions go through the dev-dependency `rusqlite`
 //! connection because `Database::conn()` is `pub(crate)`.
+//!
+//! # Division of labour with `src/commands/import_export_roundtrip_tests.rs`
+//!
+//! Deliberate layer split, not duplication. This file owns the process-level
+//! contracts around the real binary: exit code, `Exported` stdout, the
+//! `--json` response shape, LF line endings, and the export-side-only
+//! corrupt/NULL BLOB shapes. The in-crate file owns the column-level
+//! contracts (BLOB byte-identity against the seeded fixture, telemetry
+//! verbatim across all 12 columns, re-import skip-and-preserve) by calling
+//! `handle_export` / `run_import` directly. Both touch the same production
+//! path because the CLI layer is a thin wrapper over it — a schema change is
+//! expected to be edited in the in-crate file only.
 
 use std::fs;
 use std::path::Path;
@@ -136,12 +148,13 @@ fn count_rows(db_path: &Path) -> usize {
     .unwrap() as usize
 }
 
-/// Seed six rows across two projects with full 1536-byte BLOBs and explicit
-/// retrieval telemetry. Returns `(id, blob, retrieval_count, last_retrieved_at)`.
-fn seed_source_with_path(
-    db: &Database,
-    db_path: &Path,
-) -> Vec<(String, Vec<u8>, i64, Option<String>)> {
+/// A seeded source row: `(id, raw embedding BLOB, retrieval_count,
+/// last_retrieved_at)` — the four fields the round-trip assertions compare.
+type Seeded = (String, Vec<u8>, i64, Option<String>);
+
+/// Seed six rows across two projects with full-width BLOBs and explicit
+/// retrieval telemetry.
+fn seed_source_with_path(db: &Database, db_path: &Path) -> Vec<Seeded> {
     let mut seeded = Vec::new();
     let rows: [(&str, &str, i64, Option<&str>); 6] = [
         ("proj-a", "row a1", 0, None),
@@ -196,7 +209,12 @@ fn vipune_bin() -> std::path::PathBuf {
 /// Both `export` and `import` print informational warnings on stderr even on
 /// success (`--project ... is ignored`), so assertions belong on the exit
 /// code and stdout, never on an empty stderr.
-fn run_vipune(db_path: &Path, args: &[&str]) -> (i32, String, String) {
+///
+/// The raw wait status is carried alongside the code because
+/// `ExitStatus::code()` is `None` for a signal-kill: collapsing those to a
+/// sentinel like `-1` makes a SIGSEGV/SIGKILL/OOM indistinguishable from a
+/// clean non-zero exit that printed nothing.
+fn run_vipune(db_path: &Path, args: &[&str]) -> CliRun {
     let mut cmd = Command::new(vipune_bin());
     cmd.arg("--db-path")
         .arg(db_path)
@@ -205,23 +223,54 @@ fn run_vipune(db_path: &Path, args: &[&str]) -> (i32, String, String) {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let output = cmd.output().expect("spawn vipune");
-    (
-        output.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    )
+    CliRun {
+        status: format!("{:?}", output.status),
+        code: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// One captured `vipune` invocation.
+struct CliRun {
+    /// Rendered wait status (`exit status: N` or `signal: N (SIG..)`), so a
+    /// signal-kill names itself in failure messages.
+    status: String,
+    /// Exit code, or `None` when the child was killed by a signal.
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+impl CliRun {
+    /// Everything a failed invocation needs to be diagnosed from CI logs.
+    fn detail(&self) -> String {
+        format!(
+            "status: {}\nstdout: {:?}\nstderr: {:?}",
+            self.status, self.stdout, self.stderr
+        )
+    }
 }
 
 /// Run the real `vipune export` and return the JSONL lines.
 fn cli_export(db_path: &Path, out_path: &Path) -> Vec<String> {
     let out_arg = out_path.to_str().expect("utf-8 out path");
-    let (code, stdout, stderr) = run_vipune(db_path, &["export", out_arg]);
-    assert_eq!(code, 0, "vipune export failed: {stderr}");
-    let text = fs::read_to_string(out_path).expect("export file must exist");
+    let run = run_vipune(db_path, &["export", out_arg]);
+    assert_eq!(run.code, Some(0), "vipune export failed:\n{}", run.detail());
     assert!(
-        stdout.contains("Exported"),
-        "export must report the row count on stdout: {stdout}"
+        run.stdout.contains("Exported"),
+        "export must report the row count on stdout: {:?}",
+        run.stdout
     );
+    // Asserted BEFORE the read: an export that produced no file at all must
+    // fail naming the path, the OS error, and what the child actually said.
+    let text = fs::read_to_string(out_path).unwrap_or_else(|e| {
+        panic!(
+            "export file {} missing ({e});\n{}",
+            out_path.display(),
+            run.detail()
+        )
+    });
     text.lines().map(str::to_string).collect()
 }
 
@@ -229,29 +278,51 @@ fn cli_export(db_path: &Path, out_path: &Path) -> Vec<String> {
 /// parsed from the machine-readable response.
 fn cli_import(db_path: &Path, jsonl_path: &Path) -> (usize, usize) {
     let src_arg = jsonl_path.to_str().expect("utf-8 source path");
-    let (code, stdout, stderr) = run_vipune(db_path, &["import", src_arg, "--json"]);
-    assert_eq!(code, 0, "vipune import failed: {stderr}");
-    let value: serde_json::Value =
-        serde_json::from_str(stdout.trim()).expect("import --json must print one JSON object");
+    let run = run_vipune(db_path, &["import", src_arg, "--json"]);
+    assert_eq!(run.code, Some(0), "vipune import failed:\n{}", run.detail());
+    // The whole stdout is carried in the panic: field-name drift between the
+    // writer and the reader is the #229 failure class, and a bare serde
+    // message with no offending bytes cannot be diagnosed from CI logs.
+    let value: serde_json::Value = serde_json::from_str(run.stdout.trim()).unwrap_or_else(|e| {
+        panic!(
+            "import --json must print one JSON object ({e}); stdout: {:?}",
+            run.stdout
+        )
+    });
     (
-        value["inserted"].as_u64().expect("inserted count") as usize,
-        value["skipped"].as_u64().expect("skipped count") as usize,
+        value["inserted"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("import --json response missing `inserted`: {value}"))
+            as usize,
+        value["skipped"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("import --json response missing `skipped`: {value}"))
+            as usize,
     )
 }
 
-/// Seed a source store, export it with the real CLI, and open a fresh
-/// destination. Returns the seeded rows, the export path, and the destination.
+/// Where `export_from_seeded_source` writes the export for a given source
+/// store — defined once so no caller re-spells the file name.
+fn export_path_of(src_dir: &tempfile::TempDir) -> std::path::PathBuf {
+    src_dir.path().join("export.jsonl")
+}
+
+/// Seed a source store and export it with the real CLI.
+///
+/// Returns the seeded rows — `(id, blob, retrieval_count, last_retrieved_at)`
+/// — and the path the export was actually written to, so callers read the
+/// same file the helper produced instead of re-deriving its name.
 fn export_from_seeded_source(
     src_dir: &tempfile::TempDir,
     src_path: &Path,
-) -> Vec<(String, Vec<u8>, i64, Option<String>)> {
+) -> (Vec<Seeded>, std::path::PathBuf) {
     let db = Database::open(src_path).unwrap();
     let seeded = seed_source_with_path(&db, src_path);
     assert_eq!(seeded.len(), 6);
-    let export_path = src_dir.path().join("export.jsonl");
+    let export_path = export_path_of(src_dir);
     let lines = cli_export(src_path, &export_path);
     assert_eq!(lines.len(), 7, "1 header + 6 data rows");
-    seeded
+    (seeded, export_path)
 }
 
 // ── Acceptance tests ──
@@ -259,12 +330,17 @@ fn export_from_seeded_source(
 #[test]
 fn test_roundtrip_embedding_blob_byte_identical() {
     let (src_dir, src_path) = create_test_db();
-    let seeded = export_from_seeded_source(&src_dir, &src_path);
-    let export_path = src_dir.path().join("export.jsonl");
+    let (seeded, export_path) = export_from_seeded_source(&src_dir, &src_path);
 
     // The header the real writer produced is the thing that used to break the
     // round trip: `format_version`, never the legacy `version`.
-    let header: serde_json::Value = serde_json::from_str(&lines_of(&export_path)[0]).unwrap();
+    let header_line = first_line(&export_path);
+    let header: serde_json::Value = serde_json::from_str(&header_line).unwrap_or_else(|e| {
+        panic!(
+            "{} header is not JSON ({e}): {header_line}",
+            export_path.display()
+        )
+    });
     assert_eq!(header["type"], "export");
     assert_eq!(
         header["format_version"], 1,
@@ -296,8 +372,7 @@ fn test_roundtrip_embedding_blob_byte_identical() {
 #[test]
 fn test_roundtrip_retrieval_telemetry_verbatim() {
     let (src_dir, src_path) = create_test_db();
-    let seeded = export_from_seeded_source(&src_dir, &src_path);
-    let export_path = src_dir.path().join("export.jsonl");
+    let (seeded, export_path) = export_from_seeded_source(&src_dir, &src_path);
 
     let (_dst_dir, dst_path) = create_test_db();
     cli_import(&dst_path, &export_path);
@@ -317,8 +392,7 @@ fn test_roundtrip_retrieval_telemetry_verbatim() {
 #[test]
 fn test_import_rerun_skips_existing_and_counts() {
     let (src_dir, src_path) = create_test_db();
-    export_from_seeded_source(&src_dir, &src_path);
-    let export_path = src_dir.path().join("export.jsonl");
+    let (_, export_path) = export_from_seeded_source(&src_dir, &src_path);
 
     let (_dst_dir, dst_path) = create_test_db();
     assert_eq!(cli_import(&dst_path, &export_path), (6, 0));
@@ -342,8 +416,7 @@ fn test_import_rerun_skips_existing_and_counts() {
 #[test]
 fn test_header_line_not_counted_and_lf_endings() {
     let (src_dir, src_path) = create_test_db();
-    export_from_seeded_source(&src_dir, &src_path);
-    let export_path = src_dir.path().join("export.jsonl");
+    let (_, export_path) = export_from_seeded_source(&src_dir, &src_path);
 
     let raw = fs::read_to_string(&export_path).unwrap();
     assert!(
@@ -443,8 +516,7 @@ fn test_export_null_blob_exports_as_empty_string() {
 #[test]
 fn test_export_row_uses_memory_type_not_type() {
     let (src_dir, src_path) = create_test_db();
-    export_from_seeded_source(&src_dir, &src_path);
-    let export_path = src_dir.path().join("export.jsonl");
+    let (_, export_path) = export_from_seeded_source(&src_dir, &src_path);
 
     let lines = lines_of(&export_path);
     let first_data_line = &lines[1];
@@ -461,8 +533,22 @@ fn test_export_row_uses_memory_type_not_type() {
 /// Read a JSONL file back as owned lines.
 fn lines_of(path: &Path) -> Vec<String> {
     fs::read_to_string(path)
-        .expect("jsonl file")
+        .unwrap_or_else(|e| panic!("cannot read jsonl {} ({e})", path.display()))
         .lines()
         .map(str::to_string)
         .collect()
+}
+
+/// Read the first (header) line of a JSONL file.
+///
+/// Every failure names the file and carries the offending content: this is
+/// the one artifact whose shape caused issue #229, so a bare serde/panic
+/// message that discards it would hide the very thing under test.
+fn first_line(path: &Path) -> String {
+    let text =
+        fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {} ({e})", path.display()));
+    text.lines()
+        .next()
+        .map(str::to_string)
+        .unwrap_or_else(|| panic!("{} is empty", path.display()))
 }

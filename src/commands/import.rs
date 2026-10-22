@@ -43,6 +43,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use super::ImportResponse;
+use super::export::{EXPORT_FORMAT_VERSION, ExportHeader};
 
 use crate::embedding::EMBEDDING_DIMS;
 
@@ -153,50 +154,66 @@ impl HeaderIdentity {
     }
 }
 
-/// Validate the header line: must be JSON with `type: "export"`, a version
-/// key, and a `rows` count. Returns the declared row count and the header's
-/// model identity (None fields = identity absent, i.e. a legacy export).
+/// Validate the header line against the writer's own [`ExportHeader`] schema
+/// (the shared type is what keeps the two sides from disagreeing on a key
+/// name — the root cause of issue #229). Returns the declared row count and
+/// the header's model identity (None fields = identity absent, i.e. a legacy
+/// export).
 ///
-/// The version key is `format_version` — the spelling `vipune export` writes
-/// (issue #229: import used to require the legacy `version` alone, so an
-/// export could not be re-imported). `version` remains accepted as the legacy
-/// alias so backups from v0.10.0–v0.15.0 and pre-#217 files keep importing.
-/// Neither value is compared against `EXPORT_FORMAT_VERSION`: the check is
-/// presence-only, so a future v2 header still parses.
+/// Two version rules, both inherited from #229's compatibility contract:
+///
+/// - PRESENCE (hard requirement): the header must carry the version key under
+///   `format_version` (what `write_jsonl` emits) or the legacy alias
+///   `version`, so backups from v0.10.0–v0.15.0 and pre-#217 files keep
+///   importing. A key present with an explicit JSON `null` counts — it is the
+///   shape those old files carry, and rejecting it would recreate the very
+///   bug #229 fixed. This is deliberate presence-not-shape semantics, not an
+///   omission.
+/// - FORWARD COMPAT (deliberate decision, not an omission): a *numeric*
+///   version above [`EXPORT_FORMAT_VERSION`] is refused. The version is not
+///   decorative — accepting a future row schema under this build's parser
+///   would either fail later with a generic `missing field` error or, worse,
+///   import rows whose fields were interpreted under the wrong schema.
+///
+/// A header carrying BOTH spellings at once is refused as a duplicate field:
+/// no released writer ever emitted two version keys, so that file is
+/// hand-edited and ambiguous about which schema it declares — refusing it is
+/// safer than picking one spelling silently.
 fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
     let line = line.trim_end_matches('\r');
     let value: serde_json::Value = serde_json::from_str(line)
         .map_err(|e| Error::InvalidInput(format!("line 1: malformed header JSON: {}", e)))?;
-    let obj = value
-        .as_object()
-        .ok_or_else(|| Error::InvalidInput("line 1: header must be a JSON object".to_string()))?;
+    if !value.is_object() {
+        return Err(Error::InvalidInput(
+            "line 1: header must be a JSON object".to_string(),
+        ));
+    }
+    let header: ExportHeader = serde_json::from_value(value)
+        .map_err(|e| Error::InvalidInput(format!("line 1: malformed header JSON: {}", e)))?;
 
-    if obj.get("type").and_then(|v| v.as_str()) != Some("export") {
+    if header.kind.as_deref() != Some("export") {
         return Err(Error::InvalidInput(
             "line 1: not an export file (missing type=export)".to_string(),
         ));
     }
-    // Presence-only, and BOTH spellings count: `format_version` is what
-    // `write_jsonl` emits, `version` is the legacy alias kept for backups
-    // written before the two diverged (issue #229).
-    if obj.get("format_version").is_none() && obj.get("version").is_none() {
+    if !header.has_version_key() {
         return Err(Error::InvalidInput(
             r#"line 1: header missing format_version (or the legacy alias "version")"#.to_string(),
         ));
     }
-    let rows = obj
-        .get("rows")
-        .and_then(|v| v.as_u64())
+    if let Some(declared) = header.declared_version() {
+        if declared > u64::from(EXPORT_FORMAT_VERSION) {
+            return Err(Error::InvalidInput(format!(
+                "line 1: unsupported export format version {declared}; this build supports <= {EXPORT_FORMAT_VERSION}"
+            )));
+        }
+    }
+    let rows = header
+        .rows
         .ok_or_else(|| Error::InvalidInput("line 1: header missing rows".to_string()))?;
     let identity = HeaderIdentity {
-        model_id: obj
-            .get("model_id")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        model_revision: obj
-            .get("model_revision")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
+        model_id: header.model_id,
+        model_revision: header.model_revision,
     };
     Ok((rows as usize, identity))
 }

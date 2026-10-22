@@ -79,10 +79,12 @@ fn make_row_json(
     s
 }
 
-/// Header fixture using the LEGACY `version` key — the legacy alias of
-/// `format_version` (issue #229), which is the key `vipune export` actually
-/// writes. Unrelated to the pre-#217 legacy tests, which omit the identity
-/// keys.
+/// Header fixture using the LEGACY `version` key.
+///
+/// `vipune export` writes `format_version`; `version` is accepted only as the
+/// legacy alias (issue #229), so this fixture exercises that alias path
+/// rather than the key the writer emits. Unrelated to the pre-#217 legacy
+/// tests, which omit the identity keys.
 fn header(rows: usize) -> String {
     format!(
         r#"{{"type":"export","version":1,"embedding_dims":384,"exported_at":"2024-01-01T00:00:00Z","rows":{}}}"#,

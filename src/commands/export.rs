@@ -9,7 +9,10 @@
 //!
 //! # JSONL schema
 //!
-//! Header line (not counted as a data row):
+//! The header line is the typed [`ExportHeader`] below — the same type the
+//! import reader deserialises, so the two sides cannot drift on a key name
+//! (issue #229). The header is not counted as a data row; its field set,
+//! spelled out:
 //! `{"type":"export","format_version":1,"embedding_dims":384,"model_id":...,
 //! "model_revision":...,"exported_at":<RFC3339>,"rows":<N>}`
 //!
@@ -37,12 +40,99 @@ use crate::errors::Error;
 use crate::sqlite::Database;
 use crate::sqlite::export_scan::ExportRow;
 use crate::sqlite::identity;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
 /// Format version of the JSONL export, written in the header line.
 pub const EXPORT_FORMAT_VERSION: u32 = 1;
+
+/// Deserialize a field that merely has to be PRESENT, including an explicit
+/// JSON `null`.
+///
+/// Serde's `Option` handling maps `null` to `None`, which would erase the
+/// key-presence distinction the import reader depends on (issue #229's
+/// compatibility contract — see [`ExportHeader::has_version_key`]). Called
+/// only when the key exists; an absent key falls to `#[serde(default)]`.
+fn any_present<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
+/// The JSONL header line — the ONE schema both the writer (`write_jsonl`) and
+/// the reader (`commands::import::validate_header`) go through.
+///
+/// Issue #229 was precisely this contract drifting: the writer spelled the
+/// version key `format_version` inside its own `json!` literal while the
+/// reader hand-looked-up `"version"`, so from v0.10.0 to v0.15.0 every export
+/// aborted on its own file. Key names now exist in exactly one place, and the
+/// legacy spelling is declared with `alias` rather than a hand-rolled
+/// dual-key check.
+///
+/// Field types are deliberately tolerant: the reader validates a file it did
+/// not write, and pre-#217 backups carry no identity keys while hand-edited
+/// headers carry explicit nulls — all of which must keep importing. Only
+/// `format_version` is a bare [`Value`] rather than `u32`, because the
+/// reader's contract for that key is PRESENCE (see
+/// [`ExportHeader::has_version_key`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportHeader {
+    /// Discriminator, always `"export"`. JSON key `type`; the Rust field is
+    /// `kind` because `type` is a keyword. The row-level `type` column is
+    /// renamed `memory_type` so the two never collide.
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    /// JSONL format version. Serialises as `format_version` (what
+    /// `write_jsonl` emits); the legacy spelling `version` deserialises into
+    /// this same field (issue #229).
+    ///
+    /// `Value` rather than `u32`, and read through [`any_present`], because the
+    /// reader's contract for this key is PRESENCE: an explicit JSON `null`
+    /// must count as present (a plain `Option<u32>`/`Option<Value>` field
+    /// would fold `null` into `None` and reject the backups that carry it).
+    #[serde(alias = "version", default, deserialize_with = "any_present")]
+    pub format_version: Option<Value>,
+    /// Embedding dimensions the exported BLOBs were written for.
+    #[serde(default)]
+    pub embedding_dims: Option<u32>,
+    /// Model id the source store recorded, or `None` on a pre-#217 export.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// Model revision the source store recorded, or `None` on a pre-#217 export.
+    #[serde(default)]
+    pub model_revision: Option<String>,
+    /// RFC3339 timestamp of the export run.
+    #[serde(default)]
+    pub exported_at: Option<String>,
+    /// Data-row count declared by the writer (the header line is not counted).
+    #[serde(default)]
+    pub rows: Option<u64>,
+}
+
+impl ExportHeader {
+    /// Whether the header carries the version key under EITHER spelling.
+    ///
+    /// A key present with an explicit JSON `null` counts as present — that is
+    /// the reader's presence-only contract for backups written by releases
+    /// whose header it did not author (issue #229), and the reason
+    /// [`Self::format_version`] is an `Option<Value>` rather than an
+    /// `Option<u32>`.
+    pub fn has_version_key(&self) -> bool {
+        self.format_version.is_some()
+    }
+
+    /// The declared version as a number, when the header spells it numerically.
+    /// `None` for an absent, null, or non-numeric value — the latter still
+    /// satisfies [`Self::has_version_key`], so the reader's presence check and
+    /// its forward-compat check stay independent.
+    pub fn declared_version(&self) -> Option<u64> {
+        self.format_version.as_ref().and_then(Value::as_u64)
+    }
+}
 
 use crate::embedding::EMBEDDING_DIMS;
 
@@ -236,15 +326,15 @@ pub fn write_jsonl<W: Write>(
     model_id: &str,
     model_revision: &str,
 ) -> std::result::Result<usize, Error> {
-    let header = serde_json::json!({
-        "type": "export",
-        "format_version": EXPORT_FORMAT_VERSION,
-        "embedding_dims": EMBEDDING_DIMS,
-        "model_id": model_id,
-        "model_revision": model_revision,
-        "exported_at": exported_at,
-        "rows": rows.len(),
-    });
+    let header = ExportHeader {
+        kind: Some("export".to_string()),
+        format_version: Some(Value::from(EXPORT_FORMAT_VERSION)),
+        embedding_dims: Some(EMBEDDING_DIMS as u32),
+        model_id: Some(model_id.to_string()),
+        model_revision: Some(model_revision.to_string()),
+        exported_at: Some(exported_at.to_string()),
+        rows: Some(rows.len() as u64),
+    };
     writeln!(
         out,
         "{}",
