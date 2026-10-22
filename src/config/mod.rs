@@ -6,8 +6,11 @@ mod overrides;
 mod paths;
 mod validation;
 
+// `pub(crate)` (not private) so env-mutating tests outside `config` — e.g. the
+// promote apply-path tests in `commands::promote_tests` — share this one guard
+// instead of declaring a second mutex over the same `VIPUNE_*` env vars.
 #[cfg(test)]
-mod tests_utils;
+pub(crate) mod tests_utils;
 #[cfg(test)]
 use tests_utils::{ENV_MUTEX, cleanup_env_vars};
 
@@ -203,7 +206,9 @@ mod tests {
 
     #[test]
     fn test_config_load_without_file() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cleanup_env_vars(&[
             "VIPUNE_DATABASE_PATH",
             "VIPUNE_EMBEDDING_MODEL",
@@ -220,7 +225,9 @@ mod tests {
 
     #[test]
     fn test_config_file_overrides_defaults() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cleanup_env_vars(&[
             "VIPUNE_DATABASE_PATH",
             "VIPUNE_EMBEDDING_MODEL",

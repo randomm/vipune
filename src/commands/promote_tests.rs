@@ -10,13 +10,48 @@ use crate::commands::promote::{
     PROMOTION_THRESHOLD_DEFAULT, PROMOTION_THRESHOLD_ENV, fetch_candidates, handle_promote,
     resolve_promotion_threshold, run_promotion, should_promote,
 };
+use crate::config::tests_utils::{ENV_MUTEX, cleanup_env_vars};
 use crate::memory::crud::test_fake_embedder;
 use crate::sqlite::Database;
 
-/// Serialises the env-mutating promotion tests so the shared process
-/// environment (`VIPUNE_PROMOTION_THRESHOLD`) is not raced across test
-/// threads (cargo runs tests in parallel threads that share one process env).
-static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// RAII guard around the one env mutex the whole binary test target shares
+/// (`config::tests_utils::ENV_MUTEX`, the same instance the `config::overrides`
+/// lifecycle-knob tests lock). libtest runs every test in this target on
+/// threads of one process, so `VIPUNE_PROMOTION_THRESHOLD` is shared state and
+/// each reader/writer has to serialise on the *same* guard — a file-local mutex
+/// only serialises within this module.
+///
+/// The entry/exit clearing covers `VIPUNE_PROMOTION_THRESHOLD` only, the single
+/// knob this module writes; a test that touches another `VIPUNE_*` variable has
+/// to clear that one itself.
+struct EnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl EnvGuard {
+    /// Take the shared guard and clear `VIPUNE_PROMOTION_THRESHOLD` on entry,
+    /// so no test inherits a value a sibling (or the ambient CI environment)
+    /// left behind.
+    ///
+    /// Poisoning is recovered rather than propagated: a failing assertion in
+    /// one test must not make every sibling panic with `PoisonError` on top of
+    /// the real failure.
+    fn acquire() -> Self {
+        let _lock = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cleanup_env_vars(&[PROMOTION_THRESHOLD_ENV]);
+        Self { _lock }
+    }
+}
+
+impl Drop for EnvGuard {
+    /// Clear on exit as well as entry: a panicking assert skips a trailing
+    /// `remove_var`, which is how one test's threshold leaked into the next.
+    fn drop(&mut self) {
+        cleanup_env_vars(&[PROMOTION_THRESHOLD_ENV]);
+    }
+}
 
 fn create_test_db() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::TempDir::new().unwrap();
@@ -92,8 +127,7 @@ fn test_should_promote_respects_configured_threshold() {
 
 #[test]
 fn test_resolve_threshold_defaults_when_unset() {
-    let _guard = ENV_MUTEX.lock().unwrap();
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
+    let _guard = EnvGuard::acquire();
     assert_eq!(
         resolve_promotion_threshold().unwrap(),
         PROMOTION_THRESHOLD_DEFAULT
@@ -102,30 +136,27 @@ fn test_resolve_threshold_defaults_when_unset() {
 
 #[test]
 fn test_resolve_threshold_env_override() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = EnvGuard::acquire();
     unsafe { std::env::set_var(PROMOTION_THRESHOLD_ENV, "12") };
     assert_eq!(resolve_promotion_threshold().unwrap(), 12);
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
 }
 
 #[test]
 fn test_resolve_threshold_rejects_non_integer() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = EnvGuard::acquire();
     unsafe { std::env::set_var(PROMOTION_THRESHOLD_ENV, "abc") };
     let err = resolve_promotion_threshold().unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains(PROMOTION_THRESHOLD_ENV));
     assert!(msg.contains("abc"));
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
 }
 
 #[test]
 fn test_resolve_threshold_rejects_negative() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = EnvGuard::acquire();
     unsafe { std::env::set_var(PROMOTION_THRESHOLD_ENV, "-1") };
     let err = resolve_promotion_threshold().unwrap_err();
     assert!(err.to_string().contains(">= 0"));
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
 }
 
 // ─────────────────────────── fetch candidates ───────────────────────────
@@ -160,6 +191,10 @@ fn test_fetch_candidates_returns_only_candidate_rows() {
 
 #[test]
 fn test_run_promotion_promotes_eligible_only() {
+    // run_promotion reads the threshold live, so the guard is held for the
+    // whole body: a sibling that lowers VIPUNE_PROMOTION_THRESHOLD promotes
+    // both seeded rows and this test fails with `left 2, right 1`.
+    let _guard = EnvGuard::acquire();
     let (_dir, path) = create_test_db();
     let db = Database::open(path.as_path()).unwrap();
 
@@ -209,11 +244,10 @@ fn test_run_promotion_promotes_eligible_only() {
 
 #[test]
 fn test_run_promotion_zero_when_none_eligible() {
-    // Guard against env pollution from sibling tests that mutate the
-    // shared VIPUNE_PROMOTION_THRESHOLD process env var (e.g.
-    // test_run_promotion_respects_env_threshold which doesn't hold the mutex).
-    let _guard = ENV_MUTEX.lock().unwrap();
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
+    // Holds the shared guard for its whole body and clears the threshold on
+    // entry: a sibling's lowered threshold would promote the row sitting at 4
+    // retrievals and this test would see `left 1, right 0`.
+    let _guard = EnvGuard::acquire();
     let (_dir, path) = create_test_db();
     let db = Database::open(path.as_path()).unwrap();
 
@@ -230,6 +264,10 @@ fn test_run_promotion_zero_when_none_eligible() {
 
 #[test]
 fn test_run_promotion_respects_env_threshold() {
+    // The guard is taken before the db is seeded, not just around the set_var:
+    // seeding, the env write and the run_promotion read share one critical
+    // section, so no sibling can move the threshold between them.
+    let _guard = EnvGuard::acquire();
     let (_dir, path) = create_test_db();
     let db = Database::open(path.as_path()).unwrap();
 
@@ -237,10 +275,8 @@ fn test_run_promotion_respects_env_threshold() {
     let promoted_one = seed_candidate(&db, "at two", 2);
     let not_promoted = seed_candidate(&db, "at one", 1);
 
-    let _guard = ENV_MUTEX.lock().unwrap();
     unsafe { std::env::set_var(PROMOTION_THRESHOLD_ENV, "2") };
     let promoted = run_promotion(&db, "proj").unwrap();
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
 
     assert_eq!(promoted, 1);
     assert_eq!(status_of(&db, &promoted_one), "active");
@@ -249,6 +285,8 @@ fn test_run_promotion_respects_env_threshold() {
 
 #[test]
 fn test_run_promotion_is_idempotent() {
+    // Reads the threshold on both runs, so it holds the guard for the body.
+    let _guard = EnvGuard::acquire();
     let (_dir, path) = create_test_db();
     let db = Database::open(path.as_path()).unwrap();
 
@@ -269,6 +307,9 @@ fn test_run_promotion_is_idempotent() {
 
 #[test]
 fn test_handle_promote_json_and_success() {
+    // handle_promote resolves the threshold itself and again inside
+    // run_promotion, so it has two read windows that need the same guard.
+    let _guard = EnvGuard::acquire();
     let (_dir, path) = create_test_db();
     // Seed one eligible candidate so the handler has something to promote.
     {

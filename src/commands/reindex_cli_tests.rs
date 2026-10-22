@@ -20,6 +20,25 @@ use crate::memory::crud::test_fake_embedder;
 use crate::sqlite::Database;
 use crate::sqlite::identity;
 
+/// Every `VIPUNE_*` knob `Config::load()` parses. The spawned child inherits
+/// the parent's environment, so a sibling test that holds a malformed knob at
+/// spawn time would make the child's `Config::load()` fail and turn a clean
+/// pass into a non-zero exit. Each is removed from the child's environment
+/// instead of being cleared in the parent: the tests never read these knobs
+/// back (they pass `--db-path` and expect the default model), and removing
+/// them per-child mutates no process-global state at all.
+const CONFIG_ENV_VARS: &[&str] = &[
+    "VIPUNE_DATABASE_PATH",
+    "VIPUNE_EMBEDDING_MODEL",
+    "VIPUNE_SIMILARITY_THRESHOLD",
+    "VIPUNE_RECENCY_WEIGHT",
+    "VIPUNE_HYBRID",
+    "VIPUNE_DECAY_REFRESH_DAYS",
+    "VIPUNE_PROMOTION_THRESHOLD",
+    "VIPUNE_PRUNE_RETRIEVAL_LIMIT",
+    "VIPUNE_PRUNE_MIN_AGE_DAYS",
+];
+
 fn create_test_db() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("test.db");
@@ -83,6 +102,9 @@ fn capture_force_output(db_path: &std::path::Path, json: bool) -> (i32, String, 
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    for var in CONFIG_ENV_VARS {
+        cmd.env_remove(var);
+    }
 
     let output = cmd.output().expect("spawn vipune reindex --force");
     let code = output.status.code().unwrap_or(-1);
@@ -273,12 +295,16 @@ fn test_force_per_row_failure_error_shape_and_post_state() {
         )
         .unwrap();
 
-    // `Config::load()` resolves the full default config (including the
-    // home-dir database path). The migration only reads `embedding_model`
-    // and `database_path` here; the other fields are carried through as-is.
-    let mut config = crate::config::Config::load().unwrap();
-    config.database_path = db_path.clone();
-    config.embedding_model = "BAAI/bge-small-en-v1.5".to_string();
+    // `Config::default()` rather than `Config::load()`: `load()` parses every
+    // `VIPUNE_*` knob and returns `Err` on a malformed value, which would make
+    // this `unwrap()` panic whenever a sibling writer holds one. The migration
+    // reads only `embedding_model`, and both it and `database_path` are set
+    // below, so nothing here needs the environment.
+    let config = crate::config::Config {
+        database_path: db_path.clone(),
+        embedding_model: "BAAI/bge-small-en-v1.5".to_string(),
+        ..Default::default()
+    };
     let mut embed = |content: &str| {
         if content == "bad content" {
             Err(crate::sqlite::Error::Sqlite(

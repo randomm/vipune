@@ -44,7 +44,9 @@ mod tests {
 
     #[test]
     fn test_env_var_overrides_config() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clean_env();
 
         unsafe {
@@ -76,7 +78,9 @@ mod tests {
 
     #[test]
     fn test_invalid_similarity_threshold() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clean_env();
 
         unsafe {
@@ -104,7 +108,9 @@ mod tests {
 
     #[test]
     fn test_empty_env_var_rejected() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clean_env();
 
         unsafe {
@@ -132,7 +138,9 @@ mod tests {
 
     #[test]
     fn test_whitespace_env_var_rejected() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clean_env();
 
         unsafe {
@@ -160,7 +168,9 @@ mod tests {
 
     #[test]
     fn test_recency_weight_env_var_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clean_env();
 
         unsafe {
@@ -188,7 +198,9 @@ mod tests {
 
     #[test]
     fn test_hybrid_env_var_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clean_env();
 
         unsafe {
@@ -216,7 +228,9 @@ mod tests {
 
     #[test]
     fn test_hybrid_env_var_override_false() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clean_env();
 
         unsafe {
@@ -244,7 +258,9 @@ mod tests {
 
     #[test]
     fn test_invalid_recency_weight_format() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clean_env();
 
         unsafe {
@@ -272,7 +288,9 @@ mod tests {
 
     #[test]
     fn test_lifecycle_knob_env_overrides() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clean_env();
 
         unsafe {
@@ -306,7 +324,9 @@ mod tests {
 
     #[test]
     fn test_invalid_lifecycle_knob_values() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         clean_env();
 
         unsafe {
