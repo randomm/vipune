@@ -1,22 +1,21 @@
 //! Export → import contract tests (issue #229).
 //!
-//! The bug these tests pin: `vipune export` writes the header version key as
-//! `"format_version"` while `validate_header` required `"version"`, so a real
-//! export could not be re-imported. Every test here drives the PRODUCTION
-//! handlers — `handle_export` then `run_import` / `handle_import` — with no
-//! hand-crafted header and no local re-implementation of either direction,
-//! which is precisely how the mismatch stayed hidden for six releases.
-//!
-//! Model-free by construction: rows are seeded with raw SQL and full
-//! 1536-byte `vec_to_blob` embeddings, so no ONNX model is downloaded. Both
-//! stores are freshly created — neither records a model identity nor a
-//! migration marker, so both resolve to the default bge identity and the
-//! identity guard in `run_import` passes. Every seeded row carries a complete
-//! blob: `run_import` is all-or-nothing and aborts on an empty or
-//! wrong-dimension embedding, so such a row could never satisfy
-//! "inserted == seeded count".
+//! The round-trip tests drive the PRODUCTION handlers — `handle_export` then
+//! `run_import` / `handle_import` — with no hand-crafted header and no local
+//! re-implementation of either direction; that omission is how the
+//! `format_version` / `version` mismatch stayed hidden for six releases. The
+//! header-spelling tests hand-craft headers by necessity: they exercise the
+//! reader's contract, not the writer's output.
 
 #![cfg(test)]
+
+// Model-free by construction: rows are seeded with raw SQL and full-width
+// `vec_to_blob` embeddings, so no ONNX model is downloaded. Both stores are
+// freshly created — neither records a model identity nor a migration marker,
+// so both resolve to the default bge identity and the identity guard in
+// `run_import` passes. Every seeded row carries a complete blob:
+// `run_import` is all-or-nothing and aborts on an empty or wrong-dimension
+// embedding, so such a row could never satisfy "inserted == seeded count".
 
 use crate::commands::export::{base64_encode, handle_export};
 use crate::commands::import::{handle_import, run_import};
@@ -28,8 +27,11 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// One row of the seeded source store — the 12 JSONL row fields, so the raw
-/// INSERT stays a field-by-field copy instead of a 13-argument call.
+/// One fixture row in both directions: what `seed` inserts and what
+/// `fetch_all` reads back, so the round-trip asserts compare the seeded Vec
+/// directly against what each store reports. The 12 JSONL row fields keep the
+/// raw INSERT a field-by-field copy instead of a 13-argument call.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SeedRow {
     id: String,
     project_id: String,
@@ -122,72 +124,35 @@ fn seed(db_path: &Path, rows: &[SeedRow]) {
     }
 }
 
-/// Everything import must hand back verbatim, read straight from SQLite.
-#[derive(Debug, PartialEq, Eq)]
-struct StoredRow {
-    id: String,
-    project_id: String,
-    content: String,
-    metadata: Option<String>,
-    blob: Vec<u8>,
-    created_at: String,
-    updated_at: String,
-    memory_type: String,
-    status: String,
-    superseded_by: Option<String>,
-    retrieval_count: i64,
-    last_retrieved_at: Option<String>,
-}
-
-fn fetch_all(db_path: &Path) -> Vec<StoredRow> {
+/// Read every row back straight from SQLite, in id order. Blob width is a
+/// construction-time invariant of `blob_for`, so no re-check is needed here —
+/// the byte-identity compares below are what enforce it end to end.
+fn fetch_all(db_path: &Path) -> Vec<SeedRow> {
     let conn = rusqlite::Connection::open(db_path).expect("open for read");
     let mut stmt = conn
         .prepare(
             "SELECT id, project_id, content, embedding, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at FROM memories ORDER BY id",
         )
         .expect("prepare");
-    let rows = stmt
-        .query_map([], |r| {
-            Ok(StoredRow {
-                id: r.get(0)?,
-                project_id: r.get(1)?,
-                content: r.get(2)?,
-                blob: r.get(3)?,
-                metadata: r.get(4)?,
-                created_at: r.get(5)?,
-                updated_at: r.get(6)?,
-                memory_type: r.get(7)?,
-                status: r.get(8)?,
-                superseded_by: r.get(9)?,
-                retrieval_count: r.get(10)?,
-                last_retrieved_at: r.get(11)?,
-            })
+    stmt.query_map([], |r| {
+        Ok(SeedRow {
+            id: r.get(0)?,
+            project_id: r.get(1)?,
+            content: r.get(2)?,
+            blob: r.get(3)?,
+            metadata: r.get(4)?,
+            created_at: r.get(5)?,
+            updated_at: r.get(6)?,
+            memory_type: r.get(7)?,
+            status: r.get(8)?,
+            superseded_by: r.get(9)?,
+            retrieval_count: r.get(10)?,
+            last_retrieved_at: r.get(11)?,
         })
-        .expect("query")
-        .collect::<Result<Vec<_>, _>>()
-        .expect("read rows");
-    assert!(
-        rows.iter().all(|r| r.blob.len() == EMBEDDING_DIMS * 4),
-        "fixture must carry only full-width blobs"
-    );
-    rows
-}
-
-fn to_stored(row: &SeedRow) -> StoredRow {
-    StoredRow {
-        id: row.id.clone(),
-        project_id: row.project_id.clone(),
-        content: row.content.clone(),
-        metadata: row.metadata.clone(),
-        blob: row.blob.clone(),
-        created_at: row.created_at.clone(),
-        updated_at: row.updated_at.clone(),
-        memory_type: row.memory_type.clone(),
-        status: row.status.clone(),
-        superseded_by: row.superseded_by.clone(),
-        retrieval_count: row.retrieval_count,
-        last_retrieved_at: row.last_retrieved_at.clone(),
-    }
+    })
+    .expect("query")
+    .collect::<Result<Vec<_>, _>>()
+    .expect("read rows")
 }
 
 /// A JSONL data row as a plain writer-side value (for the header-matrix tests,
@@ -222,7 +187,10 @@ fn write_jsonl_file(dir: &Path, name: &str, header: &Value, rows: &[Value]) -> P
     path
 }
 
-/// A header carrying every field `write_jsonl` emits except the version key.
+/// A header carrying the fields the reader needs (type, embedding_dims,
+/// exported_at, rows) but no version key. Not a verbatim `write_jsonl`
+/// header: it also omits the model-identity keys, which `HeaderIdentity::
+/// resolved` defaults to the bge identity — fine for header-contract tests.
 fn header_without_version(rows: usize) -> Value {
     json!({
         "type": "export",
@@ -250,7 +218,8 @@ fn test_export_then_import_roundtrip_is_byte_identical() {
     let header: Value = serde_json::from_str(lines[0]).expect("header is JSON");
     assert_eq!(header["type"], "export");
     assert_eq!(
-        header["format_version"], 1,
+        header["format_version"],
+        json!(super::export::EXPORT_FORMAT_VERSION),
         "export keeps writing the canonical key"
     );
     assert!(
@@ -267,12 +236,11 @@ fn test_export_then_import_roundtrip_is_byte_identical() {
     assert_eq!(response.inserted, seeded.len(), "inserted == seeded count");
     assert_eq!(response.skipped, 0);
 
-    // Byte-for-byte source → destination, all 12 columns.
+    // Byte-for-byte source → destination, all 12 columns: the seeded Vec is
+    // the single expected value, compared directly with what each store says.
     let source_rows = fetch_all(&src);
     let destination_rows = fetch_all(&dst);
-    assert_eq!(source_rows.len(), seeded.len());
-    let expected: Vec<StoredRow> = seeded.iter().map(to_stored).collect();
-    assert_eq!(source_rows, expected, "fixture seeded what it declared");
+    assert_eq!(source_rows, seeded, "fixture seeded what it declared");
     assert_eq!(
         destination_rows, source_rows,
         "round trip must restore every column verbatim, embedding BLOB included"
@@ -358,6 +326,41 @@ fn test_import_accepts_format_version_without_numeric_gate() {
     let response = run_import(&db_path, file.to_str().unwrap()).expect("quoted version parses");
     assert_eq!(response.inserted, 1);
     assert_eq!(response.skipped, 0);
+}
+
+#[test]
+fn test_import_accepts_unseen_and_null_format_version_values() {
+    // The other two presence-only shapes: an unseen future NUMBER and a
+    // JSON null both satisfy `is_none()` presence, as documented on
+    // validate_header. Mutated via serde_json::Value so only the version
+    // field differs from the shared helper's header.
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    drop(Database::open(&db_path).expect("create db"));
+
+    let mut future = header_without_version(1);
+    future["format_version"] = json!(super::export::EXPORT_FORMAT_VERSION + 1);
+    let file = write_jsonl_file(
+        dir.path(),
+        "future.jsonl",
+        &future,
+        &[row_line("id-1", &blob_for(3))],
+    );
+    let response = run_import(&db_path, file.to_str().unwrap())
+        .expect("a version this reader has not seen still imports");
+    assert_eq!(response.inserted, 1);
+
+    let mut null_version = header_without_version(1);
+    null_version["format_version"] = Value::Null;
+    let file = write_jsonl_file(
+        dir.path(),
+        "null-version.jsonl",
+        &null_version,
+        &[row_line("id-2", &blob_for(4))],
+    );
+    let response = run_import(&db_path, file.to_str().unwrap())
+        .expect("a null version still counts as present");
+    assert_eq!(response.inserted, 1);
 }
 
 #[test]

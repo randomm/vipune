@@ -162,7 +162,9 @@ impl HeaderIdentity {
 /// `export::write_jsonl` actually emits) or the legacy alias `version` — and
 /// presence-only: the value is never compared against
 /// [`super::export::EXPORT_FORMAT_VERSION`], so a future v2 export still parses
-/// here rather than being rejected for a number this reader has not seen.
+/// here rather than being rejected for a number this reader has not seen —
+/// and presence is tested with `is_none`, so a JSON `null` or a quoted value
+/// still counts as a version being present.
 fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
     let line = line.trim_end_matches('\r');
     let value: serde_json::Value = serde_json::from_str(line)
@@ -176,10 +178,7 @@ fn validate_header(line: &str) -> Result<(usize, HeaderIdentity), Error> {
             "line 1: not an export file (missing type=export)".to_string(),
         ));
     }
-    // `export::write_jsonl` emits `format_version`; `version` is the legacy
-    // alias this module's docs used to document. Accepting both is what makes
-    // `vipune export` + `vipune import` agree (issue #229). Presence-only
-    // (`is_none`), so a JSON null or a quoted value still counts as present.
+    // Either spelling satisfies the presence-only check (issue #229).
     if obj.get("format_version").is_none() && obj.get("version").is_none() {
         return Err(Error::InvalidInput(
             "line 1: header missing format_version (or the legacy alias \"version\")".to_string(),
