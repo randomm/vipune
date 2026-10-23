@@ -7,6 +7,7 @@ use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, ConflictMemory, IngestPolicy};
 use crate::sqlite::Memory;
+use crate::sqlite::NewRow;
 
 use super::store::MemoryStore;
 
@@ -26,6 +27,29 @@ pub struct UpdateParams<'a> {
     pub status: Option<MemoryStatus>,
     /// New operator-assigned importance.
     pub importance: Option<MemoryImportance>,
+}
+
+/// The caller-supplied fields of a memory the store is about to create.
+///
+/// The add path and the supersede path each create exactly one row, so they
+/// share this shape (the store-layer counterpart of
+/// [`crate::sqlite::UpdateOptions`], and the sibling of [`UpdateParams`] on the
+/// write side). Grouping the fields keeps the internal helpers short without a
+/// `too_many_arguments` suppression, and keeps the importance level a named
+/// value at every call site — the trailing argument `--importance` dropped on
+/// its way to the column in issue #238.
+#[derive(Clone, Copy, Debug)]
+pub struct NewMemory<'a> {
+    /// Project identifier (e.g., git repo URL or user-defined).
+    pub project_id: &'a str,
+    /// Text content to store (1 to 100,000 characters).
+    pub content: &'a str,
+    /// Optional JSON metadata string.
+    pub metadata: Option<&'a str>,
+    /// Memory type (fact, preference, procedure, guard, observation).
+    pub memory_type: MemoryType,
+    /// Lifecycle status of the new row (active, candidate).
+    pub status: MemoryStatus,
 }
 
 /// Generate a deterministic mock embedding for specific content.
@@ -106,12 +130,14 @@ impl MemoryStore {
         status: MemoryStatus,
     ) -> Result<AddResult, Error> {
         self.add_impl(
-            project_id,
-            content,
-            metadata,
+            &NewMemory {
+                project_id,
+                content,
+                metadata,
+                memory_type,
+                status,
+            },
             force,
-            memory_type,
-            status,
             None,
         )
     }
@@ -126,39 +152,24 @@ impl MemoryStore {
     /// is what reaches the column (the level decides the `high`/`critical`
     /// prune exemption). A caller that expresses no level passes `None` and
     /// gets `medium`, the value the column's `NOT NULL DEFAULT` holds.
-    #[allow(clippy::too_many_arguments)] // mirrors add_with_conflict() plus the importance level
     pub(crate) fn add_impl(
         &mut self,
-        project_id: &str,
-        content: &str,
-        metadata: Option<&str>,
+        row: &NewMemory<'_>,
         force: bool,
-        memory_type: MemoryType,
-        status: MemoryStatus,
         importance: Option<MemoryImportance>,
     ) -> Result<AddResult, Error> {
-        Self::validate_input_length(content)?;
+        Self::validate_input_length(row.content)?;
 
-        let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
-        let memory_type_str = memory_type.as_str();
-        let status_str = status.as_str();
+        let embedding = self.get_embedding(row.content, EmbeddingRole::Passage)?;
 
         if force {
-            let id = self.insert_row(
-                project_id,
-                content,
-                &embedding,
-                metadata,
-                memory_type_str,
-                status_str,
-                importance,
-            )?;
+            let id = self.insert_row(row, &embedding, importance)?;
             return Ok(AddResult::Added { id });
         }
 
         let similars =
             self.db
-                .find_similar(project_id, &embedding, self.config.similarity_threshold)?;
+                .find_similar(row.project_id, &embedding, self.config.similarity_threshold)?;
         let conflicts: Vec<ConflictMemory> = similars
             .into_iter()
             .map(|m| ConflictMemory {
@@ -169,19 +180,11 @@ impl MemoryStore {
             .collect();
 
         if conflicts.is_empty() {
-            let id = self.insert_row(
-                project_id,
-                content,
-                &embedding,
-                metadata,
-                memory_type_str,
-                status_str,
-                importance,
-            )?;
+            let id = self.insert_row(row, &embedding, importance)?;
             Ok(AddResult::Added { id })
         } else {
             Ok(AddResult::Conflicts {
-                proposed: content.to_string(),
+                proposed: row.content.to_string(),
                 conflicts,
             })
         }
@@ -268,60 +271,45 @@ impl MemoryStore {
     }
 
     /// Ingest with explicit memory type, status, and operator-assigned
-    /// importance — the add path `vipune add` drives. The value is a parsed
+    /// importance — the add path `vipune add` drives. The level is a parsed
     /// [`MemoryImportance`], so SQLite gets the canonical `as_str` spelling
     /// rather than the raw flag string (issue #238).
-    #[allow(clippy::too_many_arguments)] // mirrors ingest_with_type_status() plus the importance level
     #[must_use = "handle the error or results may be lost"]
     pub fn ingest_with_importance(
         &mut self,
-        project_id: &str,
-        content: &str,
-        metadata: Option<&str>,
+        row: &NewMemory<'_>,
         policy: IngestPolicy,
-        memory_type: MemoryType,
-        status: MemoryStatus,
         importance: MemoryImportance,
     ) -> Result<AddResult, Error> {
-        self.add_impl(
-            project_id,
-            content,
-            metadata,
-            policy == IngestPolicy::Force,
-            memory_type,
-            status,
-            Some(importance),
-        )
+        self.add_impl(row, policy == IngestPolicy::Force, Some(importance))
     }
 
     /// Insert one new row, binding `importance` when the caller named a level
     /// and taking `Database::insert` (the `medium` default) when it did not.
-    #[allow(clippy::too_many_arguments)] // the full column set of a new row
     fn insert_row(
         &self,
-        project_id: &str,
-        content: &str,
+        row: &NewMemory<'_>,
         embedding: &[f32],
-        metadata: Option<&str>,
-        memory_type: &str,
-        status: &str,
         importance: Option<MemoryImportance>,
     ) -> Result<String, Error> {
+        let (memory_type, status) = (row.memory_type.as_str(), row.status.as_str());
         match importance {
             Some(level) => Ok(self.db.insert_with_importance(
-                project_id,
-                content,
+                &NewRow {
+                    project_id: row.project_id,
+                    content: row.content,
+                    metadata: row.metadata,
+                    memory_type,
+                    status,
+                    importance: level.as_str(),
+                },
                 embedding,
-                metadata,
-                memory_type,
-                status,
-                level.as_str(),
             )?),
             None => Ok(self.db.insert(
-                project_id,
-                content,
+                row.project_id,
+                row.content,
                 embedding,
-                metadata,
+                row.metadata,
                 memory_type,
                 status,
             )?),

@@ -12,7 +12,7 @@ pub(crate) mod store;
 
 pub mod lifecycle;
 
-pub use crud::UpdateParams;
+pub use crud::{NewMemory, UpdateParams};
 pub use search::SearchOptions;
 pub use store::MemoryStore;
 

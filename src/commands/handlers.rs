@@ -3,7 +3,7 @@
 use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
-use crate::memory::{MemoryStore, UpdateParams};
+use crate::memory::{MemoryStore, NewMemory, UpdateParams};
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
 use crate::{config, embedding::EmbeddingEngine, temporal};
@@ -110,12 +110,14 @@ pub(crate) fn handle_add(
     };
 
     match store.ingest_with_importance(
-        project_id,
-        text,
-        metadata,
+        &NewMemory {
+            project_id,
+            content: text,
+            metadata,
+            memory_type: memory_type_val,
+            status: status_val,
+        },
         policy,
-        memory_type_val,
-        status_val,
         importance_val,
     )? {
         AddResult::Added { id } => {

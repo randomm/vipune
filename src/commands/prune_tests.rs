@@ -304,6 +304,7 @@ fn test_prune_importance_medium_low_still_eligible_integration() {
 /// only from the store's add path.
 #[test]
 fn test_add_time_importance_protects_from_prune() {
+    use crate::memory::NewMemory;
     use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
     use crate::memory::store::MemoryStore;
     use crate::memory_types::{AddResult, IngestPolicy};
@@ -313,12 +314,14 @@ fn test_add_time_importance_protects_from_prune() {
     let mut added = |level: MemoryImportance, text: &str| -> String {
         match store
             .ingest_with_importance(
-                "p",
-                text,
-                None,
+                &NewMemory {
+                    project_id: "p",
+                    content: text,
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status: MemoryStatus::Candidate,
+                },
                 IngestPolicy::Force,
-                MemoryType::Fact,
-                MemoryStatus::Candidate,
                 level,
             )
             .unwrap()

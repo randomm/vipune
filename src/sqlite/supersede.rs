@@ -4,7 +4,7 @@ use chrono::Utc;
 use rusqlite::params;
 use uuid::Uuid;
 
-use super::{Error, Result, vec_to_blob};
+use super::{Error, NewRow, Result, vec_to_blob};
 
 impl super::Database {
     /// Atomically supersede an old memory with a new one at the `medium`
@@ -26,13 +26,16 @@ impl super::Database {
         old_id: &str,
     ) -> Result<String> {
         self.supersede_with_importance(
-            project_id,
-            content,
+            &NewRow {
+                project_id,
+                content,
+                metadata,
+                memory_type,
+                status: "active",
+                importance: "medium",
+            },
             embedding,
-            metadata,
-            memory_type,
             old_id,
-            "medium",
         )
     }
 
@@ -44,23 +47,19 @@ impl super::Database {
     /// through here, and an omitted column silently reset the level the
     /// operator had just asked for — with it the prune protection that keys
     /// off `high`/`critical` (issue #238). The caller supplies the canonical
-    /// spelling.
-    #[allow(clippy::too_many_arguments)] // signature mirrors supersede() plus the importance level
+    /// spelling, and `active` for `row.status`: the replacement row is what
+    /// searches return.
     pub(crate) fn supersede_with_importance(
         &self,
-        project_id: &str,
-        content: &str,
+        row: &NewRow<'_>,
         embedding: &[f32],
-        metadata: Option<&str>,
-        memory_type: &str,
         old_id: &str,
-        importance: &str,
     ) -> Result<String> {
         // Verify old memory exists and belongs to this project (scoped get enforces it)
         let old = self
-            .get(old_id, project_id)?
+            .get(old_id, row.project_id)?
             .ok_or_else(|| Error::NotFound(format!("memory to supersede not found: {}", old_id)))?;
-        if old.project_id != project_id {
+        if old.project_id != row.project_id {
             return Err(Error::InvalidInput(
                 "cannot supersede memory from different project".to_string(),
             ));
@@ -76,15 +75,15 @@ impl super::Database {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 &new_id,
-                project_id,
-                content,
+                row.project_id,
+                row.content,
                 &blob,
-                metadata,
+                row.metadata,
                 &now,
                 &now,
-                memory_type,
-                "active",
-                importance
+                row.memory_type,
+                row.status,
+                row.importance
             ],
         )?;
         tx.execute(

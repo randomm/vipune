@@ -4,6 +4,7 @@ use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, BatchIngestItemResult, BatchIngestResult, IngestPolicy};
+use crate::sqlite::NewRow;
 
 use super::store::MemoryStore;
 
@@ -126,7 +127,6 @@ impl MemoryStore {
         self.supersede_impl(project_id, content, metadata, memory_type, old_id, None)
     }
 
-    #[allow(clippy::too_many_arguments)] // mirrors supersede() plus the importance level
     #[must_use = "the new memory ID is needed for downstream operations"]
     /// Supersede an existing memory with a new row carrying an explicit
     /// importance level — the path `vipune add --supersedes --importance` drives.
@@ -180,13 +180,16 @@ impl MemoryStore {
         // plain `Database::supersede`, which lands on the `medium` default.
         match importance {
             Some(level) => Ok(self.db.supersede_with_importance(
-                project_id,
-                content,
+                &NewRow {
+                    project_id,
+                    content,
+                    metadata,
+                    memory_type: memory_type.as_str(),
+                    status: "active",
+                    importance: level.as_str(),
+                },
                 &embedding,
-                metadata,
-                memory_type.as_str(),
                 old_id,
-                level.as_str(),
             )?),
             None => Ok(self.db.supersede(
                 project_id,

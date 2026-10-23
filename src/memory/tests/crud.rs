@@ -227,6 +227,7 @@ fn test_list_by_project() {
     assert_eq!(memories_b.len(), 1);
 }
 
+use crate::memory::NewMemory;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory::store::MemoryStore;
 use crate::memory_types::{AddResult, IngestPolicy};
@@ -254,12 +255,14 @@ fn add(
 ) -> String {
     let result = match importance {
         Some(level) => store.ingest_with_importance(
-            project,
-            content,
-            None,
+            &NewMemory {
+                project_id: project,
+                content,
+                metadata: None,
+                memory_type: MemoryType::Fact,
+                status: MemoryStatus::Active,
+            },
             IngestPolicy::Force,
-            MemoryType::Fact,
-            MemoryStatus::Active,
             level,
         ),
         None => store.ingest_with_type_status(
