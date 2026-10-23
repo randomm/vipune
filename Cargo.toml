@@ -30,7 +30,7 @@ ort = { version = "=2.0.0-rc.9", features = ["ndarray", "download-binaries"] }
 ort-sys = "=2.0.0-rc.9"
 
 # HuggingFace tokenizers and model download
-tokenizers = "0.22.0"
+tokenizers = "0.23.2"
 hf-hub = { version = "0.5.0", default-features = false, features = ["ureq"] }
 
 # Serialization
@@ -71,9 +71,12 @@ test = false
 criterion = "0.5"
 tempfile = "3.13"
 tokio = { version = "1", features = ["macros", "rt"] }
-# Needed by tests/backup_roundtrip_integration.rs (issue #195) to open the
-# SQLite DB with raw SQL (bypassing the crate's pub(crate) conn() accessor)
-# and to verify raw embedding BLOB byte-identity at the SQL level.
+# Needed by the in-crate test modules that open the SQLite DB with raw SQL
+# (bypassing the crate's pub(crate) conn() accessor) and verify raw embedding
+# BLOB byte-identity at the SQL level: src/commands/backup_tests.rs,
+# src/commands/doctor_fts_tests.rs, src/commands/export_tests.rs,
+# src/commands/import_tests.rs, src/memory/tests/identity_refusal.rs,
+# src/migration_tests.rs and src/sqlite/migration_tests.rs.
 rusqlite = { version = "0.40", features = ["bundled"] }
 
 [profile.release]
