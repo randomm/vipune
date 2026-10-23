@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-10-23
+
+### Miscellaneous
+
+- *(deps)* Bump dirs from 6.0.0 to 7.0.0
+- *(deps)* Bump base64, criterion and the rust-dependencies group
+
+
 ## [0.16.0] - 2026-10-23
 
 ### Features
