@@ -73,9 +73,10 @@ The knob list itself, `tests_utils::CONFIG_ENV_VARS`, has exactly one copy: the
 config tests clear it, the helpers that wrap `Config::load()` clear it, and the
 CLI tests that spawn the binary remove it from the child (plus the two
 project-detection knobs on top). `test_config_env_vars_match_env_parser` fails
-the build if it drifts from the `apply_*_override` functions in
-`config/env_parser.rs`, so a new knob cannot be silently left out of the
-clearing. If your test writes a knob outside that list (or wants the lock
+the build if the list drifts from the parser: it compares the set of `VIPUNE_*`
+names spelled in `config/env_parser.rs` against `CONFIG_ENV_VARS` and checks the
+`apply_*_override` functions 1:1, so a new knob cannot be silently left out of
+the clearing. If your test writes a knob outside that list (or wants the lock
 without the bulk clear — e.g. to serialise a child-process launch against
 writers), use `tests_utils::lock_env_mutex()` and
 `tests_utils::cleanup_env_vars(&["YOUR_VAR"])` explicitly.
@@ -92,7 +93,10 @@ other holders. Tests that **read** the environment indirectly are easy to miss
   and a clean pass exit non-zero.
 
 Prefer not to read at all. A fixture that only needs a `Config` should build
-one with `Config::default()` — no environment, no lock, no ordering to lose.
+one with `Config::default()` — it reads no `VIPUNE_*` knob (only `HOME`, through
+`dirs::home_dir()`), so it needs no lock and no ordering to lose. That is a
+statement about the knobs, not about the environment: `Config::default()` still
+calls `getenv`, so it is a concurrent reader like any other.
 A spawned child is neutralised the same way, with `Command::env_remove` per
 knob, which touches no process-global state.
 
@@ -143,7 +147,10 @@ applies inside them. A test there that mutates the environment takes a
 file-local `static Mutex` (declared at the top of that test file) and holds it
 for the whole body. A writer-side lock serialises only against other holders
 of *that* mutex — every env-touching test in the file must take it, or the
-lock protects nothing.
+lock protects nothing. `tests/lib_integration.rs` declares no such mutex today:
+no test in it writes the environment (`Config::default()` reads no `VIPUNE_*`
+knob), so the four `remove_var` calls it used to make before asserting on the
+defaults protected nothing.
 
 Do not paper over a shared-env race with `--test-threads=1` or
 `RUST_TEST_THREADS`; make the test self-isolating instead.
