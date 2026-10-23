@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-23
+
+### Features
+
+- *(deps)* Bump rusqlite to 0.40 and tokenizers to 0.23. Both crates' error types appear in `vipune::Error` (`Error::SQLite`, `Error::Tokenization`), so library users matching on those inner errors may need updates; CLI behaviour and embeddings are unchanged. Also refreshes clap, serde_json, uuid, chrono, tokio and tempfile within their existing ranges ([#243](https://github.com/randomm/vipune/pull/243))
+
+### Miscellaneous
+
+- *(deps)* Bump actions/cache from 4 to 6 ([#144](https://github.com/randomm/vipune/pull/144))
+- *(deps)* Bump actions/checkout from 4 to 7 ([#145](https://github.com/randomm/vipune/pull/145))
+- *(deps)* Dependabot no longer proposes ort/ort-sys release candidates; the pair stays pinned at 2.0.0-rc.9 ([#243](https://github.com/randomm/vipune/pull/243))
+
+
 ## [0.15.4] - 2026-10-23
 
 ### Bug Fixes
