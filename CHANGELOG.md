@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-23
+
+### Features
+
+- *(deps)* Bump rusqlite and tokenizers, refresh minor dependencies
+
+### Miscellaneous
+
+- *(deps)* Bump actions/cache from 4 to 6
+- *(deps)* Bump actions/checkout from 4 to 7
+
+
 ## [0.15.4] - 2026-10-23
 
 ### Bug Fixes
