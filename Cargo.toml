@@ -38,7 +38,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Utilities
-base64 = "0.23"
+# `std` only: 0.23 defaults to `std` + `simd-unsafe`; we decode untrusted import
+# files so keep the safe scalar path that 0.22 gave us.
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
