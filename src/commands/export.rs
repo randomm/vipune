@@ -1,6 +1,6 @@
 //! `vipune export` handler and JSONL writer (issue #195).
 //!
-//! The export produces a JSONL file: one header line followed by one 12-field
+//! The export produces a JSONL file: one header line followed by one 13-field
 //! line per row, across ALL projects, with no row cap and no status/type
 //! filter. The embedding is serialised as base64 of the exact stored BLOB
 //! (1536 bytes for a 384xf32-LE vector), so the round-trip contract is
@@ -24,11 +24,11 @@
 //! import-side refusal is a guard against the common mistake, not a
 //! guarantee of vector provenance.
 //!
-//! Row line (12 fields; the DB column `type` is renamed `memory_type` so the
+//! Row line (13 fields; the DB column `type` is renamed `memory_type` so the
 //! JSON key never collides with the header's `type` discriminator):
 //! `{"id", "project_id", "content", "metadata", "embedding" (base64),
 //! "created_at", "updated_at", "memory_type", "status", "superseded_by",
-//! "retrieval_count", "last_retrieved_at"}`
+//! "retrieval_count", "last_retrieved_at", "importance"}`
 //!
 //! The global `--project` flag is ignored: export is cross-project by
 //! contract, and a stderr warning is emitted when it is passed.
@@ -163,6 +163,8 @@ struct ExportJsonlRow {
     retrieval_count: i64,
     /// Last retrieval timestamp, or JSON null.
     last_retrieved_at: Option<String>,
+    /// Operator-assigned importance, restored verbatim (issue #228).
+    importance: String,
 }
 
 impl ExportJsonlRow {
@@ -180,6 +182,7 @@ impl ExportJsonlRow {
             "superseded_by": self.superseded_by,
             "retrieval_count": self.retrieval_count,
             "last_retrieved_at": self.last_retrieved_at,
+            "importance": self.importance,
         })
     }
 }
@@ -199,6 +202,7 @@ impl From<&ExportRow> for ExportJsonlRow {
             superseded_by: row.superseded_by.clone(),
             retrieval_count: row.retrieval_count,
             last_retrieved_at: row.last_retrieved_at.clone(),
+            importance: row.importance.clone(),
         }
     }
 }

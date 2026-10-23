@@ -2,7 +2,7 @@
 
 use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
-use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, BatchIngestItemResult, BatchIngestResult, IngestPolicy};
 
 use super::store::MemoryStore;
@@ -111,6 +111,10 @@ impl MemoryStore {
     /// Atomically replaces the old memory (marked as "superseded") with a new memory
     /// that supersedes it. Both memories remain in the database but the old one
     /// has status "superseded" and superseded_by pointing to the new ID.
+    ///
+    /// Adds at the `medium` importance default — the variant that carries an
+    /// operator-assigned level is [`Self::supersede_with_importance`], which
+    /// the `vipune add --supersedes --importance` path drives (issue #238).
     pub fn supersede(
         &mut self,
         project_id: &str,
@@ -118,6 +122,36 @@ impl MemoryStore {
         metadata: Option<&str>,
         memory_type: MemoryType,
         old_id: &str,
+    ) -> Result<String, Error> {
+        self.supersede_with_importance(
+            project_id,
+            content,
+            metadata,
+            memory_type,
+            old_id,
+            MemoryImportance::Medium,
+        )
+    }
+
+    #[allow(dead_code)] // Used by the CLI add path (bin target)
+    #[must_use = "the new memory ID is needed for downstream operations"]
+    /// Supersede an existing memory with a new one carrying an explicit
+    /// importance level.
+    ///
+    /// `vipune add --supersedes <id> --importance critical` creates the new row
+    /// through here, so the level has to be threaded to the INSERT: the column
+    /// is `NOT NULL DEFAULT 'medium'`, so not naming it in the INSERT reset the
+    /// level the operator just set — and the prune protection that keys off it
+    /// (issue #238). The value is a parsed [`MemoryImportance`], so the
+    /// canonical spelling is what lands.
+    pub fn supersede_with_importance(
+        &mut self,
+        project_id: &str,
+        content: &str,
+        metadata: Option<&str>,
+        memory_type: MemoryType,
+        old_id: &str,
+        importance: MemoryImportance,
     ) -> Result<String, Error> {
         Self::validate_input_length(content)?;
 
@@ -132,13 +166,14 @@ impl MemoryStore {
 
         let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
 
-        Ok(self.db.supersede(
+        Ok(self.db.supersede_with_importance(
             project_id,
             content,
             &embedding,
             metadata,
             memory_type.as_str(),
             old_id,
+            importance.as_str(),
         )?)
     }
 }

@@ -281,9 +281,11 @@ mod crud_tests {
         }
     }
 
-    /// `insert_with_id` must restore all 12 columns verbatim under the
+    /// `insert_with_id` must restore all 13 columns verbatim under the
     /// caller-supplied id, including the three columns the regular `insert()`
-    /// does not accept (`superseded_by`, `retrieval_count`, `last_retrieved_at`),
+    /// does not accept (`superseded_by`, `retrieval_count`, `last_retrieved_at`)
+    /// and `importance` (issue #228 — omitting that column from the INSERT is
+    /// what let every restore silently land on the column DEFAULT),
     /// and must return `true` on a fresh insert.
     #[test]
     fn test_insert_with_id_restores_all_columns() {
@@ -305,6 +307,7 @@ mod crud_tests {
                 Some("superseding-id"),
                 42,
                 Some("2024-01-03T00:00:00Z"),
+                "critical",
             )
             .unwrap();
         assert!(inserted, "fresh id must insert and return true");
@@ -323,7 +326,7 @@ mod crud_tests {
         // All other columns verbatim.
         let row = conn
             .query_row(
-                "SELECT project_id, content, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at FROM memories WHERE id = 'fixed-id-1'",
+                "SELECT project_id, content, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance FROM memories WHERE id = 'fixed-id-1'",
                 [],
                 |r| {
                     Ok((
@@ -337,6 +340,7 @@ mod crud_tests {
                         r.get::<_, Option<String>>(7)?,
                         r.get::<_, i64>(8)?,
                         r.get::<_, Option<String>>(9)?,
+                        r.get::<_, String>(10)?,
                     ))
                 },
             )
@@ -351,6 +355,10 @@ mod crud_tests {
         assert_eq!(row.7, Some("superseding-id".to_string()));
         assert_eq!(row.8, 42);
         assert_eq!(row.9, Some("2024-01-03T00:00:00Z".to_string()));
+        assert_eq!(
+            row.10, "critical",
+            "importance must be written, not left to the column DEFAULT"
+        );
     }
 
     /// `insert_with_id` with an id that already exists must NOT upsert:
@@ -376,6 +384,7 @@ mod crud_tests {
                 None,
                 7,
                 None,
+                "high",
             )
             .unwrap();
         assert!(inserted);
@@ -396,6 +405,7 @@ mod crud_tests {
             None,
             99,
             None,
+            "low",
         );
         assert!(
             result.is_err(),
@@ -451,6 +461,7 @@ mod crud_tests {
             None,
             0,
             None,
+            "medium",
         )
         .unwrap();
         db.insert_with_id(
@@ -466,6 +477,7 @@ mod crud_tests {
             None,
             0,
             None,
+            "medium",
         )
         .unwrap();
 

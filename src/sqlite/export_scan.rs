@@ -1,6 +1,6 @@
 //! Raw full-table scan for the export command (issue #195).
 //!
-//! `scan_all_rows` selects all 12 columns for EVERY project with no LIMIT and
+//! `scan_all_rows` selects all 13 columns for EVERY project with no LIMIT and
 //! keeps the embedding as the raw stored BLOB. It deliberately does NOT decode
 //! the blob (`blob_to_vec`) and does NOT reuse `list()` (capped at
 //! MAX_SEARCH_LIMIT) or `list_all_rows_for_project` (single project, decodes),
@@ -39,6 +39,11 @@ pub struct ExportRow {
     pub retrieval_count: i64,
     /// Last retrieval timestamp (NULL → None), restored verbatim on import.
     pub last_retrieved_at: Option<String>,
+    /// Operator-assigned importance (`low`/`medium`/`high`/`critical`),
+    /// restored verbatim on import (issue #228). Carried as stored: the column
+    /// has no CHECK constraint, so a hand-written value travels unchanged
+    /// rather than being silently reset to the column DEFAULT.
+    pub importance: String,
 }
 
 impl Database {
@@ -76,6 +81,7 @@ impl Database {
                 superseded_by: row.get(9)?,
                 retrieval_count: row.get(10)?,
                 last_retrieved_at: row.get(11)?,
+                importance: row.get(12)?,
             })
         })?;
 
@@ -103,6 +109,11 @@ mod tests {
     }
 
     /// Insert a raw row with full column control, bypassing `insert()`.
+    ///
+    /// `importance` is a parameter rather than left to the column DEFAULT so a
+    /// test can prove the scan reads column 13 instead of echoing the default
+    /// back (issue #228).
+    #[allow(clippy::too_many_arguments)] // test helper mirroring all 13 table columns
     fn seed_raw(
         conn: &Connection,
         id: &str,
@@ -111,11 +122,12 @@ mod tests {
         embedding: Option<&[u8]>,
         retrieval_count: i64,
         last_retrieved_at: Option<&str>,
+        importance: &str,
     ) {
         conn.execute(
             r#"
-            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at)
-            VALUES (?1, ?2, ?3, ?4, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'fact', 'active', NULL, ?5, ?6)
+            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance)
+            VALUES (?1, ?2, ?3, ?4, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z', 'fact', 'active', NULL, ?5, ?6, ?7)
             "#,
             params![
                 id,
@@ -124,6 +136,7 @@ mod tests {
                 embedding,
                 retrieval_count,
                 last_retrieved_at,
+                importance,
             ],
         )
         .unwrap();
@@ -134,7 +147,16 @@ mod tests {
         let (_dir, db) = create_test_db();
         let conn = db.conn();
         let good_blob = vec_to_blob(&vec![0.5f32; 384]).unwrap();
-        seed_raw(conn, "a1", "projA", "content A", Some(&good_blob), 0, None);
+        seed_raw(
+            conn,
+            "a1",
+            "projA",
+            "content A",
+            Some(&good_blob),
+            0,
+            None,
+            "low",
+        );
         seed_raw(
             conn,
             "b1",
@@ -143,8 +165,18 @@ mod tests {
             Some(&good_blob),
             3,
             Some("2024-02-01T00:00:00Z"),
+            "critical",
         );
-        seed_raw(conn, "b2", "projB", "content C", Some(&good_blob), 0, None);
+        seed_raw(
+            conn,
+            "b2",
+            "projB",
+            "content C",
+            Some(&good_blob),
+            0,
+            None,
+            "high",
+        );
 
         let rows = db.scan_all_rows().unwrap();
         assert_eq!(rows.len(), 3);
@@ -169,6 +201,12 @@ mod tests {
         assert_eq!(b1.status, "active");
         assert_eq!(b1.superseded_by, None);
         assert_eq!(b1.metadata, None);
+        // Column 13 must be read, not defaulted: `b1` was seeded at critical
+        // and every other row at a different level, so an unread column would
+        // show up here as "medium" (issue #228).
+        assert_eq!(b1.importance, "critical");
+        assert_eq!(rows[0].importance, "low");
+        assert_eq!(rows[2].importance, "high");
     }
 
     #[test]
@@ -176,11 +214,20 @@ mod tests {
         let (_dir, db) = create_test_db();
         let conn = db.conn();
         let good_blob = vec_to_blob(&vec![0.5f32; 384]).unwrap();
-        seed_raw(conn, "good", "p", "g", Some(&good_blob), 0, None);
+        seed_raw(conn, "good", "p", "g", Some(&good_blob), 0, None, "medium");
         // 1535-byte blob: wrong length for 384xf32 — would fail in map_row_to_memory.
-        seed_raw(conn, "short", "p", "s", Some(&vec![0xABu8; 1535]), 0, None);
+        seed_raw(
+            conn,
+            "short",
+            "p",
+            "s",
+            Some(&vec![0xABu8; 1535]),
+            0,
+            None,
+            "medium",
+        );
         // Empty blob: exported faithfully as an empty BLOB.
-        seed_raw(conn, "empty", "p", "e", Some(&[]), 0, None);
+        seed_raw(conn, "empty", "p", "e", Some(&[]), 0, None, "medium");
 
         let rows = db.scan_all_rows().unwrap();
         assert_eq!(rows.len(), 3);
@@ -207,6 +254,7 @@ mod tests {
                 Some(&good_blob),
                 0,
                 None,
+                "medium",
             );
         }
 
@@ -222,7 +270,7 @@ mod tests {
         let (_dir, db) = create_test_db();
         let conn = db.conn();
         let good_blob = vec_to_blob(&vec![0.5f32; 384]).unwrap();
-        seed_raw(conn, "s1", "p", "c", Some(&good_blob), 0, None);
+        seed_raw(conn, "s1", "p", "c", Some(&good_blob), 0, None, "medium");
         conn.execute(
             "UPDATE memories SET status = 'superseded', superseded_by = ?1 WHERE id = 's1'",
             ["s2"],
@@ -236,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_with_id_restores_all_12_columns_verbatim() {
+    fn test_insert_with_id_restores_all_13_columns_verbatim() {
         let (_dir, db) = create_test_db();
         let blob = vec_to_blob(&vec![0.25f32; 384]).unwrap();
 
@@ -253,10 +301,11 @@ mod tests {
             Some("other-id"),
             42,
             Some("2023-07-07T07:07:07Z"),
+            "high",
         )
         .unwrap();
 
-        // Verify every column via the canonical 12-column mapper (which decodes
+        // Verify every column via the canonical 13-column mapper (which decodes
         // the blob and would fail on any shape mismatch) plus a raw BLOB check.
         let conn = db.conn();
         let memory: crate::sqlite::Memory = conn
@@ -283,6 +332,7 @@ mod tests {
             memory.last_retrieved_at,
             Some("2023-07-07T07:07:07Z".to_string())
         );
+        assert_eq!(memory.importance, "high");
         // Raw BLOB byte-identity: what was written is exactly what is stored.
         let stored: Vec<u8> = conn
             .query_row(
@@ -312,6 +362,7 @@ mod tests {
             None,
             0,
             None,
+            "medium",
         )
         .unwrap();
 
@@ -328,6 +379,7 @@ mod tests {
             None,
             9,
             None,
+            "critical",
         );
         assert!(result.is_err());
 
@@ -363,6 +415,7 @@ mod tests {
             None,
             0,
             None,
+            "medium",
         )
         .unwrap();
         let stored: Vec<u8> = db

@@ -19,7 +19,7 @@ These flags apply to all commands:
 Store a memory.
 
 ```
-vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status <status>] [--supersedes <id>]
+vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status <status>] [--importance <level>] [--supersedes <id>]
 ```
 
 **Arguments:**
@@ -30,6 +30,7 @@ vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status
 - `--force` - Bypass conflict detection and add regardless
 - `--memory-type <type>` - Memory type: `fact` (default), `preference`, `procedure`, `guard`, `observation`
 - `--status <status>` - Initial status: `active` (default) or `candidate`
+- `--importance <level>` - Initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive). `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row
 - `--supersedes <id>` - Atomically supersede an existing memory (mutually exclusive with `--force`)
 
 **Behavior:**
@@ -38,6 +39,7 @@ vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status
 - If conflicts found: returns exit code 2, lists conflicting memories
 - If `--force` used: skips conflict check and adds memory
 - If `--supersedes` used: atomically adds new memory and marks target as `superseded`
+- `--importance` is stored on the new row (also on the row created by `--supersedes`), and `export` writes that value so `import` restores it
 
 **Exit codes:**
 - `0` - Successfully added

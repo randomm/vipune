@@ -26,13 +26,25 @@
 //! The version key is checked presence-only and accepts the legacy alias
 //! `"version"` as well — that was the spelling this module's docs documented
 //! before issue #229, so files written by hand from those docs still import.
-//! Row line (12 fields; DB column `type` is named `memory_type`):
+//! Row line (13 fields; DB column `type` is named `memory_type`):
 //!   `id`, `project_id`, `content`, `metadata` (nullable), `embedding`
 //!   (base64 of the exact stored BLOB), `created_at`, `updated_at`,
 //!   `memory_type`, `status`, `superseded_by` (nullable),
-//!   `retrieval_count`, `last_retrieved_at` (nullable).
+//!   `retrieval_count`, `last_retrieved_at` (nullable), `importance`.
+//!
+//! `importance` (issue #228) is optional on the line: every file written by
+//! v0.10.0–v0.15.x predates the column being exported and carries no such key,
+//! so an absent key restores the column DEFAULT (`medium`) exactly as those
+//! files always have. When the key IS present the value is validated against
+//! [`MemoryImportance`] and written in its canonical spelling — the column has
+//! no CHECK constraint, so this is the only place an out-of-vocabulary value
+//! can be refused before it silently breaks search (`ImportanceLevel::parse`
+//! errors on every row it reads) and prune protection (which compares against
+//! the lowercase literals). An empty string and an explicit JSON `null` are
+//! malformed, not absent.
 
 use crate::errors::Error;
+use crate::memory::lifecycle::MemoryImportance;
 use crate::output::print_json;
 use crate::sqlite::Database;
 use crate::sqlite::identity;
@@ -52,7 +64,14 @@ use crate::embedding::EMBEDDING_DIMS;
 /// `Duration::ZERO` for fast-fail.
 const IMPORT_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// One JSONL row (12 columns; `memory_type` is the JSON name for the DB
+/// The `importance` a line carries when it has no `importance` key — the
+/// schema every export through v0.15.x wrote, and the column DEFAULT
+/// (migrate_v5) those files restored before this field existed (issue #228).
+fn default_importance() -> String {
+    MemoryImportance::Medium.as_str().to_string()
+}
+
+/// One JSONL row (13 columns; `memory_type` is the JSON name for the DB
 /// `type` column).
 #[derive(Deserialize)]
 struct ImportRow {
@@ -71,6 +90,10 @@ struct ImportRow {
     retrieval_count: i64,
     #[serde(default)]
     last_retrieved_at: Option<String>,
+    /// Optional for back-compat: a missing key means the legacy `medium`
+    /// default, never a NULL (the column is `NOT NULL`).
+    #[serde(default = "default_importance")]
+    importance: String,
 }
 
 /// Read the JSONL source (path, or `-` for stdin).
@@ -95,6 +118,14 @@ fn read_source(source: &str) -> Result<String, Error> {
 /// Parse one data line into a row and its decoded, dimension-checked blob.
 ///
 /// Line numbers in errors are 1-based with the header as line 1.
+///
+/// The `importance` field is validated here and rewritten to its canonical
+/// spelling (issue #228), so the INSERT downstream can bind it blind: the
+/// column has no CHECK constraint, so a value that survives this gate is one
+/// the read side (`ImportanceLevel::parse`) and prune's lowercase-literal
+/// exclusion both understand. An absent key was already filled with `medium`
+/// by serde; an empty string or an out-of-vocabulary value is an error naming
+/// the line, and the all-or-nothing rule means nothing is written.
 fn parse_row(line: &str, line_no: usize) -> Result<(ImportRow, Vec<u8>), Error> {
     // Tolerate CRLF-terminated input (Windows-edited files): a trailing
     // `\r` would otherwise corrupt the last JSON field.
@@ -103,8 +134,19 @@ fn parse_row(line: &str, line_no: usize) -> Result<(ImportRow, Vec<u8>), Error> 
         return Err(Error::InvalidInput(format!("line {}: empty row", line_no)));
     }
 
-    let row: ImportRow = serde_json::from_str(line)
+    let mut row: ImportRow = serde_json::from_str(line)
         .map_err(|e| Error::InvalidInput(format!("line {}: malformed JSON: {}", line_no, e)))?;
+
+    row.importance = match MemoryImportance::from_str(&row.importance) {
+        Ok(level) => level.as_str().to_string(),
+        // `from_str` already words the rejection; only the line number is
+        // added here, so the message reads like every other parse error in
+        // this module (`line N: ...`) rather than double-prefixing it.
+        Err(Error::InvalidInput(msg)) => {
+            return Err(Error::InvalidInput(format!("line {}: {msg}", line_no)));
+        }
+        Err(other) => return Err(other),
+    };
 
     if row.embedding.is_empty() {
         return Err(Error::InvalidInput(format!(
@@ -270,8 +312,8 @@ pub(crate) fn run_import(db_path: &Path, source: &str) -> Result<ImportResponse,
         }
         let inserted_here = tx.execute(
             r#"
-            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
             "#,
             rusqlite::params![
                 row.id,
@@ -286,6 +328,7 @@ pub(crate) fn run_import(db_path: &Path, source: &str) -> Result<ImportResponse,
                 row.superseded_by,
                 row.retrieval_count,
                 row.last_retrieved_at,
+                row.importance,
             ],
         )?;
         if inserted_here == 0 {

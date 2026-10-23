@@ -243,9 +243,14 @@ impl Database {
 
     /// Insert a new memory with embedding.
     ///
+    /// Delegates to [`Self::insert_with_importance`] with the `medium` default.
+    /// The `importance` column is written explicitly there rather than left to
+    /// the schema DEFAULT, so the two insert paths cannot drift.
+    ///
     /// # Errors
     ///
     /// Returns error if the embedding has invalid dimensions or database write fails.
+    #[allow(dead_code)] // Library API for consumers; every store add path goes through insert_with_importance so the column is never defaulted (issue #238)
     pub fn insert(
         &self,
         project_id: &str,
@@ -254,6 +259,41 @@ impl Database {
         metadata: Option<&str>,
         memory_type: &str,
         status: &str,
+    ) -> Result<String> {
+        self.insert_with_importance(
+            project_id,
+            content,
+            embedding,
+            metadata,
+            memory_type,
+            status,
+            "medium",
+        )
+    }
+
+    /// Insert a new memory with embedding and an explicit importance level.
+    ///
+    /// The single INSERT for a new row: [`Self::insert`] is this method with
+    /// the `medium` default, and the store's add path reaches it through
+    /// `MemoryStore::ingest_with_importance` so `vipune add --importance`
+    /// persists what it validated (issue #238). `importance` is bound, not
+    /// defaulted — the column is `NOT NULL DEFAULT 'medium'` with no CHECK
+    /// constraint, so an omitted column is a silent reset, which is how
+    /// `--importance` shipped as a no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the embedding has invalid dimensions or database write fails.
+    #[allow(clippy::too_many_arguments)] // signature mirrors insert(); 7/8 data fields map 1:1 to columns
+    pub fn insert_with_importance(
+        &self,
+        project_id: &str,
+        content: &str,
+        embedding: &[f32],
+        metadata: Option<&str>,
+        memory_type: &str,
+        status: &str,
+        importance: &str,
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
@@ -274,7 +314,7 @@ impl Database {
                 &now,
                 memory_type,
                 status,
-                "medium",
+                importance,
             ],
         )?;
 
@@ -286,6 +326,11 @@ impl Database {
     /// Production counterpart to [`insert`]: the lifecycle commands (prune,
     /// promote) need deterministic `created_at` values so eligibility rules
     /// such as "age > T" can be tested and reasoned about without sleeping.
+    ///
+    /// Keeps the `medium` default deliberately: it is not an add path (no CLI
+    /// or MCP call site routes a user-supplied importance here), so giving it
+    /// an importance parameter would invite a second, divergent notion of what
+    /// "the add path persists" means (issue #238).
     #[allow(clippy::too_many_arguments)] // signature mirrors insert(); 7/8 data fields map 1:1 to columns
     #[allow(dead_code)] // used by prune/promote lifecycle handlers in the binary target
     pub fn insert_with_time(

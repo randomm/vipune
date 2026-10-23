@@ -81,7 +81,19 @@ pub(crate) fn handle_add(
     }
 
     if let Some(old_id) = supersedes {
-        let new_id = store.supersede(project_id, text, metadata, memory_type_val, old_id)?;
+        // The `--supersedes` branch creates its own row inside the store's
+        // supersede transaction, so the validated level has to travel with it
+        // — an earlier shape of this handler returned before the add path ever
+        // looked at `importance`, and the new row silently took the column
+        // DEFAULT (issue #238).
+        let new_id = store.supersede_with_importance(
+            project_id,
+            text,
+            metadata,
+            memory_type_val,
+            old_id,
+            importance_val,
+        )?;
 
         if json {
             print_json(&AddResponse {
@@ -100,15 +112,14 @@ pub(crate) fn handle_add(
         IngestPolicy::ConflictAware
     };
 
-    let _ = importance_val; // validated; persistence lands with the importance column (sub-issue 2)
-
-    match store.ingest_with_type_status(
+    match store.ingest_with_importance(
         project_id,
         text,
         metadata,
         policy,
         memory_type_val,
         status_val,
+        importance_val,
     )? {
         AddResult::Added { id } => {
             if json {

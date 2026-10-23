@@ -29,8 +29,8 @@ use std::process::ExitCode;
 
 /// One fixture row in both directions: what `seed` inserts and what
 /// `fetch_all` reads back, so the round-trip asserts compare the seeded Vec
-/// directly against what each store reports. The 12 JSONL row fields keep the
-/// raw INSERT a field-by-field copy instead of a 13-argument call.
+/// directly against what each store reports. The 13 JSONL row fields keep the
+/// raw INSERT a field-by-field copy instead of a 14-argument call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SeedRow {
     id: String,
@@ -45,6 +45,7 @@ struct SeedRow {
     superseded_by: Option<String>,
     retrieval_count: i64,
     last_retrieved_at: Option<String>,
+    importance: String,
 }
 
 /// A distinct full-length embedding: non-uniform per row and per dimension,
@@ -59,19 +60,21 @@ fn blob_for(seed: usize) -> Vec<u8> {
 }
 
 /// The fixture store: 4 rows across 2 projects, exercising metadata,
-/// supersession, a non-default type/status, and retrieval telemetry.
+/// supersession, a non-default type/status, retrieval telemetry, and a
+/// non-default importance on every row (issue #228 — a fixture that left the
+/// column at its default could not tell "restored" from "reset").
 fn seed_fixture() -> Vec<SeedRow> {
-    let specs: [(&str, &str, &str, i64); 4] = [
-        ("r0", "proj-a", "row a0", 0),
-        ("r1", "proj-a", "row a1", 7),
-        ("r2", "proj-b", "row b1", 12),
-        ("r3", "proj-b", "row b2", 1),
+    let specs: [(&str, &str, &str, i64, &str); 4] = [
+        ("r0", "proj-a", "row a0", 0, "low"),
+        ("r1", "proj-a", "row a1", 7, "critical"),
+        ("r2", "proj-b", "row b1", 12, "high"),
+        ("r3", "proj-b", "row b2", 1, "medium"),
     ];
     let mut rows: Vec<SeedRow> = specs
         .iter()
         .enumerate()
         .map(
-            |(index, (id, project_id, content, retrieval_count))| SeedRow {
+            |(index, (id, project_id, content, retrieval_count, importance))| SeedRow {
                 id: (*id).to_string(),
                 project_id: (*project_id).to_string(),
                 content: (*content).to_string(),
@@ -84,6 +87,7 @@ fn seed_fixture() -> Vec<SeedRow> {
                 superseded_by: None,
                 retrieval_count: *retrieval_count,
                 last_retrieved_at: None,
+                importance: (*importance).to_string(),
             },
         )
         .collect();
@@ -102,8 +106,8 @@ fn seed(db_path: &Path, rows: &[SeedRow]) {
         db.conn()
             .execute(
                 r#"
-                INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                 "#,
                 rusqlite::params![
                     row.id,
@@ -118,6 +122,7 @@ fn seed(db_path: &Path, rows: &[SeedRow]) {
                     row.superseded_by,
                     row.retrieval_count,
                     row.last_retrieved_at,
+                    row.importance,
                 ],
             )
             .expect("seed row");
@@ -131,7 +136,7 @@ fn fetch_all(db_path: &Path) -> Vec<SeedRow> {
     let conn = rusqlite::Connection::open(db_path).expect("open for read");
     let mut stmt = conn
         .prepare(
-            "SELECT id, project_id, content, embedding, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at FROM memories ORDER BY id",
+            "SELECT id, project_id, content, embedding, metadata, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance FROM memories ORDER BY id",
         )
         .expect("prepare");
     stmt.query_map([], |r| {
@@ -148,6 +153,7 @@ fn fetch_all(db_path: &Path) -> Vec<SeedRow> {
             superseded_by: r.get(9)?,
             retrieval_count: r.get(10)?,
             last_retrieved_at: r.get(11)?,
+            importance: r.get(12)?,
         })
     })
     .expect("query")
@@ -236,8 +242,10 @@ fn test_export_then_import_roundtrip_is_byte_identical() {
     assert_eq!(response.inserted, seeded.len(), "inserted == seeded count");
     assert_eq!(response.skipped, 0);
 
-    // Byte-for-byte source → destination, all 12 columns: the seeded Vec is
+    // Byte-for-byte source → destination, all 13 columns: the seeded Vec is
     // the single expected value, compared directly with what each store says.
+    // `importance` is part of that comparison (issue #228) — a destination row
+    // reset to the column DEFAULT fails here, not silently.
     let source_rows = fetch_all(&src);
     let destination_rows = fetch_all(&dst);
     assert_eq!(source_rows, seeded, "fixture seeded what it declared");
@@ -245,6 +253,70 @@ fn test_export_then_import_roundtrip_is_byte_identical() {
         destination_rows, source_rows,
         "round trip must restore every column verbatim, embedding BLOB included"
     );
+}
+
+/// Issue #228 acceptance criterion: rows seeded at non-default importance
+/// survive `handle_export` → `handle_import` into a fresh database, and the
+/// exported file itself carries the key.
+///
+/// The byte-identity round trip above already covers this column-wise; this
+/// test names the regression so a future change that drops `importance` fails
+/// with an explanation instead of a generic struct-mismatch.
+#[test]
+fn test_export_then_handle_import_preserves_importance() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let src = dir.path().join("source.db");
+    let dst = dir.path().join("destination.db");
+    let export = dir.path().join("export.jsonl");
+    let seeded = seed_fixture();
+    seed(&src, &seeded);
+
+    handle_export(&src, &export, None, false).expect("export ok");
+
+    // The writer side: every row line carries the key, at the stored level.
+    let text = std::fs::read_to_string(&export).expect("read export");
+    let rows: Vec<Value> = text
+        .lines()
+        .skip(1)
+        .map(|l| serde_json::from_str(l).expect("row json"))
+        .collect();
+    for (seeded_row, row) in seeded.iter().zip(&rows) {
+        assert_eq!(
+            row["importance"], seeded_row.importance,
+            "export must write the row's own importance: {row}"
+        );
+    }
+
+    drop(Database::open(&dst).expect("create destination"));
+    let code = handle_import(&dst, export.to_str(), None, true).expect("import ok");
+    assert_eq!(code, ExitCode::SUCCESS);
+
+    let restored = fetch_all(&dst);
+    assert_eq!(restored.len(), seeded.len());
+    let levels: Vec<(&str, &str)> = restored
+        .iter()
+        .map(|r| (r.id.as_str(), r.importance.as_str()))
+        .collect();
+    assert_eq!(
+        levels,
+        vec![
+            ("r0", "low"),
+            ("r1", "critical"),
+            ("r2", "high"),
+            ("r3", "medium"),
+        ],
+        "import must restore each row's importance, not the column DEFAULT"
+    );
+
+    // And the read path reports the same thing `vipune get --json` would show.
+    let dst_db = Database::open(&dst).expect("open destination");
+    let memory = dst_db
+        .conn()
+        .query_row("SELECT importance FROM memories WHERE id = 'r1'", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .unwrap();
+    assert_eq!(memory, "critical");
 }
 
 #[test]
