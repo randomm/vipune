@@ -68,7 +68,7 @@ harness = false
 test = false
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.7"
 tempfile = "3.13"
 tokio = { version = "1", features = ["macros", "rt"] }
 
