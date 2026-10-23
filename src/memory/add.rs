@@ -3,8 +3,8 @@
 //! Split out of `crud.rs` (which keeps the read and update operations) for
 //! issue #238: `vipune add --importance` shipped as a silent no-op because the
 //! validated level was dropped one line above the call that inserted the row.
-//! Everything that creates a row now funnels through [`MemoryStore::add_impl`]
-//! and [`MemoryStore::insert_row`], so no entry point can learn to name a
+//! Every row the add path creates funnels through [`MemoryStore::add_impl`]
+//! and [`MemoryStore::insert_row`], so no add entry point can learn to name a
 //! different column set.
 
 use crate::embedding_profiles::EmbeddingRole;
@@ -15,15 +15,17 @@ use crate::sqlite::NewRow;
 
 use super::store::MemoryStore;
 
-/// The caller-supplied fields of a memory the store is about to create.
+/// The caller-supplied fields of a memory the store is about to create on the
+/// add path.
 ///
-/// The add path and the supersede path each create exactly one row, so they
-/// share this shape (the store-layer counterpart of the storage layer's
-/// `UpdateOptions`, and the sibling of [`UpdateParams`](crate::memory::UpdateParams)
-/// on the write side). Grouping the fields keeps the internal helpers short
-/// without a `too_many_arguments` suppression, and keeps the importance level a
-/// named value at every call site — the trailing argument `--importance`
-/// dropped on its way to the column in issue #238.
+/// The supersede path is a separate entry point that takes its fields as
+/// plain parameters, so this shape belongs to the add entry points only (the
+/// store-layer counterpart of the storage layer's `UpdateOptions`, and the
+/// sibling of [`UpdateParams`](crate::memory::UpdateParams) on the write
+/// side). Grouping the fields keeps the internal helpers short without a
+/// `too_many_arguments` suppression, and keeps the importance level a named
+/// value at every call site — the trailing argument `--importance` dropped on
+/// its way to the column in issue #238.
 #[derive(Clone, Copy, Debug)]
 pub struct NewMemory<'a> {
     /// Project identifier (e.g., git repo URL or user-defined).
@@ -48,7 +50,8 @@ impl MemoryStore {
     /// passes a parsed [`MemoryImportance`], so the canonical `as_str` spelling
     /// is what reaches the column (the level decides the `high`/`critical`
     /// prune exemption). A caller that expresses no level passes `None` and
-    /// gets `medium`, the value the column's `NOT NULL DEFAULT` holds.
+    /// gets [`MemoryImportance::default`], which [`Self::insert_row`] binds
+    /// explicitly — never the column's `NOT NULL DEFAULT`.
     pub(crate) fn add_impl(
         &mut self,
         row: &NewMemory<'_>,
@@ -103,38 +106,26 @@ impl MemoryStore {
 
     /// Insert one new row, binding `importance` explicitly.
     ///
-    /// Two call sites, one INSERT: a caller that names no level takes the public
-    /// `Database::insert` wrapper, which delegates to the same
-    /// `insert_with_importance` below with [`MemoryImportance::Medium`] bound by
-    /// name (not left to the column's `NOT NULL DEFAULT`), so neither branch can
-    /// learn to write a different column set.
+    /// One call, one INSERT: a caller that named no level gets
+    /// [`MemoryImportance::default`], bound by name like any explicit level —
+    /// the column's `NOT NULL DEFAULT` never supplies it (issue #238).
     fn insert_row(
         &self,
         row: &NewMemory<'_>,
         embedding: &[f32],
         importance: Option<MemoryImportance>,
     ) -> Result<String, Error> {
-        let (memory_type, status) = (row.memory_type.as_str(), row.status.as_str());
-        match importance {
-            Some(level) => Ok(self.db.insert_with_importance(
-                &NewRow {
-                    project_id: row.project_id,
-                    content: row.content,
-                    metadata: row.metadata,
-                    memory_type,
-                    status,
-                    importance: level.as_str(),
-                },
-                embedding,
-            )?),
-            None => Ok(self.db.insert(
-                row.project_id,
-                row.content,
-                embedding,
-                row.metadata,
-                memory_type,
-                status,
-            )?),
-        }
+        let level = importance.unwrap_or_default();
+        Ok(self.db.insert_with_importance(
+            &NewRow {
+                project_id: row.project_id,
+                content: row.content,
+                metadata: row.metadata,
+                memory_type: row.memory_type.as_str(),
+                status: row.status.as_str(),
+                importance: level.as_str(),
+            },
+            embedding,
+        )?)
     }
 }

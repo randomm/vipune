@@ -176,31 +176,22 @@ impl MemoryStore {
 
         let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
 
-        // Two call sites, one INSERT: `Database::supersede` is the public
-        // defaulting wrapper and delegates to `supersede_with_importance` with
-        // `medium`, so the branches cannot write different column sets — and a
-        // caller that names no level keeps using the API it already used.
-        match importance {
-            Some(level) => Ok(self.db.supersede_with_importance(
-                &NewRow {
-                    project_id,
-                    content,
-                    metadata,
-                    memory_type: memory_type.as_str(),
-                    status: "active",
-                    importance: level.as_str(),
-                },
-                &embedding,
-                old_id,
-            )?),
-            None => Ok(self.db.supersede(
+        // One call, one INSERT, for both public entry points: a caller that
+        // named no level falls back to `MemoryImportance::default()` and the
+        // level is still bound by name on the INSERT, never left to the
+        // column's DEFAULT (issue #238).
+        let level = importance.unwrap_or_default();
+        Ok(self.db.supersede_with_importance(
+            &NewRow {
                 project_id,
                 content,
-                &embedding,
                 metadata,
-                memory_type.as_str(),
-                old_id,
-            )?),
-        }
+                memory_type: memory_type.as_str(),
+                status: "active",
+                importance: level.as_str(),
+            },
+            &embedding,
+            old_id,
+        )?)
     }
 }

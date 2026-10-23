@@ -1,9 +1,9 @@
 //! Database insert operations.
 //!
-//! Owns the column set of a new row: both new-row INSERTs below take a
-//! [`NewRow`], so the add path and the supersede path cannot learn to name
-//! different columns — the shape that made `--importance` a silent no-op in
-//! issue #238.
+//! Owns the add path's new-row INSERT. It takes a [`NewRow`] — the same
+//! column-set shape the supersede INSERT in [`super::supersede`] takes — so
+//! the two paths cannot learn to name different columns, the shape that made
+//! `--importance` a silent no-op in issue #238.
 
 use chrono::Utc;
 use rusqlite::params;
@@ -40,8 +40,8 @@ impl super::Database {
     /// Insert a new memory with embedding at the `medium` importance default.
     ///
     /// The entry point for a caller that names no level: it delegates to
-    /// [`Self::insert_with_importance`], which binds `medium` by name rather
-    /// than leaving the column to its `NOT NULL DEFAULT`.
+    /// [`Self::insert_with_importance`] with [`MemoryImportance::default`]
+    /// bound by name, not left to the column's `NOT NULL DEFAULT`.
     ///
     /// # Errors
     ///
@@ -62,7 +62,7 @@ impl super::Database {
                 metadata,
                 memory_type,
                 status,
-                importance: MemoryImportance::Medium.as_str(),
+                importance: MemoryImportance::default().as_str(),
             },
             embedding,
         )

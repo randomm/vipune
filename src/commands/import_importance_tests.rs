@@ -107,6 +107,32 @@ fn test_import_row_without_importance_key_defaults_to_medium() {
 }
 
 #[test]
+fn test_import_uppercase_importance_is_stored_canonically() {
+    // Hand-written exports carry whatever the author typed. The column has no
+    // CHECK constraint, so the canonical spelling is enforced here: the read
+    // side (`ImportanceLevel::parse`) and the prune `high`/`critical` literals
+    // only understand it.
+    let dir = tempfile::TempDir::new().unwrap();
+    let db_path = fresh_db(dir.path());
+    let file = write_file(
+        dir.path(),
+        "upper.jsonl",
+        &[row_line("upper-1", 1, Some(json!("HIGH")))],
+    );
+
+    let resp = run_import(&db_path, file.to_str().unwrap()).expect("HIGH must import");
+    assert_eq!(resp.inserted, 1);
+    assert_eq!(
+        query::<String>(
+            &db_path,
+            "SELECT importance FROM memories WHERE id = 'upper-1'"
+        ),
+        "high",
+        "the stored value must be the canonical spelling, not the input's casing"
+    );
+}
+
+#[test]
 fn test_import_rejects_malformed_importance_naming_the_line() {
     // The column has no CHECK constraint, so an "urgent" row would otherwise
     // import, break every read, and silently drop prune protection. Absent is
@@ -115,7 +141,11 @@ fn test_import_rejects_malformed_importance_naming_the_line() {
     let cases = [
         ("out-of-vocabulary", Some(json!("urgent")), "urgent"),
         ("empty", Some(json!("")), "Invalid importance"),
-        ("explicit null", Some(Value::Null), "null"),
+        (
+            "explicit null",
+            Some(Value::Null),
+            "importance must be one of low, medium, high, critical (got null)",
+        ),
     ];
 
     for (name, value, needle) in cases {

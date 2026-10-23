@@ -63,8 +63,10 @@ const IMPORT_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The level a row line carries when it names no `importance` key: the schema
 /// every export through v0.15.x wrote, and the column DEFAULT (migrate_v5).
+/// A key that IS present must name a level — an explicit JSON `null` is
+/// refused in [`parse_row`], so this default only ever covers a missing key.
 fn default_importance() -> String {
-    MemoryImportance::Medium.as_str().to_string()
+    MemoryImportance::default().as_str().to_string()
 }
 
 /// One JSONL row (13 columns; `memory_type` is the JSON name for the DB
@@ -126,7 +128,19 @@ fn parse_row(line: &str, line_no: usize) -> Result<(ImportRow, Vec<u8>), Error> 
         return Err(Error::InvalidInput(format!("line {}: empty row", line_no)));
     }
 
-    let mut row: ImportRow = serde_json::from_str(line)
+    // Distinguish an absent `importance` key (legacy file → default) from an
+    // explicit JSON `null` (malformed): serde collapses both to the field
+    // default, so the raw value is inspected before the row is deserialized.
+    let raw: serde_json::Value = serde_json::from_str(line)
+        .map_err(|e| Error::InvalidInput(format!("line {}: malformed JSON: {}", line_no, e)))?;
+    if raw.get("importance") == Some(&serde_json::Value::Null) {
+        return Err(Error::InvalidInput(format!(
+            "line {}: importance must be one of low, medium, high, critical (got null)",
+            line_no
+        )));
+    }
+
+    let mut row: ImportRow = serde_json::from_value(raw)
         .map_err(|e| Error::InvalidInput(format!("line {}: malformed JSON: {}", line_no, e)))?;
 
     row.importance = match MemoryImportance::from_str(&row.importance) {

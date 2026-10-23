@@ -75,7 +75,7 @@ pub use config::Config;
 pub use embedding::{EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine};
 pub use embedding_profiles::{BUILTIN_PROFILES, EmbeddingRole, ModelProfile, profile_for};
 pub use errors::Error;
-pub use memory::lifecycle::{MemoryStatus, MemoryType};
+pub use memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 pub use memory::store::{MAX_INPUT_LENGTH, MAX_SEARCH_LIMIT};
 pub use memory::{MemoryStore, NewMemory, UpdateParams};
 pub use memory_types::{

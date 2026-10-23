@@ -34,7 +34,7 @@ impl super::Database {
                 metadata,
                 memory_type,
                 status: "active",
-                importance: MemoryImportance::Medium.as_str(),
+                importance: MemoryImportance::default().as_str(),
             },
             embedding,
             old_id,
