@@ -32,6 +32,8 @@ mod doctor_projects_tests;
 mod export_tests;
 
 #[cfg(test)]
+mod import_importance_tests;
+#[cfg(test)]
 mod import_tests;
 
 #[cfg(test)]

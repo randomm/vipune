@@ -140,43 +140,9 @@ fn test_jsonl_header_fields_and_row_count() {
     assert_eq!(row["memory_type"], "fact");
     assert_eq!(row["id"], "r1");
     assert_eq!(row["project_id"], "projA");
-    // Every row carries the key, even one seeded without touching the column.
+    // The 13th key is there even for a row seeded without touching the column;
+    // that the row's OWN level reaches it is the round trip's job (four levels).
     assert_eq!(row["importance"], "medium");
-}
-
-/// Issue #228: the column value must reach the JSONL, not just the key.
-///
-/// `seed_raw` leaves `importance` at the column DEFAULT, so the levels below
-/// are written by an explicit UPDATE — a writer that dropped the 13th scanned
-/// column would report `medium` for all four rows.
-#[test]
-fn test_export_writes_each_rows_importance_verbatim() {
-    let (_dir, db_path) = create_test_db();
-    let db = Database::open(&db_path).unwrap();
-    let conn = db.conn();
-    let blob = vec_to_blob(&vec![0.5f32; 384]).unwrap();
-    let levels = ["low", "medium", "high", "critical"];
-    for (i, level) in levels.iter().enumerate() {
-        let id = format!("imp-{i}");
-        seed_raw(conn, &id, "p", "content", Some(&blob), 0, None);
-        conn.execute(
-            "UPDATE memories SET importance = ?1 WHERE id = ?2",
-            rusqlite::params![level, id],
-        )
-        .unwrap();
-    }
-
-    let out = _dir.path().join("export.jsonl");
-    let lines = export_lines(&db_path, &out);
-    assert_eq!(lines.len(), levels.len() + 1);
-    for (i, level) in levels.iter().enumerate() {
-        let row = &lines[i + 1];
-        assert_eq!(row["id"], format!("imp-{i}"));
-        assert_eq!(
-            row["importance"], *level,
-            "row {i} must export the importance it was stored with"
-        );
-    }
 }
 
 #[test]
@@ -400,11 +366,6 @@ fn test_write_jsonl_returns_row_count_not_header() {
     let header: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
     assert_eq!(header["model_id"], "model-a");
     assert_eq!(header["model_revision"], "rev-a");
-    // The JSONL row carries the scanned importance verbatim.
-    let row_b: Value = serde_json::from_str(text.lines().nth(2).unwrap()).unwrap();
-    assert_eq!(row_b["importance"], "critical");
-    let row_a: Value = serde_json::from_str(text.lines().nth(1).unwrap()).unwrap();
-    assert_eq!(row_a["importance"], "medium");
 }
 
 #[test]

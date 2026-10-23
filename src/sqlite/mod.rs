@@ -241,16 +241,15 @@ impl Database {
         Ok(Self { conn })
     }
 
-    /// Insert a new memory with embedding.
+    /// Insert a new memory with embedding at the `medium` importance default.
     ///
-    /// Delegates to [`Self::insert_with_importance`] with the `medium` default.
-    /// The `importance` column is written explicitly there rather than left to
-    /// the schema DEFAULT, so the two insert paths cannot drift.
+    /// The entry point for a caller that names no level: it delegates to
+    /// [`Self::insert_with_importance`], which binds `medium` by name rather
+    /// than leaving the column to its `NOT NULL DEFAULT`.
     ///
     /// # Errors
     ///
     /// Returns error if the embedding has invalid dimensions or database write fails.
-    #[allow(dead_code)] // Library API for consumers; every store add path goes through insert_with_importance so the column is never defaulted (issue #238)
     pub fn insert(
         &self,
         project_id: &str,
@@ -271,21 +270,18 @@ impl Database {
         )
     }
 
-    /// Insert a new memory with embedding and an explicit importance level.
+    /// Insert a new memory binding the `importance` column explicitly.
     ///
-    /// The single INSERT for a new row: [`Self::insert`] is this method with
-    /// the `medium` default, and the store's add path reaches it through
-    /// `MemoryStore::ingest_with_importance` so `vipune add --importance`
-    /// persists what it validated (issue #238). `importance` is bound, not
-    /// defaulted — the column is `NOT NULL DEFAULT 'medium'` with no CHECK
-    /// constraint, so an omitted column is a silent reset, which is how
-    /// `--importance` shipped as a no-op.
+    /// `vipune add --importance <level>` writes through here. The column is
+    /// named in the INSERT and bound to the caller's canonical level because
+    /// `prune` reads it for the `high`/`critical` exemption: an omitted column
+    /// silently reset every added row to the DEFAULT (issue #238).
     ///
     /// # Errors
     ///
     /// Returns error if the embedding has invalid dimensions or database write fails.
-    #[allow(clippy::too_many_arguments)] // signature mirrors insert(); 7/8 data fields map 1:1 to columns
-    pub fn insert_with_importance(
+    #[allow(clippy::too_many_arguments)] // signature mirrors insert() plus the importance level
+    pub(crate) fn insert_with_importance(
         &self,
         project_id: &str,
         content: &str,
@@ -326,11 +322,6 @@ impl Database {
     /// Production counterpart to [`insert`]: the lifecycle commands (prune,
     /// promote) need deterministic `created_at` values so eligibility rules
     /// such as "age > T" can be tested and reasoned about without sleeping.
-    ///
-    /// Keeps the `medium` default deliberately: it is not an add path (no CLI
-    /// or MCP call site routes a user-supplied importance here), so giving it
-    /// an importance parameter would invite a second, divergent notion of what
-    /// "the add path persists" means (issue #238).
     #[allow(clippy::too_many_arguments)] // signature mirrors insert(); 7/8 data fields map 1:1 to columns
     #[allow(dead_code)] // used by prune/promote lifecycle handlers in the binary target
     pub fn insert_with_time(

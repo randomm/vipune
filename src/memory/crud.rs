@@ -75,10 +75,6 @@ impl MemoryStore {
     /// Checks for similar existing memories before adding. If conflicts are found
     /// (similarity >= threshold), returns conflicts details without storing.
     ///
-    /// Adds at the `medium` importance default — see
-    /// [`Self::ingest_with_importance`] for the variant that carries an
-    /// operator-assigned level (issue #238).
-    ///
     /// # Arguments
     ///
     /// * `project_id` - Project identifier (e.g., git repo URL or user-defined)
@@ -116,16 +112,22 @@ impl MemoryStore {
             force,
             memory_type,
             status,
-            MemoryImportance::Medium,
+            None,
         )
     }
 
-    /// The single conflict-aware add: the INSERT itself lives in
-    /// `Database::insert_with_importance`, reached only from here, so every
-    /// add path — including `vipune add --importance` — writes the same
-    /// columns and cannot diverge.
+    /// The conflict-aware add body behind [`Self::add_with_conflict`] and
+    /// [`Self::ingest_with_importance`], so the two cannot learn to write
+    /// different column sets — the shape `--importance` shipped as a no-op in
+    /// issue #238.
+    ///
+    /// `force` bypasses the similarity gate. A caller that took `--importance`
+    /// passes a parsed [`MemoryImportance`], so the canonical `as_str` spelling
+    /// is what reaches the column (the level decides the `high`/`critical`
+    /// prune exemption). A caller that expresses no level passes `None` and
+    /// gets `medium`, the value the column's `NOT NULL DEFAULT` holds.
     #[allow(clippy::too_many_arguments)] // mirrors add_with_conflict() plus the importance level
-    fn add_impl(
+    pub(crate) fn add_impl(
         &mut self,
         project_id: &str,
         content: &str,
@@ -133,24 +135,23 @@ impl MemoryStore {
         force: bool,
         memory_type: MemoryType,
         status: MemoryStatus,
-        importance: MemoryImportance,
+        importance: Option<MemoryImportance>,
     ) -> Result<AddResult, Error> {
         Self::validate_input_length(content)?;
 
         let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
         let memory_type_str = memory_type.as_str();
         let status_str = status.as_str();
-        let importance_str = importance.as_str();
 
         if force {
-            let id = self.db.insert_with_importance(
+            let id = self.insert_row(
                 project_id,
                 content,
                 &embedding,
                 metadata,
                 memory_type_str,
                 status_str,
-                importance_str,
+                importance,
             )?;
             return Ok(AddResult::Added { id });
         }
@@ -168,14 +169,14 @@ impl MemoryStore {
             .collect();
 
         if conflicts.is_empty() {
-            let id = self.db.insert_with_importance(
+            let id = self.insert_row(
                 project_id,
                 content,
                 &embedding,
                 metadata,
                 memory_type_str,
                 status_str,
-                importance_str,
+                importance,
             )?;
             Ok(AddResult::Added { id })
         } else {
@@ -246,10 +247,6 @@ impl MemoryStore {
     }
 
     /// Ingest with explicit memory type and status.
-    ///
-    /// Uses the `medium` importance default; [`Self::ingest_with_importance`]
-    /// is the variant the CLI add path calls with the operator's validated
-    /// level (issue #238).
     #[must_use = "handle the error or results may be lost"]
     pub fn ingest_with_type_status(
         &mut self,
@@ -260,26 +257,20 @@ impl MemoryStore {
         memory_type: MemoryType,
         status: MemoryStatus,
     ) -> Result<AddResult, Error> {
-        self.ingest_with_importance(
-            project_id,
-            content,
-            metadata,
-            policy,
-            memory_type,
-            status,
-            MemoryImportance::Medium,
-        )
+        match policy {
+            IngestPolicy::ConflictAware => {
+                self.add_with_conflict(project_id, content, metadata, false, memory_type, status)
+            }
+            IngestPolicy::Force => {
+                self.add_with_conflict(project_id, content, metadata, true, memory_type, status)
+            }
+        }
     }
 
     /// Ingest with explicit memory type, status, and operator-assigned
-    /// importance.
-    ///
-    /// This is the add path `vipune add` drives. Before issue #238 the CLI
-    /// validated `--importance` and then discarded it, so every row landed on
-    /// the column DEFAULT and the flag silently cost the user the prune
-    /// protection that keys off `high`/`critical`. The value here is a parsed
-    /// [`MemoryImportance`], so what reaches SQLite is the canonical spelling
-    /// (`as_str`), never the raw flag string.
+    /// importance — the add path `vipune add` drives. The value is a parsed
+    /// [`MemoryImportance`], so SQLite gets the canonical `as_str` spelling
+    /// rather than the raw flag string (issue #238).
     #[allow(clippy::too_many_arguments)] // mirrors ingest_with_type_status() plus the importance level
     #[must_use = "handle the error or results may be lost"]
     pub fn ingest_with_importance(
@@ -292,25 +283,48 @@ impl MemoryStore {
         status: MemoryStatus,
         importance: MemoryImportance,
     ) -> Result<AddResult, Error> {
-        match policy {
-            IngestPolicy::ConflictAware => self.add_impl(
+        self.add_impl(
+            project_id,
+            content,
+            metadata,
+            policy == IngestPolicy::Force,
+            memory_type,
+            status,
+            Some(importance),
+        )
+    }
+
+    /// Insert one new row, binding `importance` when the caller named a level
+    /// and taking `Database::insert` (the `medium` default) when it did not.
+    #[allow(clippy::too_many_arguments)] // the full column set of a new row
+    fn insert_row(
+        &self,
+        project_id: &str,
+        content: &str,
+        embedding: &[f32],
+        metadata: Option<&str>,
+        memory_type: &str,
+        status: &str,
+        importance: Option<MemoryImportance>,
+    ) -> Result<String, Error> {
+        match importance {
+            Some(level) => Ok(self.db.insert_with_importance(
                 project_id,
                 content,
+                embedding,
                 metadata,
-                false,
                 memory_type,
                 status,
-                importance,
-            ),
-            IngestPolicy::Force => self.add_impl(
+                level.as_str(),
+            )?),
+            None => Ok(self.db.insert(
                 project_id,
                 content,
+                embedding,
                 metadata,
-                true,
                 memory_type,
                 status,
-                importance,
-            ),
+            )?),
         }
     }
 

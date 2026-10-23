@@ -81,11 +81,8 @@ pub(crate) fn handle_add(
     }
 
     if let Some(old_id) = supersedes {
-        // The `--supersedes` branch creates its own row inside the store's
-        // supersede transaction, so the validated level has to travel with it
-        // — an earlier shape of this handler returned before the add path ever
-        // looked at `importance`, and the new row silently took the column
-        // DEFAULT (issue #238).
+        // This branch creates its own row inside the store's supersede
+        // transaction, so the validated level has to travel with it (issue #238).
         let new_id = store.supersede_with_importance(
             project_id,
             text,

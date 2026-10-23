@@ -163,7 +163,7 @@ struct ExportJsonlRow {
     retrieval_count: i64,
     /// Last retrieval timestamp, or JSON null.
     last_retrieved_at: Option<String>,
-    /// Operator-assigned importance, restored verbatim (issue #228).
+    /// Operator-assigned importance, restored verbatim on import (issue #228).
     importance: String,
 }
 

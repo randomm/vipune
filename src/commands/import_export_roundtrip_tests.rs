@@ -61,8 +61,8 @@ fn blob_for(seed: usize) -> Vec<u8> {
 
 /// The fixture store: 4 rows across 2 projects, exercising metadata,
 /// supersession, a non-default type/status, retrieval telemetry, and a
-/// non-default importance on every row (issue #228 — a fixture that left the
-/// column at its default could not tell "restored" from "reset").
+/// non-default importance on every row — a fixture that left the column at its
+/// default could not tell "restored" from "reset" (issue #228).
 fn seed_fixture() -> Vec<SeedRow> {
     let specs: [(&str, &str, &str, i64, &str); 4] = [
         ("r0", "proj-a", "row a0", 0, "low"),
@@ -244,8 +244,8 @@ fn test_export_then_import_roundtrip_is_byte_identical() {
 
     // Byte-for-byte source → destination, all 13 columns: the seeded Vec is
     // the single expected value, compared directly with what each store says.
-    // `importance` is part of that comparison (issue #228) — a destination row
-    // reset to the column DEFAULT fails here, not silently.
+    // `importance` is one of them (issue #228): a destination row reset to the
+    // column DEFAULT — what the 12-column INSERT did — fails here, not silently.
     let source_rows = fetch_all(&src);
     let destination_rows = fetch_all(&dst);
     assert_eq!(source_rows, seeded, "fixture seeded what it declared");
@@ -253,70 +253,6 @@ fn test_export_then_import_roundtrip_is_byte_identical() {
         destination_rows, source_rows,
         "round trip must restore every column verbatim, embedding BLOB included"
     );
-}
-
-/// Issue #228 acceptance criterion: rows seeded at non-default importance
-/// survive `handle_export` → `handle_import` into a fresh database, and the
-/// exported file itself carries the key.
-///
-/// The byte-identity round trip above already covers this column-wise; this
-/// test names the regression so a future change that drops `importance` fails
-/// with an explanation instead of a generic struct-mismatch.
-#[test]
-fn test_export_then_handle_import_preserves_importance() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let src = dir.path().join("source.db");
-    let dst = dir.path().join("destination.db");
-    let export = dir.path().join("export.jsonl");
-    let seeded = seed_fixture();
-    seed(&src, &seeded);
-
-    handle_export(&src, &export, None, false).expect("export ok");
-
-    // The writer side: every row line carries the key, at the stored level.
-    let text = std::fs::read_to_string(&export).expect("read export");
-    let rows: Vec<Value> = text
-        .lines()
-        .skip(1)
-        .map(|l| serde_json::from_str(l).expect("row json"))
-        .collect();
-    for (seeded_row, row) in seeded.iter().zip(&rows) {
-        assert_eq!(
-            row["importance"], seeded_row.importance,
-            "export must write the row's own importance: {row}"
-        );
-    }
-
-    drop(Database::open(&dst).expect("create destination"));
-    let code = handle_import(&dst, export.to_str(), None, true).expect("import ok");
-    assert_eq!(code, ExitCode::SUCCESS);
-
-    let restored = fetch_all(&dst);
-    assert_eq!(restored.len(), seeded.len());
-    let levels: Vec<(&str, &str)> = restored
-        .iter()
-        .map(|r| (r.id.as_str(), r.importance.as_str()))
-        .collect();
-    assert_eq!(
-        levels,
-        vec![
-            ("r0", "low"),
-            ("r1", "critical"),
-            ("r2", "high"),
-            ("r3", "medium"),
-        ],
-        "import must restore each row's importance, not the column DEFAULT"
-    );
-
-    // And the read path reports the same thing `vipune get --json` would show.
-    let dst_db = Database::open(&dst).expect("open destination");
-    let memory = dst_db
-        .conn()
-        .query_row("SELECT importance FROM memories WHERE id = 'r1'", [], |r| {
-            r.get::<_, String>(0)
-        })
-        .unwrap();
-    assert_eq!(memory, "critical");
 }
 
 #[test]

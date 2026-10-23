@@ -26,7 +26,7 @@ fn b64(blob: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(blob)
 }
 
-#[allow(clippy::too_many_arguments)] // mirrors the 12 legacy JSONL row fields
+#[allow(clippy::too_many_arguments)] // mirrors the 12 JSONL row fields
 fn make_row_json(
     id: &str,
     project_id: &str,
@@ -77,38 +77,6 @@ fn make_row_json(
     }
     s.push('}');
     s
-}
-
-/// Re-serialize a row line with an explicit top-level `importance` key.
-///
-/// `make_row_json` deliberately keeps building the 12-field shape every export
-/// file from v0.10.0–v0.15.x has — that is the back-compat contract of issue
-/// #228 — so tests that exercise the 13-field shape `vipune export` writes
-/// today add the key here instead of changing the shared builder.
-fn with_importance(row_json: &str, importance: Option<&str>) -> String {
-    let mut value: serde_json::Value = serde_json::from_str(row_json).expect("row json");
-    match importance {
-        Some(level) => {
-            value["importance"] = serde_json::Value::String(level.to_string());
-        }
-        None => {
-            // Explicit legacy shape: no key at all (not a null one).
-            value
-                .as_object_mut()
-                .expect("row object")
-                .remove("importance");
-        }
-    }
-    value.to_string()
-}
-
-/// Read the stored `importance` of one row straight from SQLite.
-fn stored_importance(db_path: &std::path::Path, id: &str) -> String {
-    let conn = rusqlite::Connection::open(db_path).unwrap();
-    conn.query_row("SELECT importance FROM memories WHERE id = ?", [id], |r| {
-        r.get::<_, String>(0)
-    })
-    .unwrap()
 }
 
 /// Canonical header: the key spelling `export::write_jsonl` actually emits.
@@ -215,9 +183,7 @@ fn test_import_inserts_row_byte_identical() {
     // Raw BLOB byte-identity (not cosine, not decoded vec).
     assert_eq!(raw_row_blob(&db_path, "id-1"), blob);
 
-    // All other columns verbatim. This row line has no `importance` key (the
-    // shape every file through v0.15.x carries); the dedicated importance
-    // tests below pin what that omission restores.
+    // All other 12 columns verbatim.
     let conn = rusqlite::Connection::open(&db_path).unwrap();
     let row = conn
         .query_row(
@@ -249,230 +215,6 @@ fn test_import_inserts_row_byte_identical() {
     assert_eq!(row.7, None);
     assert_eq!(row.8, 7);
     assert_eq!(row.9, Some("2024-01-03T00:00:00Z".to_string()));
-}
-
-#[test]
-fn test_import_restores_importance_verbatim() {
-    // Issue #228: the live write path is `run_import`'s in-transaction INSERT.
-    // Before the fix it named 12 columns, so SQLite applied the column DEFAULT
-    // and every restored row silently became 'medium'.
-    let dir = make_db();
-    let db_path = dir.path().join("test.db");
-    let blob = blob_of(&test_embedding());
-
-    let mut jsonl = String::new();
-    for (i, level) in ["low", "medium", "high", "critical"].iter().enumerate() {
-        jsonl.push_str(&with_importance(
-            &make_row_json(
-                &format!("imp-{i}"),
-                "proj",
-                "content",
-                None,
-                &blob,
-                "2024-01-01T00:00:00Z",
-                "2024-01-02T00:00:00Z",
-                "fact",
-                "active",
-                None,
-                0,
-                None,
-            ),
-            Some(level),
-        ));
-        jsonl.push('\n');
-    }
-    let file = dir.path().join("importance.jsonl");
-    std::fs::write(&file, format!("{}\n{}", header(4), jsonl)).unwrap();
-
-    let resp = import::run_import(&db_path, file.to_str().unwrap()).unwrap();
-    assert_eq!(resp.inserted, 4);
-
-    for (i, level) in ["low", "medium", "high", "critical"].iter().enumerate() {
-        assert_eq!(
-            stored_importance(&db_path, &format!("imp-{i}")),
-            *level,
-            "importance must survive the import write path verbatim"
-        );
-    }
-}
-
-#[test]
-fn test_import_normalizes_importance_case() {
-    // `MemoryImportance::from_str` is case-insensitive and the stored column is
-    // compared against lowercase literals by prune and parsed by
-    // `ImportanceLevel::parse`, so what lands in the column is the canonical
-    // spelling, not the raw JSON value.
-    let dir = make_db();
-    let db_path = dir.path().join("test.db");
-    let blob = blob_of(&test_embedding());
-
-    let row = with_importance(
-        &make_row_json(
-            "case-1",
-            "proj",
-            "content",
-            None,
-            &blob,
-            "2024-01-01T00:00:00Z",
-            "2024-01-02T00:00:00Z",
-            "fact",
-            "active",
-            None,
-            0,
-            None,
-        ),
-        Some("CRITICAL"),
-    );
-    let file = dir.path().join("case.jsonl");
-    std::fs::write(&file, format!("{}\n{}\n", header(1), row)).unwrap();
-
-    import::run_import(&db_path, file.to_str().unwrap()).unwrap();
-    assert_eq!(stored_importance(&db_path, "case-1"), "critical");
-}
-
-#[test]
-fn test_import_row_without_importance_key_defaults_to_medium() {
-    // Back-compat (issue #228 AC): every file written by v0.10.0–v0.15.x has no
-    // `importance` key. Those files must keep importing — no new required
-    // field — and land on the column DEFAULT they always landed on.
-    let dir = make_db();
-    let db_path = dir.path().join("test.db");
-    let blob = blob_of(&test_embedding());
-
-    let legacy_row = with_importance(
-        &make_row_json(
-            "legacy-1",
-            "proj",
-            "content",
-            None,
-            &blob,
-            "2024-01-01T00:00:00Z",
-            "2024-01-02T00:00:00Z",
-            "fact",
-            "active",
-            None,
-            0,
-            None,
-        ),
-        None,
-    );
-    assert!(
-        !legacy_row.contains("importance"),
-        "fixture must be the key-free legacy shape: {legacy_row}"
-    );
-    let file = dir.path().join("legacy.jsonl");
-    std::fs::write(&file, format!("{}\n{}\n", header(1), legacy_row)).unwrap();
-
-    let resp = import::run_import(&db_path, file.to_str().unwrap()).unwrap();
-    assert_eq!(resp.inserted, 1, "a key-free legacy row still imports");
-    assert_eq!(stored_importance(&db_path, "legacy-1"), "medium");
-}
-
-#[test]
-fn test_import_rejects_out_of_vocabulary_importance_all_or_nothing() {
-    // The column has no CHECK constraint, so an "urgent" row would import and
-    // then break every read (`ImportanceLevel::parse` errors) and silently
-    // remove prune protection. Import refuses it, naming the line, and writes
-    // nothing — including the valid row that shares the file with it.
-    let dir = make_db();
-    let db_path = dir.path().join("test.db");
-    let blob = blob_of(&test_embedding());
-
-    let build = |id: &str, level: Option<&str>| {
-        with_importance(
-            &make_row_json(
-                id,
-                "proj",
-                "content",
-                None,
-                &blob,
-                "2024-01-01T00:00:00Z",
-                "2024-01-02T00:00:00Z",
-                "fact",
-                "active",
-                None,
-                0,
-                None,
-            ),
-            level,
-        )
-    };
-    let file = dir.path().join("bad.jsonl");
-    std::fs::write(
-        &file,
-        format!(
-            "{}\n{}\n{}\n",
-            header(2),
-            build("ok-1", None),
-            build("bad-1", Some("urgent"))
-        ),
-    )
-    .unwrap();
-
-    let err = import::run_import(&db_path, file.to_str().unwrap())
-        .expect_err("an out-of-vocabulary importance must be refused");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("line 3"),
-        "the error must name the offending line (header is line 1): {msg}"
-    );
-    assert!(
-        msg.contains("urgent"),
-        "the error must name the rejected value: {msg}"
-    );
-    assert_eq!(
-        row_count(&db_path),
-        0,
-        "all-or-nothing: the valid row must not be written either"
-    );
-}
-
-#[test]
-fn test_import_rejects_empty_and_null_importance() {
-    // Absent is the legacy default; present-but-empty and an explicit JSON null
-    // are malformed values, not "no opinion".
-    let dir = make_db();
-    let db_path = dir.path().join("test.db");
-    let blob = blob_of(&test_embedding());
-
-    let build = |id: &str| {
-        make_row_json(
-            id,
-            "proj",
-            "content",
-            None,
-            &blob,
-            "2024-01-01T00:00:00Z",
-            "2024-01-02T00:00:00Z",
-            "fact",
-            "active",
-            None,
-            0,
-            None,
-        )
-    };
-
-    let empty = with_importance(&build("empty-1"), Some(""));
-    let file = dir.path().join("empty.jsonl");
-    std::fs::write(&file, format!("{}\n{}\n", header(1), empty)).unwrap();
-    let err = import::run_import(&db_path, file.to_str().unwrap())
-        .expect_err("an empty importance must be refused");
-    assert!(
-        err.to_string().contains("line 2"),
-        "empty importance must name its line: {err}"
-    );
-
-    let mut null_value: serde_json::Value = serde_json::from_str(&build("null-1")).unwrap();
-    null_value["importance"] = serde_json::Value::Null;
-    let file = dir.path().join("null.jsonl");
-    std::fs::write(&file, format!("{}\n{}\n", header(1), null_value)).unwrap();
-    let err = import::run_import(&db_path, file.to_str().unwrap())
-        .expect_err("a JSON null importance must be refused, not defaulted");
-    assert!(
-        err.to_string().contains("line 2"),
-        "null importance must name its line: {err}"
-    );
-    assert_eq!(row_count(&db_path), 0, "nothing written");
 }
 
 #[test]

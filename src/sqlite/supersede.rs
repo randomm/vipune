@@ -7,15 +7,15 @@ use uuid::Uuid;
 use super::{Error, Result, vec_to_blob};
 
 impl super::Database {
-    /// Atomically supersede an old memory with a new one.
-    ///
-    /// Delegates to [`Self::supersede_with_importance`] with the `medium`
-    /// default; both share one INSERT so the two cannot drift.
+    /// Atomically supersede an old memory with a new one at the `medium`
+    /// importance default.
     ///
     /// In a single transaction:
     /// 1. Inserts the new memory
     /// 2. Sets old memory's status to 'superseded' and superseded_by to new ID
-    #[allow(dead_code)] // Library API for consumers; the store's supersede path goes through supersede_with_importance so the column is never defaulted (issue #238)
+    ///
+    /// Delegates to [`Self::supersede_with_importance`], the one supersede
+    /// INSERT, so the two paths cannot drift.
     pub fn supersede(
         &self,
         project_id: &str,
@@ -40,17 +40,13 @@ impl super::Database {
     /// importance level.
     ///
     /// The new row's `importance` is bound, not left to the column DEFAULT:
-    /// `vipune add --supersedes <id> --importance critical` creates that new
-    /// row, and an omitted column silently reset the level the operator just
-    /// asked for — and with it the prune protection that keys off it
-    /// (issue #238).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the memory to supersede does not exist, belongs to
-    /// another project, or the transaction fails.
-    #[allow(clippy::too_many_arguments)] // signature mirrors supersede(); data fields map 1:1 to columns
-    pub fn supersede_with_importance(
+    /// `vipune add --supersedes <id> --importance critical` creates that row
+    /// through here, and an omitted column silently reset the level the
+    /// operator had just asked for — with it the prune protection that keys
+    /// off `high`/`critical` (issue #238). The caller supplies the canonical
+    /// spelling.
+    #[allow(clippy::too_many_arguments)] // signature mirrors supersede() plus the importance level
+    pub(crate) fn supersede_with_importance(
         &self,
         project_id: &str,
         content: &str,

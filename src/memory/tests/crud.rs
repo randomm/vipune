@@ -227,120 +227,91 @@ fn test_list_by_project() {
     assert_eq!(memories_b.len(), 1);
 }
 
-/// Issue #238: `vipune add --importance <level>` must persist what it
-/// validated.
-///
-/// The flag was parsed, checked against the vocabulary, and then discarded
+use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
+use crate::memory::store::MemoryStore;
+use crate::memory_types::{AddResult, IngestPolicy};
+
+/// Issue #238: the flag was parsed, validated, and then discarded
 /// (`let _ = importance_val;`), so every added row took the column's
-/// `NOT NULL DEFAULT 'medium'`. The consequence was not cosmetic: prune's
-/// hard exclusion keys off `high`/`critical`, so the operator paid for
-/// protection they never got. These tests drive the store's add path — the one
-/// the CLI handler calls — and read the column back raw, so a future refactor
-/// that drops the binding fails here rather than in someone's prune.
-fn stored_importance(db: &Database, id: &str) -> String {
-    db.conn()
-        .query_row(
-            "SELECT importance FROM memories WHERE id = ?",
-            [id],
-            |row| row.get::<_, String>(0),
-        )
-        .unwrap_or_else(|e| panic!("no row for {id}: {e}"))
+/// `NOT NULL DEFAULT 'medium'` and lost the `high`/`critical` prune exemption
+/// that reads the same column. These drive the store's add path (the one
+/// `handle_add` calls) and read the level back through `MemoryStore::get`.
+fn added_importance(store: &MemoryStore, id: &str, project: &str) -> String {
+    store
+        .get(id, project)
+        .expect("get")
+        .unwrap_or_else(|| panic!("row {id} was not stored"))
+        .importance
+}
+
+/// Add past the similarity gate and return the new id. `None` exercises the
+/// entry point that expresses no level; the rest pass a parsed one.
+fn add(
+    store: &mut MemoryStore,
+    project: &str,
+    content: &str,
+    importance: Option<MemoryImportance>,
+) -> String {
+    let result = match importance {
+        Some(level) => store.ingest_with_importance(
+            project,
+            content,
+            None,
+            IngestPolicy::Force,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+            level,
+        ),
+        None => store.ingest_with_type_status(
+            project,
+            content,
+            None,
+            IngestPolicy::Force,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        ),
+    }
+    .expect("forced add must succeed");
+    match result {
+        AddResult::Added { id } => id,
+        other => panic!("a forced add stores the row, got {other:?}"),
+    }
 }
 
 #[test]
-fn add_with_importance_persists_each_level_verbatim() {
-    use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
-    use crate::memory::store::MemoryStore;
-    use crate::memory_types::IngestPolicy;
-
-    let levels = [
-        MemoryImportance::Low,
-        MemoryImportance::Medium,
-        MemoryImportance::High,
-        MemoryImportance::Critical,
+fn add_persists_the_importance_it_was_given() {
+    let mut store = MemoryStore::test_store();
+    // `medium` twice on purpose: once through the defaulting entry point, once
+    // through the level-carrying one, which is how the CLI's omitted-flag
+    // default reaches the column.
+    let cases = [
+        (None, "medium"),
+        (Some(MemoryImportance::Medium), "medium"),
+        (Some(MemoryImportance::Low), "low"),
+        (Some(MemoryImportance::High), "high"),
+        (Some(MemoryImportance::Critical), "critical"),
     ];
-
-    for (i, level) in levels.iter().enumerate() {
-        let mut store = MemoryStore::test_store();
-        let content = format!("importance probe {i}: {}", level.as_str());
-        let result = store
-            .ingest_with_importance(
-                "imp-proj",
-                &content,
-                None,
-                // Force skips the similarity gate so the row is always written;
-                // the write path is the same one the non-forced branch takes.
-                IngestPolicy::Force,
-                MemoryType::Fact,
-                MemoryStatus::Active,
-                *level,
-            )
-            .unwrap();
-        let id = match result {
-            crate::memory_types::AddResult::Added { id } => id,
-            other => panic!("forced add must store the row, got {other:?}"),
-        };
-
+    for (i, (level, expected)) in cases.iter().enumerate() {
+        let id = add(
+            &mut store,
+            "imp-proj",
+            &format!("importance probe {i}"),
+            *level,
+        );
         assert_eq!(
-            stored_importance(&store.db, &id),
-            level.as_str(),
-            "--importance {} must reach the column, not the DEFAULT",
-            level.as_str(),
+            added_importance(&store, &id, "imp-proj"),
+            *expected,
+            "the level the operator named must reach the column, not its DEFAULT"
         );
     }
 }
 
 #[test]
-fn add_without_an_explicit_level_stores_medium() {
-    // The default the operator gets when they say nothing. Pinning it here
-    // means the `medium` literal exists in exactly one place per layer, so a
-    // later change to the vocabulary cannot be half-applied.
-    use crate::memory::lifecycle::{MemoryStatus, MemoryType};
-    use crate::memory::store::MemoryStore;
-    use crate::memory_types::IngestPolicy;
-
-    let mut store = MemoryStore::test_store();
-    let id = match store
-        .ingest_with_type_status(
-            "imp-proj",
-            "no opinion expressed",
-            None,
-            IngestPolicy::Force,
-            MemoryType::Fact,
-            MemoryStatus::Active,
-        )
-        .unwrap()
-    {
-        crate::memory_types::AddResult::Added { id } => id,
-        other => panic!("forced add must store the row, got {other:?}"),
-    };
-
-    assert_eq!(stored_importance(&store.db, &id), "medium");
-}
-
-#[test]
 fn add_superseding_persists_the_importance_on_the_new_row() {
     // `--supersedes` is a second, independent add path: it inserts the new row
-    // inside Database::supersede's transaction, so it needs the binding too.
-    use crate::memory::lifecycle::{MemoryImportance, MemoryType};
-    use crate::memory::store::MemoryStore;
-
+    // inside the supersede transaction, so that INSERT needs the binding too.
     let mut store = MemoryStore::test_store();
-    let old_id = match store
-        .add_with_conflict(
-            "sup-proj",
-            "original fact",
-            None,
-            true,
-            MemoryType::Fact,
-            crate::memory::lifecycle::MemoryStatus::Active,
-        )
-        .unwrap()
-    {
-        crate::memory_types::AddResult::Added { id } => id,
-        other => panic!("forced add must store the row, got {other:?}"),
-    };
-
+    let old_id = add(&mut store, "sup-proj", "original fact", None);
     let new_id = store
         .supersede_with_importance(
             "sup-proj",
@@ -351,20 +322,16 @@ fn add_superseding_persists_the_importance_on_the_new_row() {
             MemoryImportance::Critical,
         )
         .unwrap();
-
     assert_eq!(
-        stored_importance(&store.db, &new_id),
+        added_importance(&store, &new_id, "sup-proj"),
         "critical",
         "the superseding row must carry the level the operator asked for"
     );
-    // The superseded row keeps its own level — supersede updates status and
-    // superseded_by, never importance.
-    assert_eq!(stored_importance(&store.db, &old_id), "medium");
-
-    // And the defaulting wrapper still lands on medium rather than sharing an
-    // accidental value with the variant above.
+    // The superseded row keeps its own level, and the defaulting wrapper lands
+    // on medium rather than sharing the variant's value by accident.
+    assert_eq!(added_importance(&store, &old_id, "sup-proj"), "medium");
     let plain_id = store
         .supersede("sup-proj", "third fact", None, MemoryType::Fact, &new_id)
         .unwrap();
-    assert_eq!(stored_importance(&store.db, &plain_id), "medium");
+    assert_eq!(added_importance(&store, &plain_id, "sup-proj"), "medium");
 }

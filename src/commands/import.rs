@@ -32,16 +32,13 @@
 //!   `memory_type`, `status`, `superseded_by` (nullable),
 //!   `retrieval_count`, `last_retrieved_at` (nullable), `importance`.
 //!
-//! `importance` (issue #228) is optional on the line: every file written by
-//! v0.10.0–v0.15.x predates the column being exported and carries no such key,
-//! so an absent key restores the column DEFAULT (`medium`) exactly as those
-//! files always have. When the key IS present the value is validated against
-//! [`MemoryImportance`] and written in its canonical spelling — the column has
-//! no CHECK constraint, so this is the only place an out-of-vocabulary value
-//! can be refused before it silently breaks search (`ImportanceLevel::parse`
-//! errors on every row it reads) and prune protection (which compares against
-//! the lowercase literals). An empty string and an explicit JSON `null` are
-//! malformed, not absent.
+//! `importance` is the one OPTIONAL field (issue #228): files written by
+//! v0.10.0–v0.15.x predate the column being exported, so an absent key means
+//! the `medium` DEFAULT those files always restored. A present key must name a
+//! level — the column has no CHECK constraint, so this is the only place to
+//! refuse an out-of-vocabulary value before it breaks the read side
+//! (`ImportanceLevel::parse`) and the prune literals. An empty string or an
+//! explicit JSON `null` is malformed, not absent.
 
 use crate::errors::Error;
 use crate::memory::lifecycle::MemoryImportance;
@@ -64,9 +61,8 @@ use crate::embedding::EMBEDDING_DIMS;
 /// `Duration::ZERO` for fast-fail.
 const IMPORT_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The `importance` a line carries when it has no `importance` key — the
-/// schema every export through v0.15.x wrote, and the column DEFAULT
-/// (migrate_v5) those files restored before this field existed (issue #228).
+/// The level a row line carries when it names no `importance` key: the schema
+/// every export through v0.15.x wrote, and the column DEFAULT (migrate_v5).
 fn default_importance() -> String {
     MemoryImportance::Medium.as_str().to_string()
 }
@@ -90,8 +86,8 @@ struct ImportRow {
     retrieval_count: i64,
     #[serde(default)]
     last_retrieved_at: Option<String>,
-    /// Optional for back-compat: a missing key means the legacy `medium`
-    /// default, never a NULL (the column is `NOT NULL`).
+    /// Optional for back-compat: an absent key means the `medium` default,
+    /// never a NULL — the column is `NOT NULL`.
     #[serde(default = "default_importance")]
     importance: String,
 }
@@ -119,13 +115,9 @@ fn read_source(source: &str) -> Result<String, Error> {
 ///
 /// Line numbers in errors are 1-based with the header as line 1.
 ///
-/// The `importance` field is validated here and rewritten to its canonical
-/// spelling (issue #228), so the INSERT downstream can bind it blind: the
-/// column has no CHECK constraint, so a value that survives this gate is one
-/// the read side (`ImportanceLevel::parse`) and prune's lowercase-literal
-/// exclusion both understand. An absent key was already filled with `medium`
-/// by serde; an empty string or an out-of-vocabulary value is an error naming
-/// the line, and the all-or-nothing rule means nothing is written.
+/// A present `importance` is validated here and rewritten to its canonical
+/// spelling, so the INSERT downstream binds it blind and both the read side and
+/// prune protection understand what lands (issue #228).
 fn parse_row(line: &str, line_no: usize) -> Result<(ImportRow, Vec<u8>), Error> {
     // Tolerate CRLF-terminated input (Windows-edited files): a trailing
     // `\r` would otherwise corrupt the last JSON field.
@@ -139,9 +131,7 @@ fn parse_row(line: &str, line_no: usize) -> Result<(ImportRow, Vec<u8>), Error> 
 
     row.importance = match MemoryImportance::from_str(&row.importance) {
         Ok(level) => level.as_str().to_string(),
-        // `from_str` already words the rejection; only the line number is
-        // added here, so the message reads like every other parse error in
-        // this module (`line N: ...`) rather than double-prefixing it.
+        // `from_str` words the rejection; only the line number is added.
         Err(Error::InvalidInput(msg)) => {
             return Err(Error::InvalidInput(format!("line {}: {msg}", line_no)));
         }

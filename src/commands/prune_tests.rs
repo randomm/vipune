@@ -298,62 +298,48 @@ fn test_prune_importance_medium_low_still_eligible_integration() {
 
 /// Issue #238: the level set **at add time** has to be the one prune reads.
 ///
-/// Every importance-exclusion test above seeds with `insert_with_time` and
-/// then `UPDATE`s the column, which proves the evaluator honours the column
-/// but not that `vipune add --importance critical` ever wrote it — and the
-/// bug was precisely that the flag was parsed, validated, dropped, and the row
-/// left on the column DEFAULT. So this row's level comes only from the store's
-/// add path, with no UPDATE touching `importance`.
+/// Every importance-exclusion test above seeds with `insert_with_time` and then
+/// `UPDATE`s the column — that proves the evaluator honours the column, not
+/// that `vipune add --importance critical` ever wrote it. Here the level comes
+/// only from the store's add path.
 #[test]
 fn test_add_time_importance_protects_from_prune() {
     use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
     use crate::memory::store::MemoryStore;
-    use crate::memory_types::IngestPolicy;
+    use crate::memory_types::{AddResult, IngestPolicy};
 
     let (_dir, db_path) = create_test_db();
-
-    // Add through the store — the same entry point `handle_add` calls.
     let mut store = MemoryStore::from_db_with_test_embedder(Database::open(&db_path).unwrap());
-    let critical = match store
-        .ingest_with_importance(
-            "p",
-            "added as critical",
-            None,
-            IngestPolicy::Force,
-            MemoryType::Fact,
-            MemoryStatus::Candidate,
-            MemoryImportance::Critical,
-        )
-        .unwrap()
-    {
-        crate::memory_types::AddResult::Added { id } => id,
-        other => panic!("forced add must store the row, got {other:?}"),
+    let mut added = |level: MemoryImportance, text: &str| -> String {
+        match store
+            .ingest_with_importance(
+                "p",
+                text,
+                None,
+                IngestPolicy::Force,
+                MemoryType::Fact,
+                MemoryStatus::Candidate,
+                level,
+            )
+            .unwrap()
+        {
+            AddResult::Added { id } => id,
+            other => panic!("a forced add stores the row, got {other:?}"),
+        }
     };
-    let low = match store
-        .ingest_with_importance(
-            "p",
-            "added as low",
-            None,
-            IngestPolicy::Force,
-            MemoryType::Fact,
-            MemoryStatus::Candidate,
-            MemoryImportance::Low,
-        )
-        .unwrap()
-    {
-        crate::memory_types::AddResult::Added { id } => id,
-        other => panic!("forced add must store the row, got {other:?}"),
-    };
+    let critical = added(MemoryImportance::Critical, "added as critical");
+    let low = added(MemoryImportance::Low, "added as low");
     drop(store);
 
     let mut db = Database::open(&db_path).unwrap();
-    // Age both rows past the threshold. Deliberately NOT the importance column:
-    // if the add path had dropped the level, `critical` would sit on the column
-    // DEFAULT ('medium') and be demoted like its low-importance neighbour.
+    // Age both rows past the threshold, deliberately NOT touching importance:
+    // had the add path dropped the level, `critical` would sit on the DEFAULT
+    // ('medium') and be demoted like its low-importance neighbour.
     for id in [&critical, &low] {
+        set_retrieval(&db, id, 0);
         db.conn()
             .execute(
-                "UPDATE memories SET created_at = ?1, updated_at = ?1, retrieval_count = 0 WHERE id = ?2",
+                "UPDATE memories SET created_at = ?1, updated_at = ?1 WHERE id = ?2",
                 (OLD, id.clone()),
             )
             .unwrap();
@@ -365,7 +351,7 @@ fn test_add_time_importance_protects_from_prune() {
     assert_eq!(
         demoted.len(),
         1,
-        "only the low-importance row is eligible; the row added as critical is a hard exclusion"
+        "only the row added at low is eligible; the one added critical is a hard exclusion"
     );
     assert_eq!(status_of(&db, &critical), "candidate");
     assert_eq!(status_of(&db, &low), "deprecated");

@@ -276,7 +276,7 @@ pub struct MergeResponse {
     pub rows_moved: usize,
 }
 
-/// Response for `export` operation (see `ExportRowLine` for the 12-field JSONL row format).
+/// Response for `export` operation (see `ExportRowLine` for the JSONL row shape).
 #[derive(Serialize)]
 #[allow(dead_code)] // Consumed by task-a (export handler) in the consolidated tree
 pub struct ExportResponse {
@@ -286,7 +286,7 @@ pub struct ExportResponse {
     pub path: String,
 }
 
-/// One 12-field JSONL export row. DB `type` is renamed to `memory_type`; `embedding` is
+/// One JSONL export row. DB `type` is renamed to `memory_type`; `embedding` is
 /// base64 of the stored BLOB (`""` for empty); `superseded_by`/`last_retrieved_at` nullable.
 #[derive(Serialize, Clone, Debug)]
 #[allow(dead_code)] // Consumed by task-a (export handler) in the consolidated tree

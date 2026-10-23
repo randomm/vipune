@@ -106,15 +106,15 @@ impl MemoryStore {
 
     #[allow(dead_code)] // Public API for library consumers (e.g., kide)
     #[must_use = "the new memory ID is needed for downstream operations"]
-    /// Supersede an existing memory with a new one.
+    /// Supersede an existing memory with a new one at the `medium` importance
+    /// default.
     ///
     /// Atomically replaces the old memory (marked as "superseded") with a new memory
     /// that supersedes it. Both memories remain in the database but the old one
     /// has status "superseded" and superseded_by pointing to the new ID.
     ///
-    /// Adds at the `medium` importance default — the variant that carries an
-    /// operator-assigned level is [`Self::supersede_with_importance`], which
-    /// the `vipune add --supersedes --importance` path drives (issue #238).
+    /// The level-carrying variant is [`Self::supersede_with_importance`] — the
+    /// one `vipune add --supersedes <id> --importance <level>` drives.
     pub fn supersede(
         &mut self,
         project_id: &str,
@@ -123,27 +123,16 @@ impl MemoryStore {
         memory_type: MemoryType,
         old_id: &str,
     ) -> Result<String, Error> {
-        self.supersede_with_importance(
-            project_id,
-            content,
-            metadata,
-            memory_type,
-            old_id,
-            MemoryImportance::Medium,
-        )
+        self.supersede_impl(project_id, content, metadata, memory_type, old_id, None)
     }
 
-    #[allow(dead_code)] // Used by the CLI add path (bin target)
+    #[allow(clippy::too_many_arguments)] // mirrors supersede() plus the importance level
     #[must_use = "the new memory ID is needed for downstream operations"]
-    /// Supersede an existing memory with a new one carrying an explicit
-    /// importance level.
-    ///
-    /// `vipune add --supersedes <id> --importance critical` creates the new row
-    /// through here, so the level has to be threaded to the INSERT: the column
-    /// is `NOT NULL DEFAULT 'medium'`, so not naming it in the INSERT reset the
-    /// level the operator just set — and the prune protection that keys off it
-    /// (issue #238). The value is a parsed [`MemoryImportance`], so the
-    /// canonical spelling is what lands.
+    /// Supersede an existing memory with a new row carrying an explicit
+    /// importance level — the path `vipune add --supersedes --importance` drives.
+    /// The parsed level (canonical `as_str` spelling) is what reaches the INSERT:
+    /// an omitted column would silently reset it to the DEFAULT and cost the row
+    /// the `high`/`critical` prune exemption (issue #238).
     pub fn supersede_with_importance(
         &mut self,
         project_id: &str,
@@ -152,6 +141,27 @@ impl MemoryStore {
         memory_type: MemoryType,
         old_id: &str,
         importance: MemoryImportance,
+    ) -> Result<String, Error> {
+        self.supersede_impl(
+            project_id,
+            content,
+            metadata,
+            memory_type,
+            old_id,
+            Some(importance),
+        )
+    }
+
+    /// Validate, embed, and insert the replacement row — the shared body of
+    /// both public supersede entry points, so neither can drift from the other.
+    fn supersede_impl(
+        &mut self,
+        project_id: &str,
+        content: &str,
+        metadata: Option<&str>,
+        memory_type: MemoryType,
+        old_id: &str,
+        importance: Option<MemoryImportance>,
     ) -> Result<String, Error> {
         Self::validate_input_length(content)?;
 
@@ -166,14 +176,26 @@ impl MemoryStore {
 
         let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
 
-        Ok(self.db.supersede_with_importance(
-            project_id,
-            content,
-            &embedding,
-            metadata,
-            memory_type.as_str(),
-            old_id,
-            importance.as_str(),
-        )?)
+        // A named level goes to the INSERT that binds it; no level takes the
+        // plain `Database::supersede`, which lands on the `medium` default.
+        match importance {
+            Some(level) => Ok(self.db.supersede_with_importance(
+                project_id,
+                content,
+                &embedding,
+                metadata,
+                memory_type.as_str(),
+                old_id,
+                level.as_str(),
+            )?),
+            None => Ok(self.db.supersede(
+                project_id,
+                content,
+                &embedding,
+                metadata,
+                memory_type.as_str(),
+                old_id,
+            )?),
+        }
     }
 }
