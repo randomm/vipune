@@ -4,6 +4,8 @@ use chrono::Utc;
 use rusqlite::params;
 use uuid::Uuid;
 
+use crate::memory::lifecycle::MemoryImportance;
+
 use super::{Error, NewRow, Result, vec_to_blob};
 
 impl super::Database {
@@ -32,7 +34,7 @@ impl super::Database {
                 metadata,
                 memory_type,
                 status: "active",
-                importance: "medium",
+                importance: MemoryImportance::Medium.as_str(),
             },
             embedding,
             old_id,

@@ -9,6 +9,8 @@ use chrono::Utc;
 use rusqlite::params;
 use uuid::Uuid;
 
+use crate::memory::lifecycle::MemoryImportance;
+
 use super::{Result, vec_to_blob};
 
 /// The caller-supplied columns of one new row, with the lifecycle fields
@@ -60,7 +62,7 @@ impl super::Database {
                 metadata,
                 memory_type,
                 status,
-                importance: "medium",
+                importance: MemoryImportance::Medium.as_str(),
             },
             embedding,
         )

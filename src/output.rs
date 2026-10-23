@@ -286,7 +286,8 @@ pub struct ExportResponse {
     pub path: String,
 }
 
-/// One JSONL export row. DB `type` is renamed to `memory_type`; `embedding` is
+/// One JSONL export row — the field set `vipune export` writes per line, which
+/// `vipune import` restores. DB `type` is renamed to `memory_type`; `embedding` is
 /// base64 of the stored BLOB (`""` for empty); `superseded_by`/`last_retrieved_at` nullable.
 #[derive(Serialize, Clone, Debug)]
 #[allow(dead_code)] // Consumed by task-a (export handler) in the consolidated tree
@@ -315,6 +316,9 @@ pub struct ExportRowLine {
     pub retrieval_count: i64,
     /// RFC3339 timestamp of last retrieval (null if never retrieved).
     pub last_retrieved_at: Option<String>,
+    /// Operator-assigned importance (`low`/`medium`/`high`/`critical`), restored
+    /// verbatim on import (issue #228).
+    pub importance: String,
 }
 
 /// Response for `import` operation (all-or-nothing; `skipped` = existing-id rows, not errors).
@@ -467,6 +471,7 @@ mod tests {
             superseded_by: None,
             retrieval_count: 3,
             last_retrieved_at: Some("2024-01-02T00:00:00Z".to_string()),
+            importance: "high".to_string(),
         };
         let json = serde_json::to_string(&row).unwrap();
         assert!(json.contains("\"memory_type\":\"guard\""));
@@ -476,6 +481,9 @@ mod tests {
         assert!(json.contains("\"retrieval_count\":3"));
         assert!(json.contains("\"superseded_by\":null"));
         assert!(json.contains("\"last_retrieved_at\":\"2024-01-02T00:00:00Z\""));
+        // The 13th field is the level the row was stored with — the one export
+        // used to omit, so import reset it (issue #228).
+        assert!(json.contains("\"importance\":\"high\""));
         assert!(
             !json.contains("\"type\":"),
             "must not have bare \"type\" key, got: {}",

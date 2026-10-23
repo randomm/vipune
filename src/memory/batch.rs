@@ -176,8 +176,10 @@ impl MemoryStore {
 
         let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
 
-        // A named level goes to the INSERT that binds it; no level takes the
-        // plain `Database::supersede`, which lands on the `medium` default.
+        // Two call sites, one INSERT: `Database::supersede` is the public
+        // defaulting wrapper and delegates to `supersede_with_importance` with
+        // `medium`, so the branches cannot write different column sets — and a
+        // caller that names no level keeps using the API it already used.
         match importance {
             Some(level) => Ok(self.db.supersede_with_importance(
                 &NewRow {
