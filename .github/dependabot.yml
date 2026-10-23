@@ -5,6 +5,10 @@ updates:
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 5
+    # ort/ort-sys are pinned to =2.0.0-rc.9 for gline-rs compatibility (issue #53)
+    ignore:
+      - dependency-name: "ort"
+      - dependency-name: "ort-sys"
     groups:
       rust-dependencies:
         update-types:
