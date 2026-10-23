@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-10-23
+
+### Bug Fixes
+
+- Export and import now carry each memory's importance; files from older versions import as medium ([#239](https://github.com/randomm/vipune/pull/239))
+- `vipune add --importance` (including with `--supersedes`) now persists the level instead of always storing medium ([#239](https://github.com/randomm/vipune/pull/239))
+
+
 ## [0.15.3] - 2026-10-23
 
 ### Bug Fixes
