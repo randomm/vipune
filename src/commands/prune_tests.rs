@@ -295,3 +295,67 @@ fn test_prune_importance_medium_low_still_eligible_integration() {
         "medium and low importance remain eligible"
     );
 }
+
+/// Issue #238: the level set **at add time** has to be the one prune reads.
+///
+/// Every importance-exclusion test above seeds with `insert_with_time` and then
+/// `UPDATE`s the column — that proves the evaluator honours the column, not
+/// that `vipune add --importance critical` ever wrote it. Here the level comes
+/// only from the store's add path.
+#[test]
+fn test_add_time_importance_protects_from_prune() {
+    use crate::memory::NewMemory;
+    use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
+    use crate::memory::store::MemoryStore;
+    use crate::memory_types::{AddResult, IngestPolicy};
+
+    let (_dir, db_path) = create_test_db();
+    let mut store = MemoryStore::from_db_with_test_embedder(Database::open(&db_path).unwrap());
+    let mut added = |level: MemoryImportance, text: &str| -> String {
+        match store
+            .ingest_with_importance(
+                &NewMemory {
+                    project_id: "p",
+                    content: text,
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status: MemoryStatus::Candidate,
+                },
+                IngestPolicy::Force,
+                level,
+            )
+            .unwrap()
+        {
+            AddResult::Added { id } => id,
+            other => panic!("a forced add stores the row, got {other:?}"),
+        }
+    };
+    let critical = added(MemoryImportance::Critical, "added as critical");
+    let low = added(MemoryImportance::Low, "added as low");
+    drop(store);
+
+    let mut db = Database::open(&db_path).unwrap();
+    // Age both rows past the threshold, deliberately NOT touching importance:
+    // had the add path dropped the level, `critical` would sit on the DEFAULT
+    // ('medium') and be demoted like its low-importance neighbour.
+    for id in [&critical, &low] {
+        set_retrieval(&db, id, 0);
+        db.conn()
+            .execute(
+                "UPDATE memories SET created_at = ?1, updated_at = ?1 WHERE id = ?2",
+                (OLD, id.clone()),
+            )
+            .unwrap();
+    }
+
+    let ev = PruneEvaluator::new(DEFAULT_PRUNE_COUNT, DEFAULT_PRUNE_AGE_DAYS);
+    let demoted = ev.run_for_project(&mut db, "p").unwrap();
+
+    assert_eq!(
+        demoted.len(),
+        1,
+        "only the row added at low is eligible; the one added critical is a hard exclusion"
+    );
+    assert_eq!(status_of(&db, &critical), "candidate");
+    assert_eq!(status_of(&db, &low), "deprecated");
+}

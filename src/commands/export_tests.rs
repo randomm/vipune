@@ -129,17 +129,20 @@ fn test_jsonl_header_fields_and_row_count() {
         header["exported_at"]
     );
 
-    // Data rows carry all 12 fields — `memory_type`, never `type`.
+    // Data rows carry all 13 fields — `memory_type`, never `type`.
     let row = &lines[1];
     assert_eq!(
         row.as_object().unwrap().len(),
-        12,
-        "row line must have exactly 12 fields: {row}"
+        13,
+        "row line must have exactly 13 fields: {row}"
     );
     assert!(!row.as_object().unwrap().contains_key("type"));
     assert_eq!(row["memory_type"], "fact");
     assert_eq!(row["id"], "r1");
     assert_eq!(row["project_id"], "projA");
+    // The 13th key is there even for a row seeded without touching the column;
+    // that the row's OWN level reaches it is the round trip's job (four levels).
+    assert_eq!(row["importance"], "medium");
 }
 
 #[test]
@@ -337,6 +340,7 @@ fn test_write_jsonl_returns_row_count_not_header() {
             superseded_by: None,
             retrieval_count: 0,
             last_retrieved_at: None,
+            importance: "medium".to_string(),
         },
         ExportRow {
             id: "b".to_string(),
@@ -351,6 +355,7 @@ fn test_write_jsonl_returns_row_count_not_header() {
             superseded_by: Some("x".to_string()),
             retrieval_count: 5,
             last_retrieved_at: Some("t".to_string()),
+            importance: "critical".to_string(),
         },
     ];
     let mut buf = Vec::new();

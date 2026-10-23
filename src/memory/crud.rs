@@ -4,8 +4,9 @@
 use crate::embedding::l2_normalize; // test-only; pure function, pragmatic coupling
 use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
+use crate::memory::add::NewMemory;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
-use crate::memory_types::{AddResult, ConflictMemory, IngestPolicy};
+use crate::memory_types::{AddResult, IngestPolicy};
 use crate::sqlite::Memory;
 
 use super::store::MemoryStore;
@@ -105,52 +106,17 @@ impl MemoryStore {
         memory_type: MemoryType,
         status: MemoryStatus,
     ) -> Result<AddResult, Error> {
-        Self::validate_input_length(content)?;
-
-        let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
-        let memory_type_str = memory_type.as_str();
-        let status_str = status.as_str();
-
-        if force {
-            let id = self.db.insert(
+        self.add_impl(
+            &NewMemory {
                 project_id,
                 content,
-                &embedding,
                 metadata,
-                memory_type_str,
-                status_str,
-            )?;
-            return Ok(AddResult::Added { id });
-        }
-
-        let similars =
-            self.db
-                .find_similar(project_id, &embedding, self.config.similarity_threshold)?;
-        let conflicts: Vec<ConflictMemory> = similars
-            .into_iter()
-            .map(|m| ConflictMemory {
-                id: m.id,
-                content: m.content,
-                similarity: m.similarity.unwrap_or(0.0),
-            })
-            .collect();
-
-        if conflicts.is_empty() {
-            let id = self.db.insert(
-                project_id,
-                content,
-                &embedding,
-                metadata,
-                memory_type_str,
-                status_str,
-            )?;
-            Ok(AddResult::Added { id })
-        } else {
-            Ok(AddResult::Conflicts {
-                proposed: content.to_string(),
-                conflicts,
-            })
-        }
+                memory_type,
+                status,
+            },
+            force,
+            None,
+        )
     }
 
     #[must_use = "handle the error or results may be lost"]

@@ -1,6 +1,6 @@
 //! Raw full-table scan for the export command (issue #195).
 //!
-//! `scan_all_rows` selects all 12 columns for EVERY project with no LIMIT and
+//! `scan_all_rows` selects all 13 columns for EVERY project with no LIMIT and
 //! keeps the embedding as the raw stored BLOB. It deliberately does NOT decode
 //! the blob (`blob_to_vec`) and does NOT reuse `list()` (capped at
 //! MAX_SEARCH_LIMIT) or `list_all_rows_for_project` (single project, decodes),
@@ -39,6 +39,9 @@ pub struct ExportRow {
     pub retrieval_count: i64,
     /// Last retrieval timestamp (NULL → None), restored verbatim on import.
     pub last_retrieved_at: Option<String>,
+    /// Operator-assigned importance (`low`/`medium`/`high`/`critical`), read
+    /// from the column and restored verbatim on import (issue #228).
+    pub importance: String,
 }
 
 impl Database {
@@ -76,6 +79,7 @@ impl Database {
                 superseded_by: row.get(9)?,
                 retrieval_count: row.get(10)?,
                 last_retrieved_at: row.get(11)?,
+                importance: row.get(12)?,
             })
         })?;
 

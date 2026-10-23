@@ -2,8 +2,9 @@
 
 use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
-use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, BatchIngestItemResult, BatchIngestResult, IngestPolicy};
+use crate::sqlite::NewRow;
 
 use super::store::MemoryStore;
 
@@ -106,11 +107,15 @@ impl MemoryStore {
 
     #[allow(dead_code)] // Public API for library consumers (e.g., kide)
     #[must_use = "the new memory ID is needed for downstream operations"]
-    /// Supersede an existing memory with a new one.
+    /// Supersede an existing memory with a new one at the `medium` importance
+    /// default.
     ///
     /// Atomically replaces the old memory (marked as "superseded") with a new memory
     /// that supersedes it. Both memories remain in the database but the old one
     /// has status "superseded" and superseded_by pointing to the new ID.
+    ///
+    /// The level-carrying variant is [`Self::supersede_with_importance`] — the
+    /// one `vipune add --supersedes <id> --importance <level>` drives.
     pub fn supersede(
         &mut self,
         project_id: &str,
@@ -118,6 +123,48 @@ impl MemoryStore {
         metadata: Option<&str>,
         memory_type: MemoryType,
         old_id: &str,
+    ) -> Result<String, Error> {
+        self.supersede_impl(project_id, content, metadata, memory_type, old_id, None)
+    }
+
+    #[must_use = "the new memory ID is needed for downstream operations"]
+    /// Supersede an existing memory with a new row carrying an explicit
+    /// importance level — the path `vipune add --supersedes --importance` drives.
+    /// The parsed level (canonical `as_str` spelling) is what reaches the INSERT:
+    /// an omitted column would silently reset it to the DEFAULT and cost the row
+    /// the `high`/`critical` prune exemption (issue #238).
+    pub fn supersede_with_importance(
+        &mut self,
+        project_id: &str,
+        content: &str,
+        metadata: Option<&str>,
+        memory_type: MemoryType,
+        old_id: &str,
+        importance: MemoryImportance,
+    ) -> Result<String, Error> {
+        self.supersede_impl(
+            project_id,
+            content,
+            metadata,
+            memory_type,
+            old_id,
+            Some(importance),
+        )
+    }
+
+    /// Validate, embed, and insert the replacement row — the shared body of
+    /// both public supersede entry points, so neither can drift from the other.
+    ///
+    /// A named level goes to `supersede_with_importance`, no level to the
+    /// public `Database::supersede`, which binds the default by name.
+    fn supersede_impl(
+        &mut self,
+        project_id: &str,
+        content: &str,
+        metadata: Option<&str>,
+        memory_type: MemoryType,
+        old_id: &str,
+        importance: Option<MemoryImportance>,
     ) -> Result<String, Error> {
         Self::validate_input_length(content)?;
 
@@ -132,13 +179,28 @@ impl MemoryStore {
 
         let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
 
-        Ok(self.db.supersede(
-            project_id,
-            content,
-            &embedding,
-            metadata,
-            memory_type.as_str(),
-            old_id,
-        )?)
+        // Both arms write the same column set (issue #238).
+        match importance {
+            Some(level) => Ok(self.db.supersede_with_importance(
+                &NewRow {
+                    project_id,
+                    content,
+                    metadata,
+                    memory_type: memory_type.as_str(),
+                    status: "active",
+                    importance: level.as_str(),
+                },
+                &embedding,
+                old_id,
+            )?),
+            None => Ok(self.db.supersede(
+                project_id,
+                content,
+                &embedding,
+                metadata,
+                memory_type.as_str(),
+                old_id,
+            )?),
+        }
     }
 }

@@ -8,6 +8,7 @@ pub mod fts;
 pub mod hash;
 pub mod identity;
 pub mod import;
+pub mod insert;
 pub mod list;
 pub mod migration_types;
 pub mod migrations;
@@ -28,6 +29,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub use self::embedding::{blob_to_vec, vec_to_blob};
+pub(crate) use self::insert::NewRow;
 pub use self::query_mod::{build_filters, map_row_to_memory};
 pub use self::update::UpdateOptions;
 
@@ -239,46 +241,6 @@ impl Database {
         create_schema(&mut conn)?;
         migrations::run_migrations(&conn)?;
         Ok(Self { conn })
-    }
-
-    /// Insert a new memory with embedding.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the embedding has invalid dimensions or database write fails.
-    pub fn insert(
-        &self,
-        project_id: &str,
-        content: &str,
-        embedding: &[f32],
-        metadata: Option<&str>,
-        memory_type: &str,
-        status: &str,
-    ) -> Result<String> {
-        let id = Uuid::new_v4().to_string();
-        let now = Utc::now().to_rfc3339();
-        let blob = vec_to_blob(embedding)?;
-
-        self.conn.execute(
-            r#"
-            INSERT INTO memories (id, project_id, content, embedding, metadata, created_at, updated_at, type, status, importance)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-            "#,
-            params![
-                &id,
-                project_id,
-                content,
-                &blob,
-                metadata,
-                &now,
-                &now,
-                memory_type,
-                status,
-                "medium",
-            ],
-        )?;
-
-        Ok(id)
     }
 
     /// Insert a memory with explicit timestamps.

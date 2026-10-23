@@ -3,7 +3,7 @@
 use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
-use crate::memory::{MemoryStore, UpdateParams};
+use crate::memory::{MemoryStore, NewMemory, UpdateParams};
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
 use crate::{config, embedding::EmbeddingEngine, temporal};
@@ -81,7 +81,16 @@ pub(crate) fn handle_add(
     }
 
     if let Some(old_id) = supersedes {
-        let new_id = store.supersede(project_id, text, metadata, memory_type_val, old_id)?;
+        // This branch creates its own row inside the store's supersede
+        // transaction, so the validated level has to travel with it (issue #238).
+        let new_id = store.supersede_with_importance(
+            project_id,
+            text,
+            metadata,
+            memory_type_val,
+            old_id,
+            importance_val,
+        )?;
 
         if json {
             print_json(&AddResponse {
@@ -100,15 +109,16 @@ pub(crate) fn handle_add(
         IngestPolicy::ConflictAware
     };
 
-    let _ = importance_val; // validated; persistence lands with the importance column (sub-issue 2)
-
-    match store.ingest_with_type_status(
-        project_id,
-        text,
-        metadata,
+    match store.ingest_with_importance(
+        &NewMemory {
+            project_id,
+            content: text,
+            metadata,
+            memory_type: memory_type_val,
+            status: status_val,
+        },
         policy,
-        memory_type_val,
-        status_val,
+        importance_val,
     )? {
         AddResult::Added { id } => {
             if json {

@@ -243,6 +243,42 @@ mod tests {
         assert!(MemoryImportance::from_str("normal").is_err());
     }
 
+    /// The two importance vocabularies in this crate are maintained apart: this
+    /// one gates what may be written (the `--importance` flag and the import
+    /// path), while `temporal::ImportanceLevel::parse` reads the stored column
+    /// back for decay and `prune` matches the raw `'high'`/`'critical'` SQL
+    /// literals. Nothing structurally enforces that they accept the same words,
+    /// so a level added to one enum and not the other would write rows the read
+    /// side rejects (or vice versa) — pinned here instead.
+    #[test]
+    fn test_importance_vocabularies_agree_with_the_read_side() {
+        use crate::temporal::ImportanceLevel;
+
+        for word in [
+            "low", "medium", "high", "critical", "LOW", "Medium", "CRITICAL", "normal", "urgent",
+            "", " high",
+        ] {
+            assert_eq!(
+                MemoryImportance::from_str(word).is_ok(),
+                ImportanceLevel::parse(word).is_ok(),
+                "write gate and read side disagree on {word:?}"
+            );
+        }
+        // Whatever this enum can name, the decay pipeline must be able to read.
+        for level in [
+            MemoryImportance::Low,
+            MemoryImportance::Medium,
+            MemoryImportance::High,
+            MemoryImportance::Critical,
+        ] {
+            assert!(
+                ImportanceLevel::parse(level.as_str()).is_ok(),
+                "the read side must understand {}",
+                level.as_str()
+            );
+        }
+    }
+
     #[test]
     fn test_is_valid_for_insert() {
         assert!(MemoryStatus::Active.is_valid_for_insert());
