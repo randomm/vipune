@@ -50,8 +50,8 @@ impl MemoryStore {
     /// passes a parsed [`MemoryImportance`], so the canonical `as_str` spelling
     /// is what reaches the column (the level decides the `high`/`critical`
     /// prune exemption). A caller that expresses no level passes `None` and
-    /// gets [`MemoryImportance::default`], which [`Self::insert_row`] binds
-    /// explicitly — never the column's `NOT NULL DEFAULT`.
+    /// gets [`MemoryImportance::default`], bound by name by the public
+    /// `Database::insert` wrapper — never the column's `NOT NULL DEFAULT`.
     pub(crate) fn add_impl(
         &mut self,
         row: &NewMemory<'_>,
@@ -104,28 +104,35 @@ impl MemoryStore {
         self.add_impl(row, policy == IngestPolicy::Force, Some(importance))
     }
 
-    /// Insert one new row, binding `importance` explicitly.
-    ///
-    /// One call, one INSERT: a caller that named no level gets
-    /// [`MemoryImportance::default`], bound by name like any explicit level —
-    /// the column's `NOT NULL DEFAULT` never supplies it (issue #238).
+    /// Insert one new row: a named level goes to `insert_with_importance`, no
+    /// level to the public `Database::insert`, which binds the default by name.
     fn insert_row(
         &self,
         row: &NewMemory<'_>,
         embedding: &[f32],
         importance: Option<MemoryImportance>,
     ) -> Result<String, Error> {
-        let level = importance.unwrap_or_default();
-        Ok(self.db.insert_with_importance(
-            &NewRow {
-                project_id: row.project_id,
-                content: row.content,
-                metadata: row.metadata,
-                memory_type: row.memory_type.as_str(),
-                status: row.status.as_str(),
-                importance: level.as_str(),
-            },
-            embedding,
-        )?)
+        let (memory_type, status) = (row.memory_type.as_str(), row.status.as_str());
+        match importance {
+            Some(level) => Ok(self.db.insert_with_importance(
+                &NewRow {
+                    project_id: row.project_id,
+                    content: row.content,
+                    metadata: row.metadata,
+                    memory_type,
+                    status,
+                    importance: level.as_str(),
+                },
+                embedding,
+            )?),
+            None => Ok(self.db.insert(
+                row.project_id,
+                row.content,
+                embedding,
+                row.metadata,
+                memory_type,
+                status,
+            )?),
+        }
     }
 }

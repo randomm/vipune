@@ -154,6 +154,9 @@ impl MemoryStore {
 
     /// Validate, embed, and insert the replacement row — the shared body of
     /// both public supersede entry points, so neither can drift from the other.
+    ///
+    /// A named level goes to `supersede_with_importance`, no level to the
+    /// public `Database::supersede`, which binds the default by name.
     fn supersede_impl(
         &mut self,
         project_id: &str,
@@ -176,22 +179,28 @@ impl MemoryStore {
 
         let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
 
-        // One call, one INSERT, for both public entry points: a caller that
-        // named no level falls back to `MemoryImportance::default()` and the
-        // level is still bound by name on the INSERT, never left to the
-        // column's DEFAULT (issue #238).
-        let level = importance.unwrap_or_default();
-        Ok(self.db.supersede_with_importance(
-            &NewRow {
+        // Both arms write the same column set (issue #238).
+        match importance {
+            Some(level) => Ok(self.db.supersede_with_importance(
+                &NewRow {
+                    project_id,
+                    content,
+                    metadata,
+                    memory_type: memory_type.as_str(),
+                    status: "active",
+                    importance: level.as_str(),
+                },
+                &embedding,
+                old_id,
+            )?),
+            None => Ok(self.db.supersede(
                 project_id,
                 content,
+                &embedding,
                 metadata,
-                memory_type: memory_type.as_str(),
-                status: "active",
-                importance: level.as_str(),
-            },
-            &embedding,
-            old_id,
-        )?)
+                memory_type.as_str(),
+                old_id,
+            )?),
+        }
     }
 }
