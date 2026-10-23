@@ -42,19 +42,118 @@ vipune uses Rust's standard test organization:
 
 ### Environment Variable Management
 
-Tests that modify environment variables use `ENV_MUTEX` to prevent race conditions:
+libtest runs the tests of one target on threads of a **single process**, and
+`std::env` is process-global. Any test that reads or writes a `VIPUNE_*`
+variable production code consults therefore shares state with every other such
+test in that target — including tests in other modules that reach it through
+the same production code.
+
+Every test that **writes** a `VIPUNE_*` knob in an in-crate unit-test target
+takes the **one** guard for that target, `config::tests_utils::ENV_MUTEX`
+(declared `pub(crate)` so modules outside `config` can reach it), through the
+RAII helper `ConfigEnvGuard`. It is a `#[cfg(test)]` item of the crate, so
+integration tests under `tests/` — separate binaries, separate processes —
+cannot reach it:
 
 ```rust
-use crate::config::tests_utils::ENV_MUTEX;
+use crate::config::tests_utils::ConfigEnvGuard;
 
 #[test]
 fn test_something_with_env_vars() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    // takes ENV_MUTEX (poison-recovered) and clears every knob in
+    // tests_utils::CONFIG_ENV_VARS, on entry and again on Drop
+    let _guard = ConfigEnvGuard::acquire();
     // Safe to modify env vars here
     unsafe { std::env::set_var("VIPUNE_DATABASE_PATH", "/tmp/test.db"); }
-    // ... test code ...
+    // ... test code, assertions included, all under the guard ...
 }
 ```
+
+The knob list itself, `tests_utils::CONFIG_ENV_VARS`, has exactly one copy: the
+config tests clear it, the helpers that wrap `Config::load()` clear it, and the
+CLI tests that spawn the binary remove it from the child (plus the two
+project-detection knobs on top). `test_config_env_vars_match_env_parser` fails
+the build if the list drifts from the parser: it compares the set of `VIPUNE_*`
+names spelled in `config/env_parser.rs` against `CONFIG_ENV_VARS` and checks the
+`apply_*_override` functions 1:1, so a new knob cannot be silently left out of
+the clearing. If your test writes a knob outside that list (or wants the lock
+without the bulk clear — e.g. to serialise a child-process launch against
+writers), use `tests_utils::lock_env_mutex()` and
+`tests_utils::cleanup_env_vars(&["YOUR_VAR"])` explicitly.
+
+A writer-only rule is not enough, because a lock serialises only against
+other holders. Tests that **read** the environment indirectly are easy to miss
+— they contain no `set_var` — and there are two shapes of it:
+
+- `Config::load()` parses every `VIPUNE_*` knob and returns `Err` on a
+  malformed value, so a test calling it — directly or through a helper —
+  panics on a sibling writer's `-1` / `abc`.
+- `std::process::Command` reads the parent's environment when it spawns the
+  child; a sibling's malformed knob makes the child's `Config::load()` fail
+  and a clean pass exit non-zero.
+
+Prefer not to read at all. A fixture that only needs a `Config` should build
+one with `Config::default()` — it reads no `VIPUNE_*` knob (only `HOME`, through
+`dirs::home_dir()`), so it needs no lock and no ordering to lose. That is a
+statement about the knobs, not about the environment: `Config::default()` still
+calls `getenv`, so it is a concurrent reader like any other.
+A spawned child is neutralised the same way, with `Command::env_remove` per
+knob, which touches no process-global state.
+
+Where the read is genuinely wanted, a reader follows the same convention as a
+writer: take the shared guard with the first statement and hold it for the
+whole test body, so the entry-clear guarantees it observes a clean environment.
+
+Three rules for writers and knob-readers alike, all of which exist because of
+an observed flake (issue #233, where one test file kept its own mutex while
+tests in another module moved the same variable underneath it):
+
+- **One guard per target.** A file-local `static Mutex` only serialises within
+  that file; a reader in another module writes the same variable freely. Reuse
+  `config::tests_utils::ENV_MUTEX` rather than declaring a new one.
+- **Hold it for the whole body**, from the first statement, so seeding, the
+  `set_var` and the production code's own `env::var` read sit in one critical
+  section.
+- **Clear the variable on entry and on exit.** Every test that writes clears
+  its own variables first so it cannot inherit an ambient value, and clears
+  again on exit — via an RAII guard's `Drop`, as `ConfigEnvGuard` does — because
+  a panicking assertion skips a trailing `remove_var`. That leak is precisely
+  how one genuine assertion failure in `config::overrides` used to become two or
+  three unrelated `Config::load().unwrap()` panics elsewhere in the target. Do
+  not treat a trailing `clean_env()` as the exit-clear. Recover from poisoning
+  at **every** acquisition — a genuine assertion failure in one test should not
+  make every sibling panic with `PoisonError` on top of it. In-crate tests get
+  this from one helper, `tests_utils::lock_env_mutex()`: both
+  `ConfigEnvGuard::acquire` and any explicit acquisition go through it, so the
+  poison-recovery incantation exists in exactly one place. A `tests/` file that
+  owns its own mutex recovers there the same way. Recovery is required at
+  **every** acquisition of the shared mutex, not only in
+  the file that most recently changed: poisoning is a property of the mutex, so
+  one unrecovered `.lock().unwrap()` in any module turns a single real failure
+  into a target-wide one.
+
+The rule is about the **call**, not the variable's name. `set_var`/`remove_var`
+racing a concurrent `getenv` is the hazard — it is why Rust 2024 made those
+methods `unsafe` — and a sibling reader in this target calls `getenv` for
+unrelated reasons (`Config::default()` → `dirs::home_dir()` → `getenv("HOME")`,
+`detect_project` → `env::var("VIPUNE_PROJECT"/"VIPUNE_DEBUG")`). So a test that
+mutates a variable nothing else reads — `VIPUNE_TEST_VAR`, used only to exercise
+`cleanup_env_vars` itself — still holds the mutex; what it may skip is the
+shared-list clear, since it is not a config knob.
+
+Integration tests under `tests/` cannot reach the crate's `#[cfg(test)]`
+mutex, but they are one process each and the same `set_var`-vs-`getenv` hazard
+applies inside them. A test there that mutates the environment takes a
+file-local `static Mutex` (declared at the top of that test file) and holds it
+for the whole body. A writer-side lock serialises only against other holders
+of *that* mutex — every env-touching test in the file must take it, or the
+lock protects nothing. `tests/lib_integration.rs` declares no such mutex today:
+no test in it writes the environment (`Config::default()` reads no `VIPUNE_*`
+knob), so the four `remove_var` calls it used to make before asserting on the
+defaults protected nothing.
+
+Do not paper over a shared-env race with `--test-threads=1` or
+`RUST_TEST_THREADS`; make the test self-isolating instead.
 
 ### Temporary Directories
 

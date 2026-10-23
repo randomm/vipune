@@ -45,13 +45,16 @@ fn word_count(content: &str) -> Result<usize, SqliteError> {
 }
 
 fn test_config(db_path: &Path, model: &str) -> crate::config::Config {
-    // `Config::load()` resolves the full default config (including the
-    // home-dir database path). The migration only reads `embedding_model`
-    // and `database_path` here; the other fields are carried through as-is.
-    let mut config = crate::config::Config::load().unwrap();
-    config.database_path = db_path.to_path_buf();
-    config.embedding_model = model.to_string();
-    config
+    // `Config::default()` (not `load()`) so the fixture reads no `VIPUNE_*`
+    // knob at all: `load()` parses every one of them and returns `Err` on a
+    // malformed value, so a test reaching it would share state with every
+    // env-mutating sibling. The migration reads only `embedding_model` here,
+    // and this helper overwrites it along with `database_path`.
+    crate::config::Config {
+        database_path: db_path.to_path_buf(),
+        embedding_model: model.to_string(),
+        ..Default::default()
+    }
 }
 
 fn make_db_dir() -> (TempDir, std::path::PathBuf) {

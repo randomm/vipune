@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::errors::Error;
 
 #[cfg(test)]
-use crate::config::tests_utils::{ENV_MUTEX, cleanup_env_vars};
+use crate::config::tests_utils::ConfigEnvGuard;
 #[cfg(test)]
 use std::path::PathBuf;
 
@@ -28,24 +28,17 @@ pub fn apply_env_overrides(config: &mut Config) -> Result<(), Error> {
 mod tests {
     use super::*;
 
-    fn clean_env() {
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-            "VIPUNE_HYBRID",
-            "VIPUNE_DECAY_REFRESH_DAYS",
-            "VIPUNE_PROMOTION_THRESHOLD",
-            "VIPUNE_PRUNE_RETRIEVAL_LIMIT",
-            "VIPUNE_PRUNE_MIN_AGE_DAYS",
-        ]);
-    }
+    // Every test in this module writes knobs that `Config::load()` re-reads, so
+    // each takes the one env mutex this target shares via `ConfigEnvGuard` and
+    // holds it for the whole body (not a file-local mutex). The guard's `Drop`
+    // clears every knob in `CONFIG_ENV_VARS` on exit — a trailing `clean_env()`
+    // is skipped by a panicking assertion, which is how one real failure here
+    // used to cascade into unrelated `Config::load().unwrap()` panics in
+    // `config::tests`. See `docs/testing.md`.
 
     #[test]
     fn test_env_var_overrides_config() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        clean_env();
+        let _guard = ConfigEnvGuard::acquire();
 
         unsafe {
             std::env::set_var("VIPUNE_DATABASE_PATH", "/custom/path/db.db");
@@ -70,14 +63,11 @@ mod tests {
         assert_eq!(config.database_path, PathBuf::from("/custom/path/db.db"));
         assert_eq!(config.embedding_model, "env/model");
         assert_eq!(config.similarity_threshold, 0.95);
-
-        clean_env();
     }
 
     #[test]
     fn test_invalid_similarity_threshold() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        clean_env();
+        let _guard = ConfigEnvGuard::acquire();
 
         unsafe {
             std::env::set_var("VIPUNE_SIMILARITY_THRESHOLD", "invalid");
@@ -98,14 +88,11 @@ mod tests {
         let result = apply_env_overrides(&mut config);
 
         assert!(matches!(result, Err(Error::Config(_))));
-
-        clean_env();
     }
 
     #[test]
     fn test_empty_env_var_rejected() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        clean_env();
+        let _guard = ConfigEnvGuard::acquire();
 
         unsafe {
             std::env::set_var("VIPUNE_DATABASE_PATH", "");
@@ -126,14 +113,11 @@ mod tests {
         let result = apply_env_overrides(&mut config);
 
         assert!(matches!(result, Err(Error::Config(_))));
-
-        clean_env();
     }
 
     #[test]
     fn test_whitespace_env_var_rejected() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        clean_env();
+        let _guard = ConfigEnvGuard::acquire();
 
         unsafe {
             std::env::set_var("VIPUNE_EMBEDDING_MODEL", "   ");
@@ -154,14 +138,11 @@ mod tests {
         let result = apply_env_overrides(&mut config);
 
         assert!(matches!(result, Err(Error::Config(_))));
-
-        clean_env();
     }
 
     #[test]
     fn test_recency_weight_env_var_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        clean_env();
+        let _guard = ConfigEnvGuard::acquire();
 
         unsafe {
             std::env::set_var("VIPUNE_RECENCY_WEIGHT", "0.5");
@@ -182,14 +163,11 @@ mod tests {
         apply_env_overrides(&mut config).unwrap();
 
         assert_eq!(config.recency_weight, 0.5);
-
-        clean_env();
     }
 
     #[test]
     fn test_hybrid_env_var_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        clean_env();
+        let _guard = ConfigEnvGuard::acquire();
 
         unsafe {
             std::env::set_var("VIPUNE_HYBRID", "true");
@@ -210,14 +188,11 @@ mod tests {
         apply_env_overrides(&mut config).unwrap();
 
         assert!(config.hybrid);
-
-        clean_env();
     }
 
     #[test]
     fn test_hybrid_env_var_override_false() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        clean_env();
+        let _guard = ConfigEnvGuard::acquire();
 
         unsafe {
             std::env::set_var("VIPUNE_HYBRID", "false");
@@ -238,14 +213,11 @@ mod tests {
         apply_env_overrides(&mut config).unwrap();
 
         assert!(!config.hybrid);
-
-        clean_env();
     }
 
     #[test]
     fn test_invalid_recency_weight_format() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        clean_env();
+        let _guard = ConfigEnvGuard::acquire();
 
         unsafe {
             std::env::set_var("VIPUNE_RECENCY_WEIGHT", "invalid");
@@ -266,14 +238,11 @@ mod tests {
         let result = apply_env_overrides(&mut config);
 
         assert!(matches!(result, Err(Error::Config(_))));
-
-        clean_env();
     }
 
     #[test]
     fn test_lifecycle_knob_env_overrides() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        clean_env();
+        let _guard = ConfigEnvGuard::acquire();
 
         unsafe {
             std::env::set_var("VIPUNE_DECAY_REFRESH_DAYS", "14.0");
@@ -300,14 +269,11 @@ mod tests {
         assert_eq!(config.promotion_threshold, 10);
         assert_eq!(config.prune_retrieval_limit, 3);
         assert_eq!(config.prune_min_age_days, 7.0);
-
-        clean_env();
     }
 
     #[test]
     fn test_invalid_lifecycle_knob_values() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        clean_env();
+        let _guard = ConfigEnvGuard::acquire();
 
         unsafe {
             std::env::set_var("VIPUNE_PROMOTION_THRESHOLD", "-1");
@@ -329,7 +295,5 @@ mod tests {
         let result = apply_env_overrides(&mut config);
 
         assert!(matches!(result, Err(Error::Config(_))));
-
-        clean_env();
     }
 }

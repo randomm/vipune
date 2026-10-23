@@ -6,10 +6,13 @@ mod overrides;
 mod paths;
 mod validation;
 
+// `pub(crate)` (not private) so env-mutating tests outside `config` — e.g. the
+// promote apply-path tests in `commands::promote_tests` — share this one guard
+// instead of declaring a second mutex over the same `VIPUNE_*` env vars.
 #[cfg(test)]
-mod tests_utils;
+pub(crate) mod tests_utils;
 #[cfg(test)]
-use tests_utils::{ENV_MUTEX, cleanup_env_vars};
+use tests_utils::ConfigEnvGuard;
 
 use crate::embedding::EMBED_MODEL_ID;
 use crate::errors::Error;
@@ -203,13 +206,11 @@ mod tests {
 
     #[test]
     fn test_config_load_without_file() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-        ]);
+        // `Config::load()` parses every knob in `CONFIG_ENV_VARS`, so all of
+        // them are cleared on entry (not just the four asserted below) and on
+        // exit — a partial list let a sibling's malformed value reach the
+        // `unwrap()` here.
+        let _guard = ConfigEnvGuard::acquire();
 
         let config = Config::load().unwrap();
 
@@ -220,13 +221,8 @@ mod tests {
 
     #[test]
     fn test_config_file_overrides_defaults() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        cleanup_env_vars(&[
-            "VIPUNE_DATABASE_PATH",
-            "VIPUNE_EMBEDDING_MODEL",
-            "VIPUNE_SIMILARITY_THRESHOLD",
-            "VIPUNE_RECENCY_WEIGHT",
-        ]);
+        // Same reason as above: this reads the whole env through `load()`.
+        let _guard = ConfigEnvGuard::acquire();
 
         let config = Config::load().unwrap();
 

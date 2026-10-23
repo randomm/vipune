@@ -191,17 +191,10 @@ fn test_search_with_oversized_input_returns_error() {
     std::fs::remove_file(db_path).ok();
 }
 
-/// Test that Config::default() works without environment variables.
+/// Test that `Config::default()` gives the documented defaults — it reads no
+/// `VIPUNE_*` knob, so nothing here needs the environment serialised.
 #[test]
 fn test_config_default_with_no_env_vars_returns_valid_config() {
-    // Clear environment variables that might affect config
-    unsafe {
-        env::remove_var("VIPUNE_DATABASE_PATH");
-        env::remove_var("VIPUNE_EMBEDDING_MODEL");
-        env::remove_var("VIPUNE_SIMILARITY_THRESHOLD");
-        env::remove_var("VIPUNE_RECENCY_WEIGHT");
-    }
-
     let config = Config::default();
 
     assert!(config.database_path.ends_with(".vipune/memories.db"));

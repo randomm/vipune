@@ -10,13 +10,9 @@ use crate::commands::promote::{
     PROMOTION_THRESHOLD_DEFAULT, PROMOTION_THRESHOLD_ENV, fetch_candidates, handle_promote,
     resolve_promotion_threshold, run_promotion, should_promote,
 };
+use crate::config::tests_utils::ConfigEnvGuard;
 use crate::memory::crud::test_fake_embedder;
 use crate::sqlite::Database;
-
-/// Serialises the env-mutating promotion tests so the shared process
-/// environment (`VIPUNE_PROMOTION_THRESHOLD`) is not raced across test
-/// threads (cargo runs tests in parallel threads that share one process env).
-static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn create_test_db() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::TempDir::new().unwrap();
@@ -92,8 +88,7 @@ fn test_should_promote_respects_configured_threshold() {
 
 #[test]
 fn test_resolve_threshold_defaults_when_unset() {
-    let _guard = ENV_MUTEX.lock().unwrap();
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
+    let _guard = ConfigEnvGuard::acquire();
     assert_eq!(
         resolve_promotion_threshold().unwrap(),
         PROMOTION_THRESHOLD_DEFAULT
@@ -102,30 +97,27 @@ fn test_resolve_threshold_defaults_when_unset() {
 
 #[test]
 fn test_resolve_threshold_env_override() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = ConfigEnvGuard::acquire();
     unsafe { std::env::set_var(PROMOTION_THRESHOLD_ENV, "12") };
     assert_eq!(resolve_promotion_threshold().unwrap(), 12);
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
 }
 
 #[test]
 fn test_resolve_threshold_rejects_non_integer() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = ConfigEnvGuard::acquire();
     unsafe { std::env::set_var(PROMOTION_THRESHOLD_ENV, "abc") };
     let err = resolve_promotion_threshold().unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains(PROMOTION_THRESHOLD_ENV));
     assert!(msg.contains("abc"));
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
 }
 
 #[test]
 fn test_resolve_threshold_rejects_negative() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = ConfigEnvGuard::acquire();
     unsafe { std::env::set_var(PROMOTION_THRESHOLD_ENV, "-1") };
     let err = resolve_promotion_threshold().unwrap_err();
     assert!(err.to_string().contains(">= 0"));
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
 }
 
 // ─────────────────────────── fetch candidates ───────────────────────────
@@ -160,6 +152,8 @@ fn test_fetch_candidates_returns_only_candidate_rows() {
 
 #[test]
 fn test_run_promotion_promotes_eligible_only() {
+    // Reads the threshold live: whole body under the shared target guard.
+    let _guard = ConfigEnvGuard::acquire();
     let (_dir, path) = create_test_db();
     let db = Database::open(path.as_path()).unwrap();
 
@@ -209,11 +203,8 @@ fn test_run_promotion_promotes_eligible_only() {
 
 #[test]
 fn test_run_promotion_zero_when_none_eligible() {
-    // Guard against env pollution from sibling tests that mutate the
-    // shared VIPUNE_PROMOTION_THRESHOLD process env var (e.g.
-    // test_run_promotion_respects_env_threshold which doesn't hold the mutex).
-    let _guard = ENV_MUTEX.lock().unwrap();
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
+    // A sibling's lowered threshold would promote the row sitting at 4.
+    let _guard = ConfigEnvGuard::acquire();
     let (_dir, path) = create_test_db();
     let db = Database::open(path.as_path()).unwrap();
 
@@ -230,6 +221,8 @@ fn test_run_promotion_zero_when_none_eligible() {
 
 #[test]
 fn test_run_promotion_respects_env_threshold() {
+    // Taken before seeding: seed, set_var and the read share one section.
+    let _guard = ConfigEnvGuard::acquire();
     let (_dir, path) = create_test_db();
     let db = Database::open(path.as_path()).unwrap();
 
@@ -237,10 +230,8 @@ fn test_run_promotion_respects_env_threshold() {
     let promoted_one = seed_candidate(&db, "at two", 2);
     let not_promoted = seed_candidate(&db, "at one", 1);
 
-    let _guard = ENV_MUTEX.lock().unwrap();
     unsafe { std::env::set_var(PROMOTION_THRESHOLD_ENV, "2") };
     let promoted = run_promotion(&db, "proj").unwrap();
-    unsafe { std::env::remove_var(PROMOTION_THRESHOLD_ENV) };
 
     assert_eq!(promoted, 1);
     assert_eq!(status_of(&db, &promoted_one), "active");
@@ -249,6 +240,8 @@ fn test_run_promotion_respects_env_threshold() {
 
 #[test]
 fn test_run_promotion_is_idempotent() {
+    // Reads the threshold on both runs, so the guard spans the body.
+    let _guard = ConfigEnvGuard::acquire();
     let (_dir, path) = create_test_db();
     let db = Database::open(path.as_path()).unwrap();
 
@@ -269,6 +262,8 @@ fn test_run_promotion_is_idempotent() {
 
 #[test]
 fn test_handle_promote_json_and_success() {
+    // handle_promote resolves the threshold itself — a read under the guard.
+    let _guard = ConfigEnvGuard::acquire();
     let (_dir, path) = create_test_db();
     // Seed one eligible candidate so the handler has something to promote.
     {

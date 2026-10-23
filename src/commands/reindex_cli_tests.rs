@@ -20,6 +20,28 @@ use crate::memory::crud::test_fake_embedder;
 use crate::sqlite::Database;
 use crate::sqlite::identity;
 
+/// Knobs the spawned child must not inherit — group 1: every knob
+/// `Config::load()` parses, from the one authoritative list in
+/// `tests_utils::CONFIG_ENV_VARS`.
+///
+/// The child inherits the parent's environment, so a single malformed value held
+/// by a sibling test at spawn time (`-1`, `abc`) makes the child's
+/// `Config::load()` fail and turns a clean pass into a non-zero exit. Removal
+/// happens per child rather than by clearing in the parent: these tests never
+/// read the knobs back (they pass `--db-path` and expect the default model), and
+/// `Command::env_remove` mutates no process-global state. The launch itself is
+/// not free, though: spawning reads the parent's environ to build the child's,
+/// so `capture_force_output` holds the shared env mutex across the `spawn()`
+/// call (and nothing after it), serialising that one instant against every
+/// writer in this target.
+const CONFIG_ENV_VARS_EXCLUDED: &[&str] = crate::config::tests_utils::CONFIG_ENV_VARS;
+
+/// Group 2: the two knobs `project.rs::detect_project` reads on every
+/// invocation (`main.rs` calls it before dispatch), which are outside the
+/// `Config` knob list. Harmless for `--all-projects` today, but `VIPUNE_DEBUG`
+/// makes `project.rs` `eprintln!` and these tests assert on stderr byte-for-byte.
+const PROJECT_ENV_VARS_EXCLUDED: &[&str] = &["VIPUNE_PROJECT", "VIPUNE_DEBUG"];
+
 fn create_test_db() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("test.db");
@@ -70,6 +92,14 @@ fn vipune_bin() -> std::path::PathBuf {
 ///
 /// Subprocess capture is used (rather than in-process fd swapping) because
 /// the test harness's own output reader conflicts with in-process fd swaps.
+///
+/// The shared env mutex is held only across `spawn()` — the call that snapshots
+/// the parent's environ, which races a sibling's `set_var` — and released
+/// before `wait_with_output()`, so the child's whole run does not sit inside
+/// the critical section every env-writer in this target must wait for.
+///
+/// Callers must not hold the env guard: `ENV_MUTEX` is not reentrant, so
+/// acquiring it here while the caller holds it blocks on the caller's own lock.
 fn capture_force_output(db_path: &std::path::Path, json: bool) -> (i32, String, String) {
     let mut cmd = std::process::Command::new(vipune_bin());
     cmd.arg("reindex")
@@ -83,8 +113,20 @@ fn capture_force_output(db_path: &std::path::Path, json: bool) -> (i32, String, 
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    for var in CONFIG_ENV_VARS_EXCLUDED
+        .iter()
+        .chain(PROJECT_ENV_VARS_EXCLUDED.iter())
+    {
+        cmd.env_remove(var);
+    }
 
-    let output = cmd.output().expect("spawn vipune reindex --force");
+    let child = {
+        let _lock = crate::config::tests_utils::lock_env_mutex();
+        cmd.spawn().expect("spawn vipune reindex --force")
+    };
+    let output = child
+        .wait_with_output()
+        .expect("wait for vipune reindex --force");
     let code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -273,12 +315,18 @@ fn test_force_per_row_failure_error_shape_and_post_state() {
         )
         .unwrap();
 
-    // `Config::load()` resolves the full default config (including the
-    // home-dir database path). The migration only reads `embedding_model`
-    // and `database_path` here; the other fields are carried through as-is.
-    let mut config = crate::config::Config::load().unwrap();
-    config.database_path = db_path.clone();
-    config.embedding_model = "BAAI/bge-small-en-v1.5".to_string();
+    // `Config::default()` rather than `Config::load()`: `load()` parses every
+    // `VIPUNE_*` knob and returns `Err` on a malformed value, which would make
+    // this `unwrap()` panic whenever a sibling writer holds one. The migration
+    // reads only `embedding_model`, and both it and `database_path` are set
+    // below, so this test reads no `VIPUNE_*` knob (`Config::default()` still
+    // resolves `HOME` through `dirs::home_dir()`, which no assertion here
+    // depends on).
+    let config = crate::config::Config {
+        database_path: db_path.clone(),
+        embedding_model: "BAAI/bge-small-en-v1.5".to_string(),
+        ..Default::default()
+    };
     let mut embed = |content: &str| {
         if content == "bad content" {
             Err(crate::sqlite::Error::Sqlite(
