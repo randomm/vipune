@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-10-23
+
+### Bug Fixes
+
+- *(work)* Vipune export/import silently drops each memory's… ([#239](https://github.com/randomm/vipune/pull/239))
+
+
 ## [0.15.3] - 2026-10-23
 
 ### Bug Fixes
