@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-10-23
+
+### Bug Fixes
+
+- Serialise env-mutating tests on one shared mutex ([#236](https://github.com/randomm/vipune/pull/236))
+
+
 ## [0.15.2] - 2026-10-22
 
 ### Bug Fixes
