@@ -69,17 +69,16 @@ fn test_something_with_env_vars() {
 }
 ```
 
-The knob list itself, `tests_utils::CONFIG_ENV_VARS`, has exactly one copy: it
-is what `config::overrides` tests clear, what `config::tests` clears around
-`Config::load()`, and what `commands::reindex_cli_tests` removes from spawned
-children (as `CONFIG_ENV_VARS_EXCLUDED`, with `PROJECT_ENV_VARS_EXCLUDED` adding
-the two `project.rs` knobs on top).
-`test_config_env_vars_match_env_parser` fails the build if it drifts from the
-`apply_*_override` functions in `config/env_parser.rs`, so a new knob cannot be
-silently left out of the clearing. If your test writes a knob outside that list
-(or wants the lock without the bulk clear — e.g. a slow spawn that must not
-hold the mutex while it waits on a child), use `tests_utils::lock_env_mutex()`
-and `tests_utils::cleanup_env_vars(&["YOUR_VAR"])` explicitly.
+The knob list itself, `tests_utils::CONFIG_ENV_VARS`, has exactly one copy: the
+config tests clear it, the helpers that wrap `Config::load()` clear it, and the
+CLI tests that spawn the binary remove it from the child (plus the two
+project-detection knobs on top). `test_config_env_vars_match_env_parser` fails
+the build if it drifts from the `apply_*_override` functions in
+`config/env_parser.rs`, so a new knob cannot be silently left out of the
+clearing. If your test writes a knob outside that list (or wants the lock
+without the bulk clear — e.g. to serialise a child-process launch against
+writers), use `tests_utils::lock_env_mutex()` and
+`tests_utils::cleanup_env_vars(&["YOUR_VAR"])` explicitly.
 
 A writer-only rule is not enough, because a lock serialises only against
 other holders. Tests that **read** the environment indirectly are easy to miss
@@ -88,24 +87,22 @@ other holders. Tests that **read** the environment indirectly are easy to miss
 - `Config::load()` parses every `VIPUNE_*` knob and returns `Err` on a
   malformed value, so a test calling it — directly or through a helper —
   panics on a sibling writer's `-1` / `abc`.
-- `std::process::Command` hands the child the parent's environment at `spawn`
-  time (see `capture_force_output` in `src/commands/reindex_cli_tests.rs`);
-  a sibling's malformed knob makes the child's `Config::load()` fail and a
-  clean pass exit non-zero.
+- `std::process::Command` reads the parent's environment when it spawns the
+  child; a sibling's malformed knob makes the child's `Config::load()` fail
+  and a clean pass exit non-zero.
 
 Prefer not to read at all. A fixture that only needs a `Config` should build
-one with `Config::default()` — no environment, no lock, no ordering to lose
-(`migration_tests::test_config`). A spawned child is neutralised the same way,
-with `Command::env_remove` per knob, which touches no process-global state.
+one with `Config::default()` — no environment, no lock, no ordering to lose.
+A spawned child is neutralised the same way, with `Command::env_remove` per
+knob, which touches no process-global state.
 
-Where the read is genuinely wanted, hold the same guard for the duration of
-the read and clear the knobs on entry first, as narrow as the call itself
-rather than the whole test body — a reader holding the shared mutex across a
-multi-second model migration serialises every writer in the target behind it.
+Where the read is genuinely wanted, a reader follows the same convention as a
+writer: take the shared guard with the first statement and hold it for the
+whole test body, so the entry-clear guarantees it observes a clean environment.
 
-Three rules for writers, all of which exist because of an observed flake
-(issue #233, where `promote_tests` kept its own mutex and `config::overrides`
-tests could still move `VIPUNE_PROMOTION_THRESHOLD` underneath it):
+Three rules for writers and knob-readers alike, all of which exist because of
+an observed flake (issue #233, where one test file kept its own mutex while
+tests in another module moved the same variable underneath it):
 
 - **One guard per target.** A file-local `static Mutex` only serialises within
   that file; a reader in another module writes the same variable freely. Reuse
@@ -120,10 +117,13 @@ tests could still move `VIPUNE_PROMOTION_THRESHOLD` underneath it):
   how one genuine assertion failure in `config::overrides` used to become two or
   three unrelated `Config::load().unwrap()` panics elsewhere in the target. Do
   not treat a trailing `clean_env()` as the exit-clear. Recover from poisoning
-  with `unwrap_or_else(|e| e.into_inner())` (or just call
-  `tests_utils::lock_env_mutex()`, which does) — a genuine assertion failure in
-  one test should not make every sibling panic with `PoisonError` on top of it.
-  Recovery is required at **every** acquisition of the shared mutex, not only in
+  at **every** acquisition — a genuine assertion failure in one test should not
+  make every sibling panic with `PoisonError` on top of it. In-crate tests get
+  this from one helper, `tests_utils::lock_env_mutex()`: both
+  `ConfigEnvGuard::acquire` and any explicit acquisition go through it, so the
+  poison-recovery incantation exists in exactly one place. A `tests/` file that
+  owns its own mutex recovers there the same way. Recovery is required at
+  **every** acquisition of the shared mutex, not only in
   the file that most recently changed: poisoning is a property of the mutex, so
   one unrecovered `.lock().unwrap()` in any module turns a single real failure
   into a target-wide one.
@@ -141,8 +141,9 @@ Integration tests under `tests/` cannot reach the crate's `#[cfg(test)]`
 mutex, but they are one process each and the same `set_var`-vs-`getenv` hazard
 applies inside them. A test there that mutates the environment takes a
 file-local `static Mutex` (declared at the top of that test file) and holds it
-for the whole body — as `tests/lib_integration.rs` does for its one env-writing
-test.
+for the whole body. A writer-side lock serialises only against other holders
+of *that* mutex — every env-touching test in the file must take it, or the
+lock protects nothing.
 
 Do not paper over a shared-env race with `--test-threads=1` or
 `RUST_TEST_THREADS`; make the test self-isolating instead.

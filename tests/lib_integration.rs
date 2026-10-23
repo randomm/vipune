@@ -11,12 +11,16 @@ use vipune::{
 
 /// Serialises the tests in this file that mutate the process environment.
 ///
-/// A `tests/` binary cannot reach the crate's `#[cfg(test)]`
-/// `config::tests_utils::ENV_MUTEX`, so it owns its own — libtest still runs
-/// these tests on threads of one process, and `set_var`/`remove_var` racing a
-/// concurrent `getenv` is the hazard regardless of whose mutex is held. Take it
-/// with the first statement of any test here that writes the env and hold it for
-/// the whole body (see `docs/testing.md`).
+/// A writer-side lock serialises only against other *holders*: it keeps the
+/// env-writers out of each other's way, but a test that never takes this lock
+/// can still call `getenv` while a writer holds it — so every test in this
+/// file that touches the environment must go through it. A `tests/` binary
+/// cannot reach the crate's `#[cfg(test)]` `config::tests_utils::ENV_MUTEX`,
+/// so it owns its own; libtest still runs these tests on threads of one
+/// process, and `set_var`/`remove_var` racing a concurrent `getenv` is the
+/// hazard regardless of whose mutex is held. Take it with the first statement
+/// of any test here that writes the env and hold it for the whole body (see
+/// `docs/testing.md`).
 static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Test basic memory add and search operations.
@@ -204,9 +208,10 @@ fn test_search_with_oversized_input_returns_error() {
 /// Test that Config::default() works without environment variables.
 #[test]
 fn test_config_default_with_no_env_vars_returns_valid_config() {
-    // Mutates the process env, so it holds this file's env guard for its whole
-    // body: the four removals below would otherwise race the `getenv` calls in
-    // the ~45 sibling tests running on threads of this same process.
+    // Writes the process env, so this file's guard is held for the whole body.
+    // The lock serialises against other holders only — siblings that skip it
+    // still call `getenv` concurrently; that is the residual, documented in
+    // `docs/testing.md`.
     let _guard = ENV_MUTEX
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());

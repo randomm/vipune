@@ -61,11 +61,13 @@ pub fn cleanup_config_env_vars() {
 /// then leaks into whatever test the scheduler runs next.
 ///
 /// The lock is held for the whole body; take it as the first statement.
+#[must_use = "the guard is the lock: a discarded guard releases it and skips the exit-clear"]
 pub struct ConfigEnvGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
 impl ConfigEnvGuard {
+    #[must_use = "hold the guard for the whole test body; discarding it releases the lock immediately"]
     pub fn acquire() -> Self {
         let _lock = lock_env_mutex();
         cleanup_config_env_vars();
@@ -84,6 +86,7 @@ impl Drop for ConfigEnvGuard {
 /// A test that panics while holding the mutex poisons it; propagating that
 /// turns one real failure into a target-wide one, so every acquisition recovers
 /// rather than `unwrap()`ing.
+#[must_use = "hold the guard while the environment is mutated; discarding it releases the lock immediately"]
 pub fn lock_env_mutex() -> std::sync::MutexGuard<'static, ()> {
     ENV_MUTEX
         .lock()

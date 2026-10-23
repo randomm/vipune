@@ -29,8 +29,10 @@ use crate::sqlite::identity;
 /// `Config::load()` fail and turns a clean pass into a non-zero exit. Removal
 /// happens per child rather than by clearing in the parent: these tests never
 /// read the knobs back (they pass `--db-path` and expect the default model), and
-/// `Command::env_remove` mutates no process-global state, so it cannot race a
-/// sibling thread's `getenv`.
+/// `Command::env_remove` mutates no process-global state. The launch itself is
+/// not free, though: `cmd.output()` reads the parent's environ to build the
+/// child's, so `capture_force_output` holds the shared env mutex across the
+/// spawn, serialising it against every writer in this target.
 const CONFIG_ENV_VARS_EXCLUDED: &[&str] = crate::config::tests_utils::CONFIG_ENV_VARS;
 
 /// Group 2: the two knobs `project.rs::detect_project` reads on every
@@ -89,7 +91,11 @@ fn vipune_bin() -> std::path::PathBuf {
 ///
 /// Subprocess capture is used (rather than in-process fd swapping) because
 /// the test harness's own output reader conflicts with in-process fd swaps.
+///
+/// The shared env mutex is held across `cmd.output()`: spawning reads the
+/// parent's environ, which races a sibling's `set_var` unless serialised.
 fn capture_force_output(db_path: &std::path::Path, json: bool) -> (i32, String, String) {
+    let _lock = crate::config::tests_utils::lock_env_mutex();
     let mut cmd = std::process::Command::new(vipune_bin());
     cmd.arg("reindex")
         .arg("--force")
