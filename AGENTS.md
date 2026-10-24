@@ -180,7 +180,7 @@ Orientation for agents new to the codebase (verify against the tree — the
 | `src/sqlite/` | Storage: `Database`, `Memory` struct, `search`, `fts` (FTS5), `migrations`, `supersede`, `import`/`export_scan` |
 | `src/embedding/` | ONNX pipeline; `EMBED_MODEL_ID` / `EMBED_MODEL_REVISION` pin the model |
 | `src/config/` | Env + TOML loading, validation, paths |
-| `src/project/` | Git-root project detection/scoping |
+| `src/project.rs` | Git-root project detection/scoping |
 | `src/rrf.rs` | Reciprocal-rank fusion of dense + FTS results |
 | `src/temporal.rs` | Recency/decay scoring |
 | `src/hook/` | Hook install/run (embedding hook payloads) |
