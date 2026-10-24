@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-10-24
+
+### Documentation
+
+- Add AGENTS.md agent doctrine ([#260](https://github.com/randomm/vipune/pull/260))
+
+
 ## [0.16.1] - 2026-10-23
 
 ### Miscellaneous
