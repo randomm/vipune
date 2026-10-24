@@ -206,8 +206,9 @@ Orientation for agents new to the codebase (verify against the tree — the
   revision — if you bump the revision, update both or the drift test fails.
 - **Release config**: `release-plz.toml` sets `features_always_increment_minor
   = true` (0.x crate, Conventional-Commits reading: `feat` → minor) and
-  publishes to crates.io with trusted publishing; tags follow `vX.Y.Z` to
-  trigger cargo-dist.
+  publishes to crates.io using the `CARGO_REGISTRY_TOKEN` repository secret
+  (see `.github/workflows/release-plz.yml`); tags follow `vX.Y.Z` to trigger
+  cargo-dist.
 
 ---
 
