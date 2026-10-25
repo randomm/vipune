@@ -7,9 +7,11 @@
 //!
 //! Contract (issue #195):
 //! - Operates on the resolved `config.database_path` (honours `--db-path`).
-//! - Fast-fails with the actionable "Database is locked…" message when the
-//!   source DB is held by another process (busy_timeout = 0, same shape as
-//!   merge/reindex).
+//! - Reports the actionable "Database is locked…" message when the source DB
+//!   is held by another process. Statements after the open fail immediately
+//!   (`busy_timeout = 0`, same shape as merge/reindex); the open itself waits
+//!   SQLite's default busy timeout, as it runs schema creation and migrations
+//!   before that timeout can be applied.
 //! - Never re-embeds and never decodes embeddings — the copy is a page-level
 //!   duplicate, so corrupt/NULL embedding blobs carry through byte-identically.
 
