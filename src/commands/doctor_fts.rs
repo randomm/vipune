@@ -28,9 +28,8 @@ use std::process::ExitCode;
 /// A database-wide view of `memories` counts, keyed by project.
 #[derive(Default)]
 struct MemoryCounts {
-    /// Total `memories` rows, globally.
-    total: usize,
-    /// Total `memories` rows per project.
+    /// Total `memories` rows per project. A project with zero rows is absent
+    /// (the contract `Database::row_counts_by_project` documents).
     by_project: HashMap<String, usize>,
 }
 
@@ -68,14 +67,23 @@ fn handle_doctor_fts_detect(
     project_filter: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    // Open READ-ONLY — this diagnostic must not modify the DB. Any accidental write
-    // fails with SQLITE_READONLY instead of silently corrupting data.
-    let db = Database::from_conn(super::db_busy::wrap_rusqlite_busy(
-        Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY),
-    )?);
+    // Open READ-ONLY — this diagnostic must not modify the DB. Any accidental
+    // write fails with SQLITE_READONLY instead of silently corrupting data.
+    //
+    // A read-only open takes no write lock, so it does not contend with a
+    // `BEGIN EXCLUSIVE` writer at all: this path fails fast on the first
+    // statement. Only the read-write `Database::open` below (and
+    // `migrate_model`'s) waits SQLite's default busy timeout, because it runs
+    // `create_schema`/migrations before a busy timeout can be applied.
+    let db = Database::from_conn(super::db_busy::wrap_busy(Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ))?);
 
     let report: FtsDesyncReport = super::db_busy::wrap_busy(db.detect_fts_desync())?;
-    let counts = super::db_busy::wrap_busy_error(memory_counts(&db))?;
+    // One aggregate pass per handler invocation: `build_response` only reads
+    // the per-project counts, and nothing below re-writes `memories`.
+    let counts = super::db_busy::wrap_busy(memory_counts(&db))?;
 
     let response = build_response(&report, &counts, project_filter, false, 0);
 
@@ -96,14 +104,20 @@ fn handle_doctor_fts_repair(
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Pre-check: open READ-ONLY and run the rowid join.
-    let pre = Database::from_conn(super::db_busy::wrap_rusqlite_busy(
-        Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY),
-    )?);
+    let pre = Database::from_conn(super::db_busy::wrap_busy(Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ))?);
     let pre_report: FtsDesyncReport = super::db_busy::wrap_busy(pre.detect_fts_desync())?;
+    // ONE aggregate pass for the whole handler: `rebuild_fts` rewrites only
+    // `memories_fts`, never `memories` (see its doc), so the pre-rebuild
+    // per-project counts are still exact for the post-rebuild response and a
+    // second (or third) `row_counts_by_project()` would rescan the table for
+    // a value that cannot have changed.
+    let counts = super::db_busy::wrap_busy(memory_counts(&pre))?;
 
     // No desync → skip the rebuild entirely, report zero actions, data_version untouched.
     if !pre_report.is_desynced() {
-        let counts = super::db_busy::wrap_busy_error(memory_counts(&pre))?;
         let response = build_response(&pre_report, &counts, project_filter, true, 0);
         emit(&response, json);
         return Ok(ExitCode::SUCCESS);
@@ -124,22 +138,12 @@ fn handle_doctor_fts_repair(
     // repo uses. It does not touch `memories` data. Fast-fail on a lock: a
     // SQLITE_BUSY here aborts the statement, so the caller is told to re-run
     // the repair (the rebuild is idempotent) rather than left guessing.
-    //
-    // The decision is made on the classified error BEFORE the locked message is
-    // rendered into `Error::Config`: only the locked verdict earns the
-    // half-rebuilt recovery note, so an unrelated failure from this call chain
-    // can never be told its index is half-rebuilt.
     if let Err(e) = db.rebuild_fts().map_err(Error::from) {
-        return Err(if e.is_locked() {
-            Error::Config(recovery_note())
-        } else {
-            e
-        });
+        return Err(recovery_for(e));
     }
 
     // Post-rebuild: detect again on the same (still-open, read-write) connection.
     let post_report: FtsDesyncReport = super::db_busy::wrap_busy(db.detect_fts_desync())?;
-    let counts = super::db_busy::wrap_busy_error(memory_counts(&db))?;
     let actions = post_report.total_desynced() + pre_report.total_desynced();
     let response = build_response(&post_report, &counts, project_filter, true, actions);
 
@@ -147,8 +151,19 @@ fn handle_doctor_fts_repair(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Open the database read-write (schema creation is a no-op on an existing DB), then
-/// set a ZERO busy timeout so a locked DB fast-fails with the actionable message.
+/// Open the database read-write (schema creation is a no-op on an existing DB),
+/// then set a ZERO busy timeout so a contended *statement* fast-fails with the
+/// actionable message.
+///
+/// Scope of "fast-fail" (issue #255 review): the ZERO timeout is applied *after*
+/// `Database::open` returns, so the open's own statements — `create_schema` and
+/// `run_migrations`, the latter taking a `BEGIN EXCLUSIVE` — run under SQLite's
+/// default busy timeout and block ~5s before failing. Measured against an
+/// external `BEGIN EXCLUSIVE` writer, `doctor --fts --repair` reports the
+/// actionable locked message ~5.0s after the call; statements on the returned
+/// handle (the rebuild among them) fail immediately. The same is true of every
+/// other read-write open in the CLI; the read-only diagnostic opens do not
+/// contend at all and fail fast.
 fn open_read_write(db_path: &Path) -> Result<Database, Error> {
     let db = super::db_busy::wrap_busy(Database::open(db_path))?;
     db.set_busy_timeout(std::time::Duration::ZERO)?;
@@ -166,23 +181,38 @@ fn emit(response: &DoctorFtsResponse, json: bool) {
 /// The locked-repair guidance: the standard busy message plus the re-run
 /// command, since an interrupted rebuild leaves the index half-populated.
 ///
-/// A function rather than an inline `format!` so
-/// `the_recovery_note_requires_the_locked_verdict` asserts the *handler's*
-/// text instead of a copy of it (issue #255 review, round 3).
+/// Composed from [`LOCKED_DB_MESSAGE`] rather than a literal so the locked
+/// wording has one source (see `errors::LOCKED_DB_LEAD`).
 pub(crate) fn recovery_note() -> String {
     format!(
         "{LOCKED_DB_MESSAGE} The FTS index may be half-rebuilt; re-run `vipune doctor --fts --repair` to complete it."
     )
 }
 
-/// Count `memories` rows globally and per project on an already-open `Database`
-/// in a single aggregate pass. Deliberately NOT a `COUNT(*)` per project id:
+/// The rebuild failure → what the operator is told. The single decision the
+/// mid-rebuild arm makes, extracted so
+/// `the_recovery_note_requires_the_locked_verdict` drives the same function
+/// the handler calls rather than a copy of its `if` (issue #255 review).
+///
+/// Only the classified locked verdict earns the half-rebuilt note; any other
+/// failure passes through untouched, so an unrelated error from this call
+/// chain can never be told its index is half-rebuilt.
+pub(crate) fn recovery_for(e: Error) -> Error {
+    if e.is_locked() {
+        Error::Config(recovery_note())
+    } else {
+        e
+    }
+}
+
+/// Count `memories` rows per project on an already-open `Database` in a
+/// single aggregate pass. Deliberately NOT a `COUNT(*)` per project id:
 /// `Database::row_counts_by_project` is the aggregate sibling (the shape
-/// `export_scan::scan_all_rows` documents for scans).
+/// `export_scan::scan_all_rows` documents for scans). The global total is
+/// never reported by either renderer, so it is not computed.
 fn memory_counts(db: &Database) -> Result<MemoryCounts, Error> {
     let mut counts = MemoryCounts::default();
     for (project_id, rows) in db.row_counts_by_project()? {
-        counts.total += rows;
         *counts.by_project.entry(project_id).or_insert(0) += rows;
     }
     Ok(counts)

@@ -12,6 +12,15 @@ use super::Error;
 /// The public rendering of a locked store: the storage-layer Display text for
 /// [`DbErrorKind::Locked`]. Kept next to the classifier that produces it so the
 /// text and the verdict stay one decision (issue #255).
+///
+/// Byte-identical to what `Error::Sqlite("database is locked")` renders — that
+/// is deliberate: the pi-rukas `ctx7` wrapper greps the CLI's stderr for the
+/// framed text, so changing one rendering without the other would silently
+/// stop the external matcher from seeing locks. The consequence is that at the
+/// *text* layer a retryable lock is indistinguishable from a hard database
+/// failure, which is exactly why `is_locked()` reads the variant and no
+/// consumer may classify on this string.
+/// `locked_storage_error_renders_the_canonical_busy_text` pins the text.
 pub(crate) const LOCKED_DISPLAY: &str = "Database error: database is locked";
 
 /// How a raw `rusqlite::Error` should be presented to callers.
@@ -38,20 +47,15 @@ pub(crate) enum DbErrorKind<'a> {
 
 /// The domain errors a row-conversion failure is allowed to carry.
 ///
-/// `query_mod::corrupt_embedding_error` is the only producer and always wraps
-/// `CorruptEmbedding` (the other two decoding failures reach it only as the
-/// `reason` string), so today this allow-list effectively has one member; the
-/// other two arms are cheap future-proofing for a producer that preserves the
-/// inner variant. Anything else on the source chain is not ours to trust, so
-/// the classifier falls through to `Other` rather than promoting its payload
-/// into the public error.
+/// The allow-list is the inherent predicate
+/// [`Error::is_structured_embedding_error`], declared next to the variants in
+/// `sqlite/mod.rs` and shared with the two other enumerations of the same set
+/// (`From<crate::sqlite::Error> for vipune::Error` and the MCP `data` arms),
+/// so a fourth structured variant is one edit beside the variant itself.
+/// Anything outside the set is not ours to trust, so the classifier falls
+/// through to `Other` rather than promoting its payload into the public error.
 fn is_trusted_domain_error(err: &Error) -> bool {
-    matches!(
-        err,
-        Error::CorruptEmbedding { .. }
-            | Error::InvalidBlobSize { .. }
-            | Error::MismatchedDimensions { .. }
-    )
+    err.is_structured_embedding_error()
 }
 
 /// Classify a raw rusqlite error at the storage boundary.
@@ -121,6 +125,32 @@ mod tests {
             DbErrorKind::Domain(Error::CorruptEmbedding { id, .. }) => assert_eq!(id, "mem-1"),
             other => panic!("expected the CorruptEmbedding domain error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_row_conversion_failure_carrying_store_derived_text_is_other() {
+        // The security-relevant shape is the one a hostile database file can
+        // actually produce: `map_row_to_memory` reads `content`, `metadata`,
+        // `type`, `status`, `importance` and every timestamp straight out of
+        // the row, and a failure on those columns reaches this same
+        // `From<rusqlite::Error>` boundary as a `FromSqlConversionFailure`. It
+        // passes as `Other` only because the payload is rusqlite's own
+        // `FromSqlError`, never a `crate::sqlite::Error`. If a future change
+        // ever put a `Sqlite(external text)` on that chain, this must not
+        // promote it — the invariant lives at `corrupt_embedding_error`, which
+        // is the only sanctioned producer of a domain payload here.
+        let store_derived = "content echoed from the memories table".to_string();
+        let smuggled = rusqlite::Error::FromSqlConversionFailure(
+            crate::sqlite::EMBEDDING_COLUMN,
+            rusqlite::types::Type::Blob,
+            Box::new(rusqlite::types::FromSqlError::other(
+                super::super::Error::Sqlite(store_derived),
+            )),
+        );
+        assert!(
+            matches!(classify_db_error(&smuggled), DbErrorKind::Other),
+            "a Sqlite payload carrying store-derived text must not be promoted"
+        );
     }
 
     #[test]

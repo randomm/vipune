@@ -509,11 +509,14 @@ impl From<Error> for rmcp::ErrorData {
             // message (issue #255 changed only the message body: the underlying
             // SQLite text is now included instead of the bare "Database
             // error"). That text is returned verbatim to the client by design:
-            // the MCP server is a stdio transport the client itself started,
-            // and the same client can run the CLI and read the identical string
-            // on stderr, so nothing is disclosed here that the CLI withholds.
-            // Downstream log-shipping therefore sees raw SQLite text
-            // (`no such table: …`, `UNIQUE constraint failed: memories.id`).
+            // vipune does not filter SQLite wording on any surface — the CLI
+            // prints it (stderr for humans, and in the `error` key on STDOUT
+            // under `--json`, so it is part of that data stream, not just a
+            // diagnostic channel), and MCP returns the same string. A log
+            // shipper therefore sees raw SQLite text (`no such table: …`,
+            // `UNIQUE constraint failed: memories.id`) whichever surface it
+            // consumes. What vipune *does* sanitise (memory ids in not-found
+            // errors, below) is sanitised on every surface alike.
             // A locked database is reported as such so an MCP client
             // can retry rather than treat it as a server defect. rmcp's
             // `ErrorCode` set has no "try again later", so the code stays

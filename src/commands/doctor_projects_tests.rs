@@ -38,8 +38,11 @@ fn test_detects_real_split_pair_with_correct_row_counts() {
 }
 
 #[test]
-fn test_detects_split_pair_via_count_rows_for_project() {
+fn test_detects_split_pair_from_explicit_counts() {
     // "repo" (bare) + "owner/repo" (owned) → one pair with correct row counts.
+    // The counts are supplied to the pure heuristic here; `row_counts_by_project`
+    // — the aggregate that replaced the old per-project `count_rows_for_project`
+    // — is driven by `row_counts_by_project_omits_zero_row_projects`.
     let project_ids = vec!["repo".to_string(), "owner/repo".to_string()];
     let counts = make_counts(&[("repo", 1), ("owner/repo", 2)]);
 

@@ -648,13 +648,18 @@ All commands return exit code `1` on error, with error message to stderr or JSON
 The `error` key, the output stream, and the exit codes above are stable; only
 the message body reflects the underlying failure. Database errors now render
 the underlying SQLite message (`Database error: no such table: memories`)
-instead of the bare `Database error`. The MCP server returns that same text
-verbatim in its `ErrorData` message, so a client's log shipper sees raw
-SQLite wording (`no such table: …`, `UNIQUE constraint failed: memories.id`)
-— intentional, since the same client can run the CLI and read it on stderr.
-That verbatim rule covers the database-error payloads only: where an error's
-payload is deliberately sanitised before reaching the boundary (memory ids in
-not-found errors), the sanitised text is what both surfaces show.
+instead of the bare `Database error`.
+
+**What a database error discloses, and where it goes.** The rendered message
+is the same string on every surface: the human path writes it to stderr
+(`Error: …`), `--json` puts it in the `error` key on **stdout**, and the MCP
+server returns it verbatim in its `ErrorData` message. So raw SQLite wording
+(`no such table: …`, `UNIQUE constraint failed: memories.id`) is part of the
+*data* stream a JSON caller or log shipper consumes — not only a diagnostic
+channel — and it is deliberately not filtered: the SQLite message is what makes
+a permissions, disk-full, or schema failure actionable. The one exception is a
+payload vipune sanitises before it reaches the boundary at all (memory ids in
+not-found errors), which is sanitised on every surface alike.
 
 **Common errors:**
 - Memory not found (`get`, `update`, `delete`)
@@ -663,10 +668,15 @@ not-found errors), the sanitised text is what both surfaces show.
 - Missing or invalid configuration
 
 **Locked database:** when another process (usually a running MCP server) holds
-a write lock, commands fast-fail with the actionable "Database is locked …
-Stop the MCP server and retry." message and exit `1`. The wording itself is
-not a contract — library consumers match `vipune::Error::DatabaseLocked` or
-call `Error::is_locked()` instead.
+a write lock, commands report the actionable "Database is locked … Stop the
+MCP server and retry." message and exit `1`. How fast that arrives depends on
+where the lock is hit: statements issued after the command has its handle
+(the writes, the FTS rebuild) fail immediately, because those handlers set a
+zero busy timeout; the **open** itself — which runs schema creation and, when a
+migration is pending, a `BEGIN EXCLUSIVE` — happens before that timeout is
+applied, so a contended open waits SQLite's default busy timeout (5s) and then
+fails. The wording itself is not a contract — library consumers match
+`vipune::Error::DatabaseLocked` or call `Error::is_locked()` instead.
 
 ---
 

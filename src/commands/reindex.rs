@@ -40,8 +40,12 @@ use std::time::Duration;
 const PROGRESS_INTERVAL: usize = 50;
 
 /// Open a `Database` handle that fails fast on a locked database, mapping
-/// the lock error to the actionable MCP-server hint. `busy_timeout` is set
-/// to zero so any contended operation fails immediately instead of waiting.
+/// the lock error to the actionable MCP-server hint. `busy_timeout` is set to
+/// zero so any contended *statement* fails immediately instead of waiting.
+///
+/// The `Database::open` itself runs `create_schema`/migrations BEFORE that
+/// timeout can be applied, so a contended open waits SQLite's default busy
+/// timeout (~5s) and then reports the same actionable message.
 fn open_fast_fail(db_path: &Path) -> Result<Database, Error> {
     let db = super::db_busy::wrap_busy(Database::open(db_path))?;
     db.set_busy_timeout(Duration::ZERO)?;

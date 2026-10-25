@@ -1,6 +1,9 @@
 //! SQLite backend for vipune memory storage.
 //!
-//! Provides: `Database`, `Memory`, `embedding`, `search`, `fts`, `hash` modules.
+//! Provides: `Database`, `Memory`, and the `db_error`, `embedding`, `search`,
+//! `fts`, `hash`, `identity`, `project_queries` submodules. The last two were
+//! split out of this file to keep it near the project's 500-line cap; the
+//! module map in `docs/architecture.md` lists where each surface now lives.
 
 pub(crate) mod db_error;
 pub mod embedding;
@@ -114,6 +117,27 @@ pub enum Error {
     /// The migration marker is left in place and the old identity is kept;
     /// the `report` carries the per-row failure details.
     MigrationIncomplete { report: MigrationReport },
+}
+
+impl Error {
+    /// True for the structured embedding-decoding variants — the ones that
+    /// carry fields a caller acts on (`id`/`reason`, `expected`/`actual`) and
+    /// are therefore allowed to cross the public boundary as typed payloads
+    /// and to be trusted as the source of a row-conversion failure.
+    ///
+    /// The single enumeration of that set: `db_error::is_trusted_domain_error`,
+    /// `From<crate::sqlite::Error> for vipune::Error` and the MCP `data` arms
+    /// all key off it, so adding a structured variant is one edit here rather
+    /// than three coordinated lists.
+    #[must_use]
+    pub(crate) fn is_structured_embedding_error(&self) -> bool {
+        matches!(
+            self,
+            Error::CorruptEmbedding { .. }
+                | Error::InvalidBlobSize { .. }
+                | Error::MismatchedDimensions { .. }
+        )
+    }
 }
 
 impl std::fmt::Display for Error {

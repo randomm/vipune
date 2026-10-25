@@ -35,12 +35,14 @@ use std::time::Duration;
 fn run_online_backup(source: &Path, destination: &Path) -> Result<u64, Error> {
     let source_db = Database::open(source).map_err(super::db_busy::open_db_error)?;
 
-    // Fast-fail if the source is locked (MCP server holding a write lock, etc.)
-    // The Online Backup API returns raw rusqlite errors when the source is in
-    // a hot-journal state (another connection holds `BEGIN EXCLUSIVE` — the
-    // same shape as a running MCP server holding a write lock), so both that
-    // path and the `crate::sqlite::Error` path are classified by the shared
-    // helpers in `db_busy`.
+    // Fast-fail for every statement after this point (MCP server holding a
+    // write lock, etc.). The Online Backup API returns raw rusqlite errors when
+    // the source is in a hot-journal state (another connection holds
+    // `BEGIN EXCLUSIVE` — the same shape as a running MCP server holding a
+    // write lock), so both that path and the `crate::sqlite::Error` path are
+    // classified by the shared `db_busy` helper. The `Database::open` above
+    // precedes this timeout, so a contended open waits SQLite's default busy
+    // timeout (~5s) before failing.
     super::db_busy::wrap_busy(source_db.set_busy_timeout(Duration::ZERO))?;
 
     // Fresh destination: the Online Backup API copies pages into the target
@@ -55,11 +57,10 @@ fn run_online_backup(source: &Path, destination: &Path) -> Result<u64, Error> {
     // `SQLITE_BUSY` when the source is in a hot-journal state (e.g. another
     // connection has `BEGIN EXCLUSIVE` — the same shape as a running MCP
     // server holding a write lock). The error surfaces as a raw `rusqlite::
-    // Error` (not `crate::sqlite::Error`), so it goes through
-    // `wrap_busy_error` here to convert it to the actionable MCP-server
-    // message. `wrap_rusqlite_busy` is the sibling for call sites that hold
-    // the raw error rather than a converted one.
-    let backup = super::db_busy::wrap_busy_error(
+    // Error`, so it goes through the shared `wrap_busy`, whose `From` bound
+    // converts it at the storage boundary and renders the actionable
+    // MCP-server message.
+    let backup = super::db_busy::wrap_busy(
         rusqlite::backup::Backup::new(source_db.conn(), &mut dest_conn).map_err(Error::from),
     )?;
     // Drive `step(-1)` ("back up all remaining pages" per the SQLite docs) in

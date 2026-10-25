@@ -368,7 +368,7 @@ fn test_add_time_importance_protects_from_prune() {
 /// discriminates nothing). This reproduces the gap against the same demotion
 /// path the handler drives — one `Database::update` per row — and asserts the
 /// two halves of it: rows committed before the lock stay demoted, and the
-/// failed update yields no ids, which is exactly what `wrap_busy_error`
+/// failed update yields no ids, which is exactly what `wrap_busy`
 /// discards on its way to the locked message.
 #[test]
 fn a_lock_mid_demotion_loop_leaves_rows_demoted_with_no_report_of_them() {
@@ -417,7 +417,7 @@ fn a_lock_mid_demotion_loop_leaves_rows_demoted_with_no_report_of_them() {
     // unobstructed: `Database::update` commits each row, so the demotion that
     // happened before the lock is durable — and it is exactly the id the loop
     // would have reported, which `handle_prune` discards via
-    // `wrap_busy_error` on its way to the locked message.
+    // `wrap_busy` on its way to the locked message.
     assert_eq!(
         status_of(&db, &ids[0]),
         "deprecated",

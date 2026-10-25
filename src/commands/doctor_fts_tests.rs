@@ -8,7 +8,7 @@
 //!
 //! The locked-DB and repair tests use the real handler end-to-end.
 
-use crate::commands::doctor_fts::{handle_doctor_fts, recovery_note};
+use crate::commands::doctor_fts::{handle_doctor_fts, recovery_for, recovery_note};
 use crate::errors::{Error, LOCKED_DB_MESSAGE};
 use crate::memory::crud::test_fake_embedder;
 use crate::output::DoctorFtsResponse;
@@ -370,28 +370,18 @@ fn the_recovery_note_requires_the_locked_verdict() {
     // The mid-rebuild arm of the repair path can only be reached with a real
     // concurrent writer racing the rebuild statement (see the fixture note on
     // `a_lock_before_the_rebuild_keeps_the_plain_transient_framing`), so this
-    // drives its classification decision directly: only a lock may earn the
-    // "half-rebuilt, re-run --repair" note. A non-locked failure — including
-    // an `Error::Config` from anywhere else in the call chain — must pass
-    // through untouched, otherwise an operator is told to re-run a repair
-    // against an index that was never opened for writing.
-    let locked_recovery_note = |e: Error| -> Error {
-        if e.is_locked() {
-            Error::Config(recovery_note())
-        } else {
-            e
-        }
-    };
-
-    // The note is composed by the handler itself, so the wording asserted here
-    // is the wording the CLI renders — no copy to drift.
-    assert!(
-        recovery_note().starts_with(LOCKED_DB_MESSAGE),
-        "the recovery note leads with the standard locked message"
-    );
-
-    let locked = Error::DatabaseLocked;
-    match locked_recovery_note(locked) {
+    // drives the handler's own decision function — `recovery_for`, the
+    // function `handle_doctor_fts_repair` calls on the rebuild failure —
+    // rather than re-implementing its `if`. Deleting the `is_locked()` guard
+    // from the production function therefore fails this test.
+    //
+    // Only a lock may earn the "half-rebuilt, re-run --repair" note. A
+    // non-locked failure — including an `Error::Config` from anywhere else in
+    // the call chain — must pass through untouched, otherwise an operator is
+    // told to re-run a repair against an index that was never opened for
+    // writing.
+    let locked = recovery_for(Error::DatabaseLocked);
+    match locked {
         Error::Config(msg) => {
             assert!(msg.contains("MCP server"), "got: {msg}");
             assert!(
@@ -404,8 +394,8 @@ fn the_recovery_note_requires_the_locked_verdict() {
 
     // The counter-case: an unrelated Config error must NOT be told its index
     // is half-rebuilt.
-    let unrelated = Error::Config("embedding model not configured".to_string());
-    match locked_recovery_note(unrelated) {
+    let unrelated = recovery_for(Error::Config("embedding model not configured".to_string()));
+    match unrelated {
         Error::Config(msg) => {
             assert_eq!(msg, "embedding model not configured");
             assert!(
@@ -415,6 +405,15 @@ fn the_recovery_note_requires_the_locked_verdict() {
         }
         other => panic!("expected the Config error unchanged, got {other:?}"),
     }
+
+    // And the wording the note is built from is the handler's own composition
+    // of the shared locked message, not a second literal.
+    assert_eq!(
+        recovery_note(),
+        format!(
+            "{LOCKED_DB_MESSAGE} The FTS index may be half-rebuilt; re-run `vipune doctor --fts --repair` to complete it."
+        )
+    );
 }
 
 // ── FtsDesyncReport helper methods ──

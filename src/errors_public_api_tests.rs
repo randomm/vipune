@@ -32,6 +32,37 @@ fn public_variants_are_constructible_from_owned_payloads() {
     let _: fn(usize, usize) -> Error =
         |expected, actual| Error::MismatchedDimensions { expected, actual };
 
+    // The enumeration is EXHAUSTIVE on purpose: a new variant has to be added
+    // here, and adding it as `Foo { message: rusqlite::Error }` would not
+    // type-check against the `fn` signature this test pins for it. That is the
+    // compile-time half of "no variant stores a third-party type"; the
+    // wildcard arm below is what `#[non_exhaustive]` requires of consumers and
+    // is exercised separately.
+    let _: fn(Option<String>) -> Error = |message| Error::Inference(message.unwrap_or_default());
+    let _: fn(String) -> Error = |message| Error::Config(message);
+    let _: fn(String) -> Error = |message| Error::InvalidInput(message);
+    let _: fn() -> Error = || Error::EmptyInput;
+    let _: fn(usize, usize) -> Error = |max_length, actual_length| Error::InputTooLong {
+        max_length,
+        actual_length,
+    };
+    let _: fn(usize, usize) -> Error = |token_count, max_tokens| Error::ContentTooLong {
+        token_count,
+        max_tokens,
+    };
+    let _: fn(String, String) -> Error =
+        |timestamp, error| Error::InvalidTimestamp { timestamp, error };
+    let _: fn(String) -> Error = |id| Error::NotFound(id);
+    let _: fn(String) -> Error = |message| Error::Validation(message);
+    let _: fn(Vec<String>) -> Error = |offending| Error::MigrationRefused { offending };
+    let _: fn(String) -> Error = |reason| Error::EmbedderUnavailable { reason };
+    let _: fn(String) -> Error = |message| Error::Onnx { message };
+    let _: fn(String) -> Error = |message| Error::HfHub { message };
+    let _: fn(usize) -> Error = |token_count| Error::ContentTooLong {
+        token_count,
+        max_tokens: 0,
+    };
+
     // And the enum is `#[non_exhaustive]`, so consumers must carry a wildcard
     // arm: this match compiles only because of that attribute.
     let err = Error::DatabaseLocked;
@@ -41,6 +72,13 @@ fn public_variants_are_constructible_from_owned_payloads() {
         _ => "other",
     };
     assert_eq!(classified, "locked");
+
+    // Every variant is named by a constructor above or by the migration
+    // conversion below, so an unlisted variant that regressed to a
+    // third-party payload would have to be added to this file to be seen at
+    // all — and it could not be added without its payload type being named.
+    let _: fn(crate::sqlite::migration_types::MigrationReport) -> Error =
+        |report| Error::MigrationIncomplete { report };
 }
 
 #[test]
@@ -74,6 +112,53 @@ fn third_party_conversions_carry_the_message() {
         }
         other => panic!("Expected Tokenization, got {other:?}"),
     }
+
+    // The remaining four conversions this PR re-shaped. Each is constructed
+    // from the third-party type — the point of the change is that the public
+    // enum keeps none of them, so the test naming them is the assertion that
+    // the boundary, not the caller, owns the flattening.
+    let ort = ort::error::Error::new("kernel missing for op");
+    match Error::from(ort) {
+        Error::Onnx { message } => assert!(
+            message.contains("kernel missing for op"),
+            "ONNX text must survive, got: {message}"
+        ),
+        other => panic!("Expected Onnx, got {other:?}"),
+    }
+
+    let hub = hf_hub::api::sync::ApiError::ParseIntError(
+        "not-a-number".parse::<i64>().expect_err("not a number"),
+    );
+    match Error::from(hub) {
+        Error::HfHub { message } => assert!(
+            !message.is_empty(),
+            "a Hub failure must carry its rendered text"
+        ),
+        other => panic!("expected HfHub, got {other:?}"),
+    }
+
+    // serde and chrono failures are caller-controlled payloads, so both
+    // collapse onto `InvalidInput` (see the conversions' docs) with the
+    // underlying text intact.
+    let json =
+        serde_json::from_str::<serde_json::Value>("{ not json").expect_err("malformed document");
+    match Error::from(json) {
+        Error::InvalidInput(message) => assert!(
+            !message.is_empty(),
+            "the serde message must survive onto InvalidInput"
+        ),
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
+
+    let timestamp =
+        chrono::DateTime::parse_from_rfc3339("nonsense").expect_err("not an RFC3339 timestamp");
+    match Error::from(timestamp) {
+        Error::InvalidInput(message) => assert!(
+            !message.is_empty(),
+            "the chrono message must survive onto InvalidInput"
+        ),
+        other => panic!("expected InvalidInput, got {other:?}"),
+    }
 }
 
 #[test]
@@ -83,11 +168,14 @@ fn locked_database_message_stays_byte_identical_to_the_cli_text() {
     // tests assert the structured variant instead of re-parsing the string,
     // and a wording change fails loudly.
     let err = Error::DatabaseLocked;
+    assert_eq!(err.to_string(), LOCKED_DB_MESSAGE);
+    // And that one source really is the whole wording: the consts the
+    // `#[error]` attribute interpolates compose it, so there is no second
+    // literal a fix pass could drift from.
     assert_eq!(
-        err.to_string(),
-        "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry."
+        LOCKED_DB_MESSAGE,
+        format!("{LOCKED_DB_LEAD} {LOCKED_DB_HINT}")
     );
-    assert_eq!(LOCKED_DB_MESSAGE, err.to_string());
 }
 
 #[test]

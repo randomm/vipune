@@ -17,9 +17,22 @@
 //!
 //! A locked database is the dedicated `DatabaseLocked` variant, testable with
 //! `Error::is_locked()` — the replacement for matching the Display text
-//! "database is locked".
+//! "database is locked". Two matchers outside this crate read rendered error
+//! text (`docs/cli-reference.md`'s locked-database section and the pi-rukas
+//! `ctx7` wrapper's stderr grep), so the two `#[error]` framings the tests
+//! below pin — `Database error: ` and the locked lead-in — are a contract with
+//! them, not incidental prose. `Error::Io` is retained: `std::io::Error` is
+//! std, not a third-party dependency.
 
 use thiserror::Error;
+
+/// The lead-in [`Error::DatabaseLocked`]'s Display renders before the remedy
+/// hint. Split from [`LOCKED_DB_HINT`] so the full operator-facing text has
+/// exactly one source: the `#[error]` attribute interpolates these two consts
+/// and [`LOCKED_DB_MESSAGE`] concatenates the same two literals (`concat!`
+/// cannot splice `&str` consts, only literals), pinned to one another by
+/// `errors_public_api_tests::locked_database_message_stays_byte_identical_to_the_cli_text`.
+pub const LOCKED_DB_LEAD: &str = "Database is locked.";
 
 /// Actionable hint appended to a locked/busy database error (issue #255).
 ///
@@ -32,12 +45,15 @@ pub const LOCKED_DB_HINT: &str =
 /// The full user-facing text command handlers use for a locked database.
 ///
 /// The CLI prints `Error: {}`, so this string is the user-visible contract for
-/// every busy-database path. `concat!` cannot splice a `&str` const, so the
-/// composition is spelled out here rather than derived from
-/// [`Error::DatabaseLocked`]'s `#[error]` attribute: the two literals live in
-/// separate places and the equality is enforced by
-/// `errors_public_api_tests::locked_database_message_stays_byte_identical_to_the_cli_text`.
-pub const LOCKED_DB_MESSAGE: &str = "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.";
+/// every busy-database path. It is the concatenation of the two consts the
+/// [`Error::DatabaseLocked`] `#[error]` attribute interpolates; `concat!`
+/// cannot splice `&str` consts (only literals), so the composition is spelled
+/// here and `errors_public_api_tests::locked_database_message_stays_byte_identical_to_the_cli_text`
+/// pins all three spellings to one another.
+pub const LOCKED_DB_MESSAGE: &str = concat!(
+    "Database is locked. ",
+    "Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry."
+);
 
 /// Prefix a [`Error::Tokenization`] message with call-site context.
 ///
@@ -86,7 +102,7 @@ pub enum Error {
     /// the Display text. The actionable MCP-server hint lives in
     /// [`LOCKED_DB_HINT`], outside the message, so the message can be used as
     /// a regression fixture while the remedy text stays editable.
-    #[error("Database is locked. {LOCKED_DB_HINT}")]
+    #[error("{LOCKED_DB_LEAD} {LOCKED_DB_HINT}")]
     DatabaseLocked,
 
     /// ONNX inference error.

@@ -29,6 +29,11 @@
 //! the same path `vipune update --status` uses — and never deletes or
 //! re-embeds anything.
 
+//! Contract (issue #255): the open failure keeps the vipune-owned variant it
+//! was classified into — a lock stays [`Error::DatabaseLocked`], a corrupt
+//! BLOB stays [`Error::CorruptEmbedding`] with its `id` — so a library or MCP
+//! consumer can still tell the two apart. `commands::db_busy` pins this.
+
 use crate::errors::Error;
 use crate::sqlite::{Database, UpdateOptions};
 use std::process::ExitCode;

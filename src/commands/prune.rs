@@ -233,7 +233,7 @@ pub fn handle_prune(
 
     // Run per project: the demotion path (Database::update) is project-scoped.
     // `run_for_project` demotes row by row and commits each update, so a lock
-    // hit partway through has already moved the earlier rows. `wrap_busy_error`
+    // hit partway through has already moved the earlier rows. `wrap_busy`
     // collapses that into the locked message and discards the partial
     // `demoted_here` ids — a known partial-failure gap, not a bug this handler
     // papers over. `reindex.rs` makes the same deliberate choice for its
@@ -243,7 +243,7 @@ pub fn handle_prune(
     let mut demoted: Vec<String> = Vec::new();
     for project_id in &project_ids {
         let demoted_here =
-            super::db_busy::wrap_busy_error(evaluator.run_for_project(&mut db, project_id))?;
+            super::db_busy::wrap_busy(evaluator.run_for_project(&mut db, project_id))?;
         demoted.extend(demoted_here);
     }
 

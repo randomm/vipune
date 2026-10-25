@@ -11,6 +11,7 @@ use crate::commands::promote::{
     resolve_promotion_threshold, run_promotion, should_promote,
 };
 use crate::config::tests_utils::ConfigEnvGuard;
+use crate::errors::Error;
 use crate::memory::crud::test_fake_embedder;
 use crate::sqlite::Database;
 
@@ -273,4 +274,59 @@ fn test_handle_promote_json_and_success() {
 
     let exit = handle_promote(path.as_path(), "proj", true).expect("handle_promote should succeed");
     assert_eq!(exit, std::process::ExitCode::SUCCESS);
+}
+
+// ─────────────── open-path variant contract (issue #255) ───────────────
+
+#[test]
+fn a_lock_at_the_promote_open_yields_the_lock_variant_not_a_config_string() {
+    // The two CLI open paths have deliberately different contracts, and this
+    // pins the stricter one: `promote` opens through `db_busy::wrap_busy`,
+    // which preserves the vipune-owned variant, whereas `backup`/`doctor`/
+    // `export`/`merge`/`prune` open through `db_busy::open_db_error`, which
+    // renders a message-only failure as `Error::Config` (both halves are
+    // pinned in `commands::db_busy::tests`). A lock at promote's open must
+    // therefore stay a typed, retryable verdict rather than prose, so a
+    // consumer wrapping `handle_promote` can `is_locked()` it.
+    let (_dir, path) = create_test_db();
+    // The handler resolves the promotion threshold from the environment before
+    // it opens the store, so hold the config guard for the whole test body to
+    // keep that read from racing an env-mutating sibling.
+    let _guard = ConfigEnvGuard::acquire();
+    let lock_conn = rusqlite::Connection::open(&path).unwrap();
+    lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+    // `Database::open` blocks for SQLite's default busy timeout before it
+    // fails (it runs schema creation and migrations before a zero timeout can
+    // be applied), so this call takes ~5s; what is under test is the variant,
+    // not the latency.
+    // The CLI handler renders a lock into the actionable `Config` text — that
+    // is the presentation contract in `commands::db_busy`. The variant
+    // contract that handler depends on is the one `wrap_busy` gives the
+    // storage error *before* that rendering, so assert both: the operator text
+    // and the verdict it was classified from.
+    let err = handle_promote(path.as_path(), "proj", false)
+        .expect_err("a locked store must fail the open");
+    match &err {
+        Error::Config(msg) => assert!(
+            msg.contains("Stop the MCP server and retry"),
+            "the operator must be told what to stop, got: {msg}"
+        ),
+        other => panic!("expected the actionable locked message, got {other:?}"),
+    }
+    let storage = match Database::open(path.as_path()) {
+        Ok(_) => panic!("the store is still locked, so the open must fail"),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(storage, crate::sqlite::Error::Locked),
+        "promote's open classifies the contention as a lock, got {storage:?}"
+    );
+    let public: Error = storage.into();
+    assert!(
+        matches!(public, Error::DatabaseLocked) && public.is_locked(),
+        "the verdict promote's open relies on survives the public conversion, got {public:?}"
+    );
+
+    lock_conn.execute("ROLLBACK", []).unwrap();
 }

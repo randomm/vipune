@@ -12,12 +12,15 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-/// Wrap a `rusqlite::Error` from a read-only diagnostic open, converting a
-/// locked database into the actionable MCP-server message. The public enum
-/// carries no rusqlite type, so the conversion happens at the storage
-/// boundary — `super::db_busy` is the single place that renders the hint.
-fn wrap_rusqlite_busy<T>(result: Result<T, rusqlite::Error>) -> Result<T, Error> {
-    super::db_busy::wrap_rusqlite_busy(result)
+/// Open a database read-only for a diagnostic, classifying a lock through the
+/// shared `db_busy` helper. Both doctor modes open this way and share the
+/// flags, so the shape lives here once instead of as bare literals per mode.
+fn open_read_only(db_path: &Path) -> Result<Database, Error> {
+    let conn = super::db_busy::wrap_busy(Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ))?;
+    Ok(Database::from_conn(conn))
 }
 
 /// Run the embedding doctor check on the database.
@@ -77,7 +80,7 @@ pub fn handle_doctor(
     let mut responses: Vec<DoctorResponse> = vec![];
 
     for project_id in &projects {
-        let result = super::db_busy::wrap_busy_error(audit_project(&db, project_id))?;
+        let result = super::db_busy::wrap_busy(audit_project(&db, project_id))?;
         responses.push(DoctorResponse {
             project_id: project_id.clone(),
             total_rows: result.total,
@@ -191,10 +194,7 @@ pub(crate) fn collect_doctor_projects_response(
 ) -> Result<DoctorProjectsResponse, Error> {
     // Open database in READ-ONLY mode — this is a diagnostic that must not modify the DB.
     // Any accidental write will fail with SQLITE_READONLY instead of silently corrupting data.
-    let db = Database::from_conn(wrap_rusqlite_busy(Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ))?);
+    let db = open_read_only(db_path)?;
 
     // Gather all project ids with row counts (one aggregate query, not one
     // COUNT(*) per project).
