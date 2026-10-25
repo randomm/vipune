@@ -314,6 +314,23 @@ fn test_locked_database_fast_fails() {
     lock_conn.execute("ROLLBACK", []).unwrap();
 }
 
+#[test]
+fn locked_storage_error_surfaces_as_the_structured_public_variant() {
+    // The CLI assertion in `test_locked_database_fast_fails` proves the
+    // user-visible text; this proves the classification underneath it without
+    // depending on a second `Database::open` (which also runs schema creation
+    // and migrations) happening to fail while the lock is held.
+    let busy = rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+        Some("database is locked".to_string()),
+    );
+    let public: Error = crate::sqlite::Error::from(busy).into();
+    assert!(
+        matches!(public, Error::DatabaseLocked) && public.is_locked(),
+        "a locked database must surface as Error::DatabaseLocked, got {public:?}"
+    );
+}
+
 // ── Hint text: pure function tests ──
 //
 // The hint is emitted by `handle_reindex` when scoped to a single project and

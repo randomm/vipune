@@ -477,3 +477,69 @@ fn test_migrate_busy_database_fails_fast() {
     // Drop the locker to release the lock (cleanup).
     drop(locker);
 }
+
+#[test]
+fn a_lock_at_the_migration_marker_write_classifies_as_locked() {
+    // `migrate_model`'s `# Errors` section promises library consumers a typed,
+    // retryable `Error::DatabaseLocked` for "open, marker write, row listing,
+    // final commit". The open's own lock is unreachable at zero timeout without
+    // waiting out SQLite's default busy timeout, so this drives the *marker
+    // write* — the first documented site after the handle exists — against a
+    // real `BEGIN EXCLUSIVE` writer and asserts the verdict, not the text.
+    let (_dir, db_path) = make_db_dir();
+    let db = Database::open(&db_path).unwrap();
+    db.insert("proj_a", "alpha", &real_vec(), None, "fact", "active")
+        .unwrap();
+    // The zero timeout the public entry point sets (migration.rs) — a
+    // contended write must fail fast rather than block for 5s.
+    db.set_busy_timeout(std::time::Duration::ZERO).unwrap();
+
+    let locker = rusqlite::Connection::open(&db_path).unwrap();
+    locker.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+    let target = ModelIdentity {
+        model_id: "intfloat/multilingual-e5-small".to_string(),
+        revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
+    };
+    let storage = write_migration_marker(&db, &target)
+        .expect_err("the marker write must fail while the writer holds the lock");
+    assert!(
+        matches!(storage, SqliteError::Locked),
+        "the storage boundary must carry the lock verdict, got {storage:?}"
+    );
+    let public: crate::errors::Error = storage.into();
+    assert!(
+        matches!(public, crate::errors::Error::DatabaseLocked) && public.is_locked(),
+        "the documented contract is a typed locked error, got {public:?}"
+    );
+
+    drop(locker);
+}
+
+#[test]
+fn a_lock_at_the_final_commit_classifies_as_locked() {
+    // The other documented write site: `record_identity_and_clear_marker` opens
+    // a transaction through `Database::begin_transaction`, whose `From` impl is
+    // the classifier — so a lock there must reach the caller as the locked
+    // variant too, or the `# Errors` promise is half-true.
+    let (_dir, db_path) = make_db_dir();
+    let mut db = Database::open(&db_path).unwrap();
+    db.set_busy_timeout(std::time::Duration::ZERO).unwrap();
+
+    let locker = rusqlite::Connection::open(&db_path).unwrap();
+    locker.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+    let target = ModelIdentity {
+        model_id: "intfloat/multilingual-e5-small".to_string(),
+        revision: "614241f622f53c4eeff9890bdc4f31cfecc418b3".to_string(),
+    };
+    let storage = record_identity_and_clear_marker(&mut db, &target)
+        .expect_err("the final commit must fail while the writer holds the lock");
+    let public: crate::errors::Error = storage.into();
+    assert!(
+        public.is_locked(),
+        "a lock on the final commit must classify as locked, got {public:?}"
+    );
+
+    drop(locker);
+}

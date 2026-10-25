@@ -35,3 +35,11 @@ mod tests;
 #[cfg(test)]
 #[path = "store_memory_importance_tests.rs"]
 mod store_memory_importance_tests;
+
+/// Cross-surface error-rendering parity (issue #255 review). Kept beside the
+/// mapping it exercises rather than in `errors.rs`: `main.rs` compiles its own
+/// copy of `errors.rs`, so only here are the CLI's `Error` and the one
+/// `From<Error> for rmcp::ErrorData` is implemented for the same nominal type.
+#[cfg(all(test, feature = "mcp"))]
+#[path = "error_surface_parity_tests.rs"]
+mod error_surface_parity_tests;

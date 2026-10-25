@@ -39,6 +39,20 @@ use crate::sqlite::{self, Database, Error as SqliteError};
 use std::cell::RefCell;
 use std::path::Path;
 
+/// Route a raw `rusqlite::Error` raised by a migration statement through the
+/// storage boundary's classifier instead of flattening it to a message.
+///
+/// `migrate_model`'s `# Errors` section promises library consumers a typed
+/// [`Error::DatabaseLocked`] for the marker write, row update, and final
+/// commit; `SqliteError::Sqlite(e.to_string())` here would erase the SQLite
+/// result code before that conversion and hand back an unretryable
+/// `Error::Database` string. The engine closures above keep their
+/// `Sqlite(msg)` mapping on purpose — an embedder failure is not a database
+/// failure and has no result code to classify.
+fn classify_db_failure(err: rusqlite::Error) -> SqliteError {
+    SqliteError::from(err)
+}
+
 /// Migrate the whole database (all projects) at `db_path` to the model
 /// profile named by `config.embedding_model`.
 ///
@@ -65,8 +79,11 @@ use std::path::Path;
 ///   512-token limit once the target profile's passage prefix is applied.
 /// - `Error::MigrationIncomplete { report }` — the pass ran but at least one
 ///   row failed to embed; the marker stays, the old identity is kept.
-/// - `Error::SqliteModule(_)` — database-level failure (open, marker write,
-///   row listing, final commit).
+/// - [`Error::DatabaseLocked`] / [`Error::Database`] — database-level failure
+///   (open, marker write, row listing, final commit). A lock after the handle
+///   is obtained fails fast and stays `DatabaseLocked`; the open itself blocks
+///   for SQLite's default busy timeout first (it runs schema creation and
+///   migrations before the zero timeout is applied).
 pub fn migrate_model(
     db_path: &Path,
     config: &crate::config::Config,
@@ -76,8 +93,11 @@ pub fn migrate_model(
     let _profile = profile_for(&config.embedding_model)?;
 
     let mut db = Database::open(db_path)?;
-    // Fast-fail on a locked database (the CLI wraps this with an MCP-server
-    // hint; the library caller gets the raw locked error).
+    // Fast-fail for every statement issued on this handle (the CLI wraps this
+    // with an MCP-server hint; the library caller gets the raw locked error).
+    // The open above runs schema creation and migrations before the timeout can
+    // be applied, so a contended open blocks for SQLite's default busy timeout
+    // (~5s) first — see `migrate_model`'s `# Errors` note.
     db.set_busy_timeout(std::time::Duration::ZERO)?;
 
     // One engine for the whole call; the engine is the single prefix site
@@ -257,7 +277,7 @@ fn update_embedding_in(
         "UPDATE memories SET embedding = ?1 WHERE id = ?2",
         rusqlite::params![&blob, id],
     )
-    .map_err(|e| SqliteError::Sqlite(e.to_string()))?;
+    .map_err(classify_db_failure)?;
     Ok(())
 }
 
@@ -278,7 +298,7 @@ pub(crate) fn write_migration_marker(
              ON CONFLICT(id) DO UPDATE SET migration_marker = excluded.migration_marker",
             [marker],
         )
-        .map_err(|e| SqliteError::Sqlite(e.to_string()))?;
+        .map_err(classify_db_failure)?;
     Ok(())
 }
 
@@ -300,8 +320,8 @@ pub(crate) fn record_identity_and_clear_marker(
                                       migration_marker = NULL",
         (&identity.model_id, &identity.revision),
     )
-    .map_err(|e| SqliteError::Sqlite(e.to_string()))?;
-    commit_tx(tx).map_err(|e| SqliteError::Sqlite(e.to_string()))?;
+    .map_err(classify_db_failure)?;
+    commit_tx(tx).map_err(classify_db_failure)?;
     Ok(())
 }
 

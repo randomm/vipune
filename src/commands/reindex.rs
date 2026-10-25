@@ -39,24 +39,15 @@ use std::time::Duration;
 /// Progress interval: print progress every N rows in human mode.
 const PROGRESS_INTERVAL: usize = 50;
 
-/// Wrap a database error, converting SQLITE_BUSY into the actionable MCP-server message.
-fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(Error::SqliteModule(msg)) if msg.contains("database is locked") => {
-            Err(Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-            ))
-        }
-        Err(e) => Err(e),
-    }
-}
-
 /// Open a `Database` handle that fails fast on a locked database, mapping
-/// the lock error to the actionable MCP-server hint. `busy_timeout` is set
-/// to zero so any contended operation fails immediately instead of waiting.
+/// the lock error to the actionable MCP-server hint. `busy_timeout` is set to
+/// zero so any contended *statement* fails immediately instead of waiting.
+///
+/// The `Database::open` itself runs `create_schema`/migrations BEFORE that
+/// timeout can be applied, so a contended open waits SQLite's default busy
+/// timeout (~5s) and then reports the same actionable message.
 fn open_fast_fail(db_path: &Path) -> Result<Database, Error> {
-    let db = wrap_busy(Database::open(db_path).map_err(Error::from))?;
+    let db = super::db_busy::open_db(db_path)?;
     db.set_busy_timeout(Duration::ZERO)?;
     Ok(db)
 }
@@ -83,7 +74,7 @@ pub fn handle_reindex(
 
     // Determine which projects to process (the full list is also needed for
     // the scoped-reindex hint below).
-    let all_project_ids = wrap_busy(db.list_all_project_ids().map_err(Error::from))?;
+    let all_project_ids = super::db_busy::wrap_busy(db.list_all_project_ids())?;
     let projects: Vec<String> = if let Some(filter) = project_filter {
         vec![filter.to_string()]
     } else {
@@ -156,8 +147,13 @@ pub fn handle_reindex(
                 .embed_passage(content)
                 .map_err(|e| Error::Inference(e.to_string()))
         };
+        // A lock surfacing mid-loop stays a structured `DatabaseLocked` rather
+        // than the "just retry" hint: earlier projects have already been
+        // re-embedded, so the operator needs the real diagnosis, not a message
+        // that reads as a transient failure. Setup paths above fast-fail through
+        // `open_fast_fail`.
         let (reindexed, skipped, failed) =
-            wrap_busy(reindex_project(&db, &mut embed_callback, project_id, json))?;
+            reindex_project(&db, &mut embed_callback, project_id, json)?;
         let failed_count = failed.len();
         total_failed += failed_count;
         responses.push(ReindexResponse {

@@ -171,12 +171,23 @@ fn test_backup_fails_fast_when_source_locked() {
 
     let result = handle_backup(&src, None, true);
     // The actionable "Database is locked … MCP server" message is produced by
-    // `wrap_busy` for both `Error::SqliteModule` (the `crate::sqlite::Error`
-    // path) and `Error::SQLite` (the direct `rusqlite::Error` path, which is
-    // what `rusqlite::backup::Backup::new` returns when the source is in a
-    // hot-journal state). The `Display` form of `Error::Config` is the inner
-    // string verbatim, so asserting on the `to_string()` form works regardless
-    // of which conversion path the lock error took.
+    // the `db_busy` helpers, which classify via `Error::is_locked` — backed by
+    // the SQLite result code at the storage boundary — for both the
+    // `crate::sqlite::Error` path (the `Database::open` above, through
+    // `db_busy::open_db`) and the raw `rusqlite::Error` path that
+    // `rusqlite::backup::Backup::new` returns when the source is in a
+    // hot-journal state (issue #255 removed the old
+    // `Error::SQLite(rusqlite::Error)` arm).
+    //
+    // What this end-to-end case proves is the rendered CLI contract (the
+    // `Error::Config` text the operator sees). It cannot assert `is_locked()`:
+    // every handler presents a lock as `Config` before returning, so the
+    // verdict is not observable here — but it is the *same* verdict for every
+    // command now that all eight open through `db_busy::open_db`. The
+    // structured classification is pinned where the wrapper is exercised —
+    // `commands::db_busy::db_busy_tests` (including the real-writer mid-statement case,
+    // the real contended open, and the storage→public conversion) and
+    // `sqlite::db_error::tests`.
     match result {
         Err(e) => {
             let msg = e.to_string();
@@ -189,6 +200,10 @@ fn test_backup_fails_fast_when_source_locked() {
                 msg.contains("MCP server"),
                 "Expected 'MCP server' in error message, got: {}",
                 msg
+            );
+            assert!(
+                matches!(e, crate::errors::Error::Config(_)),
+                "a lock is presented to the CLI as a Config error, got {e:?}"
             );
         }
         Ok(_) => panic!("Expected error when database is locked, got Ok"),

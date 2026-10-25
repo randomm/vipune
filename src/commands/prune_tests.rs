@@ -359,3 +359,84 @@ fn test_add_time_importance_protects_from_prune() {
     assert_eq!(status_of(&db, &critical), "candidate");
     assert_eq!(status_of(&db, &low), "deprecated");
 }
+
+/// The partial-failure gap: a lock partway through the per-row demotion loop
+/// leaves earlier rows already demoted while `handle_prune` reports only the
+/// locked message. Asserting it through the handler was impossible without
+/// fabricating a mid-loop lock, so the `#[ignore]`d test that claimed to pin it
+/// is gone — it asserted behaviour that already holds and so could not fail.
+/// This reproduces the gap against the same demotion path the handler drives — one `Database::update` per row — and asserts the
+/// two halves of it: rows committed before the lock stay demoted, and the
+/// failed update yields no ids, which is exactly what `wrap_busy`
+/// discards on its way to the locked message.
+#[test]
+fn a_lock_mid_demotion_loop_leaves_rows_demoted_with_no_report_of_them() {
+    use crate::memory::lifecycle::MemoryStatus;
+    use crate::sqlite::UpdateOptions;
+
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
+    let old = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+    let ids: Vec<String> = (0..3)
+        .map(|i| {
+            db.insert_with_time(
+                "proj-a",
+                &format!("stale {i}"),
+                &[0.1f32; crate::embedding::EMBEDDING_DIMS],
+                None,
+                &old,
+                &old,
+                "fact",
+                "candidate",
+            )
+            .unwrap()
+        })
+        .collect();
+
+    let demote = |id: &str| {
+        db.update(
+            id,
+            "proj-a",
+            UpdateOptions {
+                content: None,
+                embedding: None,
+                metadata: None,
+                memory_type: None,
+                status: Some(MemoryStatus::Deprecated.as_str()),
+                importance: None,
+            },
+        )
+    };
+
+    // Demote one row, then have a writer take the exclusive lock: exactly the
+    // mid-loop contention a running MCP server produces.
+    demote(&ids[0]).unwrap();
+    let lock_conn = rusqlite::Connection::open(&db_path).unwrap();
+    // Half one of the gap, asserted BEFORE the writer is taken so the read is
+    // unobstructed: `Database::update` commits each row, so the demotion that
+    // happened before the lock is durable — and it is exactly the id the loop
+    // would have reported, which `handle_prune` discards via
+    // `wrap_busy` on its way to the locked message.
+    assert_eq!(
+        status_of(&db, &ids[0]),
+        "deprecated",
+        "the row demoted before the lock is committed"
+    );
+
+    lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+    // Zero timeout: the contended update must fail fast, not wait.
+    db.set_busy_timeout(std::time::Duration::ZERO).unwrap();
+
+    let err = demote(&ids[1]).expect_err("the contended update must fail fast");
+    let err: crate::errors::Error = err.into();
+    assert!(
+        err.is_locked(),
+        "the mid-loop failure is a lock, got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("locked"),
+        "the locked message carries no partial count, got: {err}"
+    );
+
+    lock_conn.execute("ROLLBACK", []).unwrap();
+}

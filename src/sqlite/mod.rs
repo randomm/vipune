@@ -1,7 +1,11 @@
 //! SQLite backend for vipune memory storage.
 //!
-//! Provides: `Database`, `Memory`, `embedding`, `search`, `fts`, `hash` modules.
+//! Provides: `Database`, `Memory`, and the `db_error`, `embedding`, `search`,
+//! `fts`, `hash`, `identity`, `project_queries` submodules. The last two were
+//! split out of this file to keep it near the project's 500-line cap; the
+//! module map in `docs/architecture.md` lists where each surface now lives.
 
+pub(crate) mod db_error;
 pub mod embedding;
 pub mod export_scan;
 pub mod fts;
@@ -12,6 +16,7 @@ pub mod insert;
 pub mod list;
 pub mod migration_types;
 pub mod migrations;
+pub(crate) mod project_queries;
 pub mod query_mod;
 pub mod search;
 pub mod supersede;
@@ -78,6 +83,12 @@ pub struct Memory {
 pub enum Error {
     /// SQLite database error with message.
     Sqlite(String),
+    /// The database is locked or busy (`SQLITE_BUSY` / `SQLITE_LOCKED`).
+    ///
+    /// The verdict is decided once from the SQLite result code by
+    /// [`db_error::classify_db_error`] and carried as this variant, so no
+    /// layer above has to re-derive it from message text (issue #255).
+    Locked,
     /// Embedding BLOB for a specific memory failed to decode.
     ///
     /// Carries the affected memory `id` so the corrupt row can be located and
@@ -108,10 +119,38 @@ pub enum Error {
     MigrationIncomplete { report: MigrationReport },
 }
 
+impl Error {
+    /// True for the structured embedding-decoding variants — the ones that
+    /// carry fields a caller acts on (`id`/`reason`, `expected`/`actual`) and
+    /// are therefore allowed to cross the public boundary as typed payloads
+    /// and to be trusted as the source of a row-conversion failure.
+    ///
+    /// The single enumeration of that set: `db_error::is_trusted_domain_error`,
+    /// `commands::db_busy::open_failure`, `From<crate::sqlite::Error> for
+    /// vipune::Error` and the MCP `data` arms all key off it, so adding a
+    /// structured variant is one edit here rather than four coordinated lists.
+    #[must_use]
+    pub(crate) fn is_structured_embedding_error(&self) -> bool {
+        matches!(
+            self,
+            Error::CorruptEmbedding { .. }
+                | Error::InvalidBlobSize { .. }
+                | Error::MismatchedDimensions { .. }
+        )
+    }
+}
+
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Sqlite(msg) => write!(f, "Database error: {}", msg),
+            // Byte-compatible with the old `Sqlite("database is locked")`
+            // rendering: the pi-rukas `ctx7` shell wrapper (outside this repo)
+            // matches this text in the CLI's stderr. `hook/run.rs` does NOT
+            // match it — its only text classifier is the UNIQUE-constraint
+            // check, and a locked insert is `Error::Locked`, which that
+            // matcher never sees.
+            Error::Locked => write!(f, "{}", crate::sqlite::db_error::LOCKED_DISPLAY),
             Error::CorruptEmbedding { id, reason } => {
                 write!(f, "Corrupt embedding for memory id: {} ({})", id, reason)
             }
@@ -155,18 +194,13 @@ impl std::error::Error for Error {}
 
 impl From<rusqlite::Error> for Error {
     fn from(err: rusqlite::Error) -> Self {
-        // Row-level `FromSqlConversionFailure`s built by
-        // `query_mod::corrupt_embedding_error` carry a `CorruptEmbedding`
-        // domain error (naming the affected memory id) as their source —
-        // surface it directly so the id reaches the caller (issue #186).
-        if let rusqlite::Error::FromSqlConversionFailure(_, _, boxed) = &err {
-            if let Some(source) = (**boxed).source() {
-                if let Some(domain) = source.downcast_ref::<Error>() {
-                    return domain.clone();
-                }
-            }
+        match db_error::classify_db_error(&err) {
+            // The typed verdict survives the boundary: the classifier read the
+            // SQLite result code, so nothing above has to match the busy text.
+            db_error::DbErrorKind::Locked => Error::Locked,
+            db_error::DbErrorKind::Domain(domain) => domain.clone(),
+            db_error::DbErrorKind::Other => Error::Sqlite(err.to_string()),
         }
-        Error::Sqlite(err.to_string())
     }
 }
 
@@ -463,37 +497,6 @@ impl Database {
             return Err(Error::NotFound(id.to_string()));
         }
         Ok(())
-    }
-
-    /// List all distinct project_ids in the database.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the database query fails.
-    pub fn list_all_project_ids(&self) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT DISTINCT project_id FROM memories ORDER BY project_id")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut results = Vec::new();
-        for row_result in rows {
-            results.push(row_result?);
-        }
-        Ok(results)
-    }
-
-    /// Count rows for a specific project_id.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the database query fails.
-    pub fn count_rows_for_project(&self, project_id: &str) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM memories WHERE project_id = ?",
-            [project_id],
-            |row| row.get(0),
-        )?;
-        Ok(count as usize)
     }
 
     /// Merge all rows from one project_id into another within a single transaction.

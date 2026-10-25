@@ -29,6 +29,11 @@
 //! the same path `vipune update --status` uses — and never deletes or
 //! re-embeds anything.
 
+//! Contract (issue #255): the open failure keeps the vipune-owned variant it
+//! was classified into — a lock stays [`Error::DatabaseLocked`], a corrupt
+//! BLOB stays [`Error::CorruptEmbedding`] with its `id` — so a library or MCP
+//! consumer can still tell the two apart. `commands::db_busy` pins this.
+
 use crate::errors::Error;
 use crate::sqlite::{Database, UpdateOptions};
 use std::process::ExitCode;
@@ -184,17 +189,19 @@ pub fn handle_promote(
     project_id: &str,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    let db = Database::open(db_path).map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("database is locked") {
-            return Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-            );
-        }
-        Error::Config(msg)
-    })?;
+    let db = super::db_busy::open_db(db_path)?;
+    // Same fast-fail contract as backup/merge/prune/reindex: a contended
+    // promote must emit the actionable locked message, not block on SQLite's
+    // default busy behaviour while it writes status updates per row.
+    super::db_busy::wrap_busy(db.set_busy_timeout(std::time::Duration::ZERO))?;
 
     let threshold = resolve_promotion_threshold()?;
+    // Same partial-failure shape as `prune`: `run_promotion` commits each
+    // status update as it goes, so a lock acquired mid-loop leaves the rows
+    // already promoted and reports no count. Deliberate (mirrors the
+    // per-row re-embed loop in `reindex.rs` and the note in `prune.rs`):
+    // fixing it means detecting the lock inside the loop and returning the
+    // partial count, for all three handlers together.
     let promoted = run_promotion(&db, project_id)?;
 
     let response = serde_json::json!({

@@ -16,7 +16,7 @@
 //!   the FTS5 rebuild special command `INSERT INTO memories_fts(memories_fts)
 //!   VALUES('rebuild')`. Repair is always GLOBAL and ignores `-p`.
 
-use crate::errors::Error;
+use crate::errors::{Error, LOCKED_DB_MESSAGE};
 use crate::output::{DoctorFtsProject, DoctorFtsResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::fts::FtsDesyncReport;
@@ -25,48 +25,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-/// Wrap a `rusqlite::Error`, converting a locked-DB error into the actionable
-/// MCP-server message. Duplicated from `doctor.rs` (its copy is not `pub`).
-fn wrap_rusqlite_busy<T>(result: Result<T, rusqlite::Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(e) if e.to_string().contains("database is locked") => Err(Error::Config(
-            "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-        )),
-        Err(e) => Err(Error::Config(e.to_string())),
-    }
-}
-
-/// Wrap a `Result<T, crate::sqlite::Error>`, converting a locked-DB error into the
-/// actionable `Error::Config` message.
-fn wrap_sqlite_busy<T>(result: Result<T, crate::sqlite::Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(e) if e.to_string().contains("database is locked") => Err(Error::Config(
-            "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-        )),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Wrap a `Result<T, Error>` (crate::errors::Error), converting a locked-DB
-/// `SqliteModule` error into the actionable `Error::Config` message.
-fn wrap_errors_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(Error::SqliteModule(msg)) if msg.contains("database is locked") => Err(Error::Config(
-            "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-        )),
-        Err(e) => Err(e),
-    }
-}
-
 /// A database-wide view of `memories` counts, keyed by project.
 #[derive(Default)]
 struct MemoryCounts {
-    /// Total `memories` rows, globally.
-    total: usize,
-    /// Total `memories` rows per project.
+    /// Total `memories` rows per project. A project with zero rows is absent
+    /// (the contract `Database::row_counts_by_project` documents).
     by_project: HashMap<String, usize>,
 }
 
@@ -104,15 +67,23 @@ fn handle_doctor_fts_detect(
     project_filter: Option<&str>,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    // Open READ-ONLY — this diagnostic must not modify the DB. Any accidental write
-    // fails with SQLITE_READONLY instead of silently corrupting data.
-    let db = Database::from_conn(wrap_rusqlite_busy(Connection::open_with_flags(
+    // Open READ-ONLY — this diagnostic must not modify the DB. Any accidental
+    // write fails with SQLITE_READONLY instead of silently corrupting data.
+    //
+    // A read-only open takes no write lock, so it does not contend with a
+    // `BEGIN EXCLUSIVE` writer at all: this path fails fast on the first
+    // statement. Only the read-write `Database::open` below (and
+    // `migrate_model`'s) waits SQLite's default busy timeout, because it runs
+    // `create_schema`/migrations before a busy timeout can be applied.
+    let db = Database::from_conn(super::db_busy::wrap_busy(Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY,
     ))?);
 
-    let report: FtsDesyncReport = wrap_sqlite_busy(db.detect_fts_desync())?;
-    let counts = wrap_errors_busy(memory_counts(&db))?;
+    let report: FtsDesyncReport = super::db_busy::wrap_busy(db.detect_fts_desync())?;
+    // One aggregate pass per handler invocation: `build_response` only reads
+    // the per-project counts, and nothing below re-writes `memories`.
+    let counts = super::db_busy::wrap_busy(memory_counts(&db))?;
 
     let response = build_response(&report, &counts, project_filter, false, 0);
 
@@ -133,31 +104,46 @@ fn handle_doctor_fts_repair(
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Pre-check: open READ-ONLY and run the rowid join.
-    let pre = Database::from_conn(wrap_rusqlite_busy(Connection::open_with_flags(
+    let pre = Database::from_conn(super::db_busy::wrap_busy(Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY,
     ))?);
-    let pre_report: FtsDesyncReport = wrap_sqlite_busy(pre.detect_fts_desync())?;
+    let pre_report: FtsDesyncReport = super::db_busy::wrap_busy(pre.detect_fts_desync())?;
+    // ONE aggregate pass for the whole handler: `rebuild_fts` rewrites only
+    // `memories_fts`, never `memories` (see its doc), so the pre-rebuild
+    // per-project counts are still exact for the post-rebuild response and a
+    // second (or third) `row_counts_by_project()` would rescan the table for
+    // a value that cannot have changed.
+    let counts = super::db_busy::wrap_busy(memory_counts(&pre))?;
 
     // No desync → skip the rebuild entirely, report zero actions, data_version untouched.
     if !pre_report.is_desynced() {
-        let counts = wrap_errors_busy(memory_counts(&pre))?;
         let response = build_response(&pre_report, &counts, project_filter, true, 0);
         emit(&response, json);
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Desynced → open read-write with ZERO busy timeout (reindex fast-fail pattern)
-    // so a locked DB errors immediately with the actionable message instead of hanging.
+    // Desynced → open read-write with ZERO busy timeout (reindex fast-fail
+    // pattern) so a locked DB errors immediately with the actionable message
+    // instead of hanging.
+    //
+    // `Database::open` runs `create_schema`, so on a `BEGIN EXCLUSIVE` store
+    // the lock is hit at the open itself — the point *before* any rebuild has
+    // run — and that failure must keep the plain transient framing. Only a lock
+    // hit by the rebuild statement itself means the index may be half-rebuilt,
+    // which is why the recovery note is appended below and not here.
     let db = open_read_write(db_path)?;
     // Rebuild the FTS index in place. This is the FTS5 special command — it
     // re-reads every `memories` row into `memories_fts` and is the only rebuild the
-    // repo uses. It does not touch `memories` data.
-    db.rebuild_fts()?;
+    // repo uses. It does not touch `memories` data. Fast-fail on a lock: a
+    // SQLITE_BUSY here aborts the statement, so the caller is told to re-run
+    // the repair (the rebuild is idempotent) rather than left guessing.
+    if let Err(e) = db.rebuild_fts().map_err(Error::from) {
+        return Err(recovery_for(e));
+    }
 
     // Post-rebuild: detect again on the same (still-open, read-write) connection.
-    let post_report: FtsDesyncReport = wrap_sqlite_busy(db.detect_fts_desync())?;
-    let counts = wrap_errors_busy(memory_counts(&db))?;
+    let post_report: FtsDesyncReport = super::db_busy::wrap_busy(db.detect_fts_desync())?;
     let actions = post_report.total_desynced() + pre_report.total_desynced();
     let response = build_response(&post_report, &counts, project_filter, true, actions);
 
@@ -165,18 +151,24 @@ fn handle_doctor_fts_repair(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Open the database read-write (schema creation is a no-op on an existing DB), then
-/// set a ZERO busy timeout so a locked DB fast-fails with the actionable message.
+/// Open the database read-write (schema creation is a no-op on an existing DB),
+/// then set a ZERO busy timeout so a contended *statement* fast-fails with the
+/// actionable message.
+///
+/// Scope of "fast-fail" (issue #255 review): the ZERO timeout is applied *after*
+/// `Database::open` returns, so the open's own statements — `create_schema` and
+/// `run_migrations`, the latter taking a `BEGIN EXCLUSIVE` — run under SQLite's
+/// default busy timeout and block ~5s before failing. Measured against an
+/// external `BEGIN EXCLUSIVE` writer, `doctor --fts --repair` reports the
+/// actionable locked message ~5.0s after the call; statements on the returned
+/// handle (the rebuild among them) fail immediately. The same is true of every
+/// other open in the CLI, read-only ones included: an open is not lock-free, and
+/// neither is a read-only connection's *first* statement — a plain `SELECT` still
+/// takes the shared read lock that a `BEGIN EXCLUSIVE` writer holds — so those
+/// paths wait the same default 5s before the locked message appears. Only calls
+/// on a handle whose timeout was already zeroed fast-fail.
 fn open_read_write(db_path: &Path) -> Result<Database, Error> {
-    let db = Database::open(db_path).map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("database is locked") {
-            return Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-            );
-        }
-        Error::Config(msg)
-    })?;
+    let db = super::db_busy::open_db(db_path)?;
     db.set_busy_timeout(std::time::Duration::ZERO)?;
     Ok(db)
 }
@@ -189,13 +181,42 @@ fn emit(response: &DoctorFtsResponse, json: bool) {
     }
 }
 
-/// Count `memories` rows globally and per project on an already-open `Database`.
+/// The locked-repair guidance: the standard busy message plus the re-run
+/// command, since an interrupted rebuild leaves the index half-populated.
+///
+/// Composed from [`LOCKED_DB_MESSAGE`] rather than a literal so the locked
+/// wording has one source (see `errors::LOCKED_DB_LEAD`).
+pub(crate) fn recovery_note() -> String {
+    format!(
+        "{LOCKED_DB_MESSAGE} The FTS index may be half-rebuilt; re-run `vipune doctor --fts --repair` to complete it."
+    )
+}
+
+/// The rebuild failure → what the operator is told. The single decision the
+/// mid-rebuild arm makes, extracted so
+/// `the_recovery_note_requires_the_locked_verdict` drives the same function
+/// the handler calls rather than a copy of its `if` (issue #255 review).
+///
+/// Only the classified locked verdict earns the half-rebuilt note; any other
+/// failure passes through untouched, so an unrelated error from this call
+/// chain can never be told its index is half-rebuilt.
+pub(crate) fn recovery_for(e: Error) -> Error {
+    if e.is_locked() {
+        Error::Config(recovery_note())
+    } else {
+        e
+    }
+}
+
+/// Count `memories` rows per project on an already-open `Database` in a
+/// single aggregate pass. Deliberately NOT a `COUNT(*)` per project id:
+/// `Database::row_counts_by_project` is the aggregate sibling (the shape
+/// `export_scan::scan_all_rows` documents for scans). The global total is
+/// never reported by either renderer, so it is not computed.
 fn memory_counts(db: &Database) -> Result<MemoryCounts, Error> {
     let mut counts = MemoryCounts::default();
-    for pid in db.list_all_project_ids()? {
-        let c = db.count_rows_for_project(&pid)?;
-        counts.total += c;
-        *counts.by_project.entry(pid).or_insert(0) += c;
+    for (project_id, rows) in db.row_counts_by_project()? {
+        *counts.by_project.entry(project_id).or_insert(0) += rows;
     }
     Ok(counts)
 }

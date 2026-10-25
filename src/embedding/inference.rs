@@ -9,7 +9,7 @@ use ort::inputs;
 use ort::value::Tensor;
 
 use super::engine::{EMBEDDING_DIMS, EmbeddingEngine};
-use crate::errors::Error;
+use crate::errors::{Error, with_prefix};
 
 /// Tokenise `input`, run the model, and pool + L2-normalize the output.
 pub(crate) fn encode_and_infer(
@@ -19,7 +19,7 @@ pub(crate) fn encode_and_infer(
     let encoding = engine
         .tokenizer
         .encode(input, true)
-        .map_err(|e| Error::Tokenization(format!("inference tokenizer: {e}").into()))?;
+        .map_err(|e| with_prefix("inference tokenizer:")(Error::from(e)))?;
     let input_ids = encoding.get_ids();
     let attention_mask = encoding.get_attention_mask();
 

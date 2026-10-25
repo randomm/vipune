@@ -8,6 +8,10 @@ use std::sync::{Arc, Mutex};
 
 use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 
+#[cfg(test)]
+#[path = "store_wrapper_error_tests.rs"]
+mod error_mapping_tests;
+
 /// Wrapper for MemoryStore to allow async-sound use.
 ///
 /// Since MCP stdio handles requests sequentially, the Mutex will never contend.
@@ -500,6 +504,60 @@ impl From<Error> for rmcp::ErrorData {
                 rmcp::model::ErrorCode::INVALID_REQUEST,
                 msg,
                 Some(serde_json::json!({"type": "not_found"})),
+            ),
+            // Database errors keep the INTERNAL_ERROR code and the rendered
+            // message (issue #255 changed only the message body: the underlying
+            // SQLite text is now included instead of the bare "Database
+            // error"). That text is returned verbatim to the client by design:
+            // vipune does not filter SQLite wording on any surface — the CLI
+            // prints it (stderr for humans, and in the `error` key on STDOUT
+            // under `--json`, so it is part of that data stream, not just a
+            // diagnostic channel), and MCP returns the same string. A log
+            // shipper therefore sees raw SQLite text (`no such table: …`,
+            // `UNIQUE constraint failed: memories.id`) whichever surface it
+            // consumes. What vipune *does* sanitise (memory ids in not-found
+            // errors, below) is sanitised on every surface alike.
+            // A locked database is reported as such so an MCP client
+            // can retry rather than treat it as a server defect. rmcp's
+            // `ErrorCode` set has no "try again later", so the code stays
+            // INTERNAL_ERROR and `data.type` is the discriminator a client
+            // must read — the code alone cannot tell a retryable lock from a
+            // server bug.
+            Error::DatabaseLocked => rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                e.to_string(),
+                Some(serde_json::json!({"type": "database_locked"})),
+            ),
+            // The structured embedding failures carry their fields in `data`
+            // as well as in the message, so a client can locate the corrupt
+            // row without parsing prose (the #186 payload, on the MCP side).
+            Error::Database { .. } => McpError::internal_error(&e.to_string()),
+            Error::CorruptEmbedding { ref id, ref reason } => rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                e.to_string(),
+                Some(serde_json::json!({
+                    "type": "corrupt_embedding",
+                    "id": id,
+                    "reason": reason
+                })),
+            ),
+            Error::InvalidBlobSize { expected, actual } => rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                e.to_string(),
+                Some(serde_json::json!({
+                    "type": "invalid_blob_size",
+                    "expected": expected,
+                    "actual": actual
+                })),
+            ),
+            Error::MismatchedDimensions { expected, actual } => rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                e.to_string(),
+                Some(serde_json::json!({
+                    "type": "mismatched_dimensions",
+                    "expected": expected,
+                    "actual": actual
+                })),
             ),
             Error::EmbedderUnavailable { reason } => rmcp::ErrorData::new(
                 rmcp::model::ErrorCode::INTERNAL_ERROR,

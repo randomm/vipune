@@ -8,8 +8,8 @@
 //!
 //! The locked-DB and repair tests use the real handler end-to-end.
 
-use crate::commands::doctor_fts::handle_doctor_fts;
-use crate::errors::Error;
+use crate::commands::doctor_fts::{handle_doctor_fts, recovery_for, recovery_note};
+use crate::errors::{Error, LOCKED_DB_MESSAGE};
 use crate::memory::crud::test_fake_embedder;
 use crate::output::DoctorFtsResponse;
 use crate::sqlite::Database;
@@ -289,6 +289,52 @@ fn repair_is_idempotent_second_run_skips() {
 // ── F9: locked DB fast-fails (both detect and repair) ──
 
 #[test]
+fn a_lock_before_the_rebuild_keeps_the_plain_transient_framing() {
+    // The repair path has two lock sites: the read-write open (nothing has
+    // been touched yet → plain "stop the MCP server and retry") and the rebuild
+    // statement itself (index possibly half-built → recovery note).
+    //
+    // An external-content FTS5 table is trigger-synced and rejects direct writes
+    // to `memories_fts`, so a fixture cannot both be desynced and survive
+    // `Database::open` under an existing writer — the mid-rebuild branch is only
+    // reachable with a real concurrent writer, and is exercised by
+    // `the_recovery_note_requires_the_locked_verdict`. This asserts the
+    // reachable half: a lock at the open must NOT claim a half-rebuilt index.
+    //
+    // Why that stays true even if the open path changes: the recovery note is
+    // appended only around the rebuild call, which sits below
+    // `open_read_write`. Any failure of the open (including the `BEGIN
+    // EXCLUSIVE` the migrations take, see `sqlite::migrations::run_migrations`)
+    // returns before the rebuild is reached, so the plain framing is a
+    // structural property of the call order, not of where SQLite notices the
+    // lock.
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
+    let emb = test_fake_embedder("row").unwrap();
+    db.insert("proj-a", "row", &emb, None, "fact", "active")
+        .unwrap();
+    drop(db);
+
+    let lock_conn = Connection::open(&db_path).unwrap();
+    lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+    // Drop the pre-check's read-only connection first so the failure lands on
+    // the read-write open rather than the open_with_flags that precedes it.
+    match handle_doctor_fts(&db_path, None, true, false) {
+        Err(Error::Config(msg)) => {
+            assert!(msg.contains("MCP server"), "got: {msg}");
+            assert!(
+                !msg.contains("--repair"),
+                "a lock hit before the rebuild must not claim a half-rebuilt index: {msg}"
+            );
+        }
+        other => panic!("expected the locked Config error, got {other:?}"),
+    }
+
+    lock_conn.execute("ROLLBACK", []).unwrap();
+}
+
+#[test]
 fn f9_locked_db_fast_fails_on_detect_and_repair() {
     let (_dir, db_path) = create_test_db();
 
@@ -296,25 +342,78 @@ fn f9_locked_db_fast_fails_on_detect_and_repair() {
     let lock_conn = Connection::open(&db_path).unwrap();
     lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
 
-    // Detect (read-only open) must fast-fail with the actionable message.
-    match handle_doctor_fts(&db_path, None, false, false) {
-        Err(Error::Config(msg)) => {
-            assert!(msg.contains("locked"), "got: {msg}");
-            assert!(msg.contains("MCP server"), "got: {msg}");
+    // Both modes hit the lock at their first statement (the read-only open for
+    // detect, the read-write `Database::open` for repair), so both render the
+    // transient framing: no rebuild has run yet, so there is nothing to re-run
+    // (see `a_lock_before_the_rebuild_keeps_the_plain_transient_framing` for
+    // why that holds, and
+    // `the_recovery_note_requires_the_locked_verdict` for the mid-rebuild arm).
+    for repair in [false, true] {
+        match handle_doctor_fts(&db_path, None, repair, false) {
+            Err(Error::Config(msg)) => {
+                assert!(msg.contains("locked"), "got: {msg}");
+                assert!(msg.contains("MCP server"), "got: {msg}");
+                assert!(
+                    !msg.contains("--repair"),
+                    "a lock hit before the rebuild must not claim a half-rebuilt index (repair={repair}): {msg}"
+                );
+            }
+            other => panic!("expected Config locked error, got {other:?}"),
         }
-        other => panic!("expected Config locked error, got {other:?}"),
-    }
-
-    // Repair (pre-check read-only open) must also fast-fail.
-    match handle_doctor_fts(&db_path, None, true, false) {
-        Err(Error::Config(msg)) => {
-            assert!(msg.contains("locked"), "got: {msg}");
-            assert!(msg.contains("MCP server"), "got: {msg}");
-        }
-        other => panic!("expected Config locked error, got {other:?}"),
     }
 
     lock_conn.execute("ROLLBACK", []).unwrap();
+}
+
+#[test]
+fn the_recovery_note_requires_the_locked_verdict() {
+    // The mid-rebuild arm of the repair path can only be reached with a real
+    // concurrent writer racing the rebuild statement (see the fixture note on
+    // `a_lock_before_the_rebuild_keeps_the_plain_transient_framing`), so this
+    // drives the handler's own decision function — `recovery_for`, the
+    // function `handle_doctor_fts_repair` calls on the rebuild failure —
+    // rather than re-implementing its `if`. Deleting the `is_locked()` guard
+    // from the production function therefore fails this test.
+    //
+    // Only a lock may earn the "half-rebuilt, re-run --repair" note. A
+    // non-locked failure — including an `Error::Config` from anywhere else in
+    // the call chain — must pass through untouched, otherwise an operator is
+    // told to re-run a repair against an index that was never opened for
+    // writing.
+    let locked = recovery_for(Error::DatabaseLocked);
+    match locked {
+        Error::Config(msg) => {
+            assert!(msg.contains("MCP server"), "got: {msg}");
+            assert!(
+                msg.contains("half-rebuilt") && msg.contains("--fts --repair"),
+                "a lock hit by the rebuild must name the recovery command: {msg}"
+            );
+        }
+        other => panic!("expected the locked Config error with the note, got {other:?}"),
+    }
+
+    // The counter-case: an unrelated Config error must NOT be told its index
+    // is half-rebuilt.
+    let unrelated = recovery_for(Error::Config("embedding model not configured".to_string()));
+    match unrelated {
+        Error::Config(msg) => {
+            assert_eq!(msg, "embedding model not configured");
+            assert!(
+                !msg.contains("half-rebuilt"),
+                "a non-locked Config error must not claim a half-rebuilt index: {msg}"
+            );
+        }
+        other => panic!("expected the Config error unchanged, got {other:?}"),
+    }
+
+    // And the wording the note is built from is the handler's own composition
+    // of the shared locked message, not a second literal.
+    assert_eq!(
+        recovery_note(),
+        format!(
+            "{LOCKED_DB_MESSAGE} The FTS index may be half-rebuilt; re-run `vipune doctor --fts --repair` to complete it."
+        )
+    );
 }
 
 // ── FtsDesyncReport helper methods ──

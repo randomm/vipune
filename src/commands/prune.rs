@@ -222,28 +222,28 @@ pub fn handle_prune(
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Open database
-    let mut db = Database::open(db_path).map_err(|e| {
-        let err_msg = e.to_string();
-        if err_msg.contains("database is locked") {
-            return Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-            );
-        }
-        Error::Config(err_msg)
-    })?;
+    let mut db = super::db_busy::open_db(db_path)?;
 
     // Set busy timeout to 0ms for fast-fail behavior on database locks
-    wrap_busy(db.set_busy_timeout(StdDuration::ZERO).map_err(Error::from))?;
+    super::db_busy::wrap_busy(db.set_busy_timeout(StdDuration::ZERO))?;
 
     let rows_before = count_total_rows(&db)?;
 
     let evaluator = PruneEvaluator::new(count_threshold, age_threshold_days);
 
     // Run per project: the demotion path (Database::update) is project-scoped.
-    let project_ids = wrap_busy(db.list_all_project_ids().map_err(Error::from))?;
+    // `run_for_project` demotes row by row and commits each update, so a lock
+    // hit partway through has already moved the earlier rows. `wrap_busy`
+    // collapses that into the locked message and discards the partial
+    // `demoted_here` ids — a known partial-failure gap, not a bug this handler
+    // papers over. `reindex.rs` makes the same deliberate choice for its
+    // per-row re-embed loop; the fix for both is to detect the lock inside the
+    // loop and return the partial counts.
+    let project_ids = super::db_busy::wrap_busy(db.list_all_project_ids())?;
     let mut demoted: Vec<String> = Vec::new();
     for project_id in &project_ids {
-        let demoted_here = wrap_busy(evaluator.run_for_project(&mut db, project_id))?;
+        let demoted_here =
+            super::db_busy::wrap_busy(evaluator.run_for_project(&mut db, project_id))?;
         demoted.extend(demoted_here);
     }
 
@@ -270,19 +270,6 @@ pub fn handle_prune(
     }
 
     Ok(ExitCode::SUCCESS)
-}
-
-/// Wrap a database error, converting SQLITE_BUSY into the actionable MCP-server message.
-fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(Error::SqliteModule(msg)) if msg.contains("database is locked") => {
-            Err(Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-            ))
-        }
-        Err(e) => Err(e),
-    }
 }
 
 #[cfg(test)]

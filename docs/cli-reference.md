@@ -645,11 +645,47 @@ All commands return exit code `1` on error, with error message to stderr or JSON
 }
 ```
 
+The `error` key, the output stream, and the exit codes above are stable; only
+the message body reflects the underlying failure. Database errors now render
+the underlying SQLite message (`Database error: no such table: memories`)
+instead of the bare `Database error`.
+
+**What a database error discloses, and where it goes.** The rendered message
+is the same string on every surface: the human path writes it to stderr
+(`Error: …`), `--json` puts it in the `error` key on **stdout**, and the MCP
+server returns it verbatim in its `ErrorData` message. So raw SQLite wording
+(`no such table: …`, `UNIQUE constraint failed: memories.id`) is part of the
+*data* stream a JSON caller or log shipper consumes — not only a diagnostic
+channel — and it is deliberately not filtered: the SQLite message is what makes
+a permissions, disk-full, or schema failure actionable. The one exception is a
+payload vipune sanitises before it reaches the boundary at all (memory ids in
+not-found errors), which is sanitised on every surface alike.
+
 **Common errors:**
 - Memory not found (`get`, `update`, `delete`)
 - Invalid metadata (not valid JSON)
 - Database errors (permissions, disk full)
 - Missing or invalid configuration
+
+**Locked database:** when another process (usually a running MCP server) holds
+a write lock, commands report the actionable "Database is locked … Stop the
+MCP server and retry." message and exit `1` — the same text and the same
+classification on every command, since all eight (backup, doctor, doctor --fts,
+export, merge, prune, promote, reindex) open the store through one shared
+helper. How fast that arrives depends on
+where the lock is hit: statements issued after the command has its handle
+(the writes, the FTS rebuild) fail immediately, because those handlers set a
+zero busy timeout; the **open** itself — which runs schema creation, migrations,
+and, when one is pending, a `BEGIN EXCLUSIVE` — happens before that timeout is
+applied, so a contended open waits SQLite's default busy timeout (5s) and then
+fails. The same 5s applies to a read-only diagnostic open and to its first
+statement: taking even a shared read lock contends with an exclusive writer, so
+nothing in the CLI is lock-free — only calls on a handle whose timeout was
+already zeroed fast-fail. The wording itself is not a contract — library consumers match
+`vipune::Error::DatabaseLocked` or call `Error::is_locked()` instead: the CLI
+renders a lock as a `Config` line for the operator, but it classifies that line
+from the typed variant on every entry point alike, so `is_locked()` reads the
+same way no matter which command hit the lock.
 
 ---
 

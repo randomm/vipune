@@ -34,7 +34,6 @@
 //! contract, and a stderr warning is emitted when it is passed.
 
 use crate::errors::Error;
-use crate::sqlite::Database;
 use crate::sqlite::export_scan::ExportRow;
 use crate::sqlite::identity;
 use std::io::Write;
@@ -292,21 +291,12 @@ pub fn handle_export(
         );
     }
 
-    let db = Database::open(db_path).map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("database is locked") {
-            return Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-            );
-        }
-        Error::Config(msg)
-    })?;
+    let db = super::db_busy::open_db(db_path)?;
 
     // The header records the identity the store's embeddings were produced
     // with (the recorded identity, or the default bge identity when no row
     // exists — the zero-change contract for pre-v6 stores).
-    let (recorded, _) = identity::read_identity_and_marker(db.conn())
-        .map_err(|e| Error::Config(format!("identity read failed: {e}")))?;
+    let (recorded, _) = identity::read_identity_and_marker(db.conn()).map_err(Error::from)?;
     let identity = recorded.unwrap_or_else(identity::ModelIdentity::default_identity);
 
     let rows = db

@@ -73,8 +73,8 @@ pub fn placeholder_embedding(content: &str) -> Vec<f32> {
 ///
 /// Returns an `Error::Config` message naming the recorded and configured
 /// identities (or the interrupted migration target) and pointing at
-/// `vipune reindex --force`, or `Error::SqliteModule` if the identity table
-/// cannot be read.
+/// `vipune reindex --force`, or [`Error::DatabaseLocked`] / [`Error::Database`]
+/// if the identity table cannot be read.
 pub fn ensure_hook_identity_ok(db: &crate::sqlite::Database, config: &Config) -> Result<(), Error> {
     assert_identity_ok(db.conn(), config.embedding_model.as_str())
 }
