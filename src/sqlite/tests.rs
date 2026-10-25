@@ -7,6 +7,10 @@ mod crud;
 mod fts;
 
 #[cfg(test)]
+#[path = "fts_migration_tests.rs"]
+mod fts_migration;
+
+#[cfg(test)]
 #[path = "migration_tests.rs"]
 mod migration;
 

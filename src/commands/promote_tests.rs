@@ -279,15 +279,16 @@ fn test_handle_promote_json_and_success() {
 // ─────────────── open-path variant contract (issue #255) ───────────────
 
 #[test]
-fn a_lock_at_the_promote_open_yields_the_lock_variant_not_a_config_string() {
-    // The two CLI open paths have deliberately different contracts, and this
-    // pins the stricter one: `promote` opens through `db_busy::wrap_busy`,
-    // which preserves the vipune-owned variant, whereas `backup`/`doctor`/
-    // `export`/`merge`/`prune` open through `db_busy::open_db_error`, which
-    // renders a message-only failure as `Error::Config` (both halves are
-    // pinned in `commands::db_busy::tests`). A lock at promote's open must
-    // therefore stay a typed, retryable verdict rather than prose, so a
-    // consumer wrapping `handle_promote` can `is_locked()` it.
+fn a_lock_at_the_promote_open_renders_the_actionable_text_and_classifies_as_locked() {
+    // ONE contract for all eight handlers (issue #255 review): every entry
+    // point opens through `db_busy::open_db`, which (a) renders a lock as the
+    // actionable `Config` text the operator reads and (b) never loses the
+    // typed verdict on the way — the storage error it classified from is
+    // `sqlite::Error::Locked`, whose public form is `Error::DatabaseLocked`.
+    // The old split (five handlers flattening a lock through
+    // `db_busy::open_db_error`, three preserving it) is gone, so this test no
+    // longer has to name a laxer sibling; the shared mapping is pinned in
+    // `commands::db_busy::tests`.
     let (_dir, path) = create_test_db();
     // The handler resolves the promotion threshold from the environment before
     // it opens the store, so hold the config guard for the whole test body to
@@ -302,8 +303,8 @@ fn a_lock_at_the_promote_open_yields_the_lock_variant_not_a_config_string() {
     // not the latency.
     // The CLI handler renders a lock into the actionable `Config` text — that
     // is the presentation contract in `commands::db_busy`. The variant
-    // contract that handler depends on is the one `wrap_busy` gives the
-    // storage error *before* that rendering, so assert both: the operator text
+    // contract that handler depends on is the one the storage boundary gives
+    // the error *before* that rendering, so assert both: the operator text
     // and the verdict it was classified from.
     let err = handle_promote(path.as_path(), "proj", false)
         .expect_err("a locked store must fail the open");

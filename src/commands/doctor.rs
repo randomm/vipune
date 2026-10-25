@@ -40,7 +40,7 @@ pub fn handle_doctor(
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Open database
-    let db = Database::open(db_path).map_err(super::db_busy::open_db_error)?;
+    let db = super::db_busy::open_db(db_path)?;
 
     // Determine which projects to audit
     let all_project_ids: Vec<String> = super::db_busy::wrap_busy(db.list_all_project_ids())?;

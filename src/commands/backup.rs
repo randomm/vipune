@@ -17,7 +17,6 @@
 
 use crate::errors::Error;
 use crate::output::{BackupResponse, print_json};
-use crate::sqlite::Database;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
@@ -35,7 +34,7 @@ use std::time::Duration;
 /// Returns an error if the source cannot be opened, the backup step fails, or
 /// the produced copy fails the SQLite integrity check.
 fn run_online_backup(source: &Path, destination: &Path) -> Result<u64, Error> {
-    let source_db = Database::open(source).map_err(super::db_busy::open_db_error)?;
+    let source_db = super::db_busy::open_db(source)?;
 
     // Fast-fail for every statement after this point (MCP server holding a
     // write lock, etc.). The Online Backup API returns raw rusqlite errors when

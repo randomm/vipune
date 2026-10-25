@@ -47,7 +47,7 @@ const PROGRESS_INTERVAL: usize = 50;
 /// timeout can be applied, so a contended open waits SQLite's default busy
 /// timeout (~5s) and then reports the same actionable message.
 fn open_fast_fail(db_path: &Path) -> Result<Database, Error> {
-    let db = super::db_busy::wrap_busy(Database::open(db_path))?;
+    let db = super::db_busy::open_db(db_path)?;
     db.set_busy_timeout(Duration::ZERO)?;
     Ok(db)
 }

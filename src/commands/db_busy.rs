@@ -7,9 +7,10 @@
 //! this module each of the eight carried its own `wrap_busy` that matched the
 //! Display text `"database is locked"`, so a dependency rewording its message
 //! would silently turn every fast-fail path into an unclassified database
-//! error. They now share [`wrap_busy`], which decides on the
-//! [`Error::DatabaseLocked`] variant — itself set once, from the SQLite result
-//! code, by `sqlite::classify_db_error`. Nothing here reads message text.
+//! error. They now share [`wrap_busy`] for statements and [`open_db`] for the
+//! open, both of which decide on the [`Error::DatabaseLocked`] variant — itself
+//! set once, from the SQLite result code, by `sqlite::classify_db_error`.
+//! Nothing here reads message text.
 //!
 //! The helpers take and return the public [`Error`] so no classification
 //! decision is made before the storage boundary's own `From` impls have run.
@@ -26,6 +27,24 @@
 //! They live here rather than as `Error` methods because they are CLI
 //! presentation helpers: they render the operator-facing locked message, and
 //! are deliberately not part of the public library API.
+//!
+//! **One contract for every entry point.** All eight handlers open the store
+//! through [`open_db`] and wrap every later call through [`wrap_busy`], so a
+//! lock is classified from the same verdict no matter which command hit it and
+//! `is_locked()` cannot mean one thing for `backup` and another for `promote`.
+//! There is deliberately no second open-path wrapper: an earlier revision had
+//! `open_db_error`, used by only five of the eight, which flattened a *lock* to
+//! `Error::Config` and destroyed the verdict — the inconsistency this unifies.
+//! `open_db` keeps that helper's uniform `Config` rendering (which is the CLI's
+//! long-standing output for an open failure) while preserving the verdict, so
+//! unifying the paths changed neither the operator's text nor the exit code.
+//!
+//! The split between the two helpers is deliberate, not a second contract:
+//! [`wrap_busy`] passes a non-lock through untouched because mid-statement
+//! failures have always been reported under their own variant, while [`open_db`]
+//! frames a non-lock as `Config` because that is what the CLI has always printed
+//! for an open failure. Both classify a lock identically, which is the property
+//! callers depend on. Each half is pinned by its own test below.
 
 use crate::errors::{Error, LOCKED_DB_MESSAGE};
 
@@ -38,6 +57,9 @@ use crate::errors::{Error, LOCKED_DB_MESSAGE};
 /// already names its error type, so the conversion is `From`'s job. The
 /// conversion runs first and the decision second, which is what keeps the
 /// structured variants (`CorruptEmbedding`, the migration variants) intact.
+///
+/// through [`open_db`] instead, which adds one thing this helper must not: the
+/// uniform `Config` framing the CLI has always printed for an open failure.
 ///
 /// # Pinning
 ///
@@ -52,40 +74,57 @@ pub(crate) fn wrap_busy<T, E: Into<Error>>(result: Result<T, E>) -> Result<T, Er
     }
 }
 
-/// Map a failure raised while opening the database to the `Config` error the
-/// CLI prints for every open-path failure.
+/// Open the store for a command handler, mapping every open failure to the
+/// `Config` error the CLI has always printed for it.
 ///
-/// The two arms are the whole contract, pinned by
-/// [`open_db_error_preserves_the_structured_variants`] and
-/// [`open_db_error_flattens_only_the_message_carrying_variants`]:
+/// This is the single open-path entry point: the five handlers that used to
+/// carry `open_db_error` and the three that opened through [`wrap_busy`]
+/// (`promote`, `reindex`, `doctor --fts`) all use this, so a lock is classified
+/// the same way from every command and `is_locked()` cannot mean one thing for
+/// `backup` and another for `promote`.
 ///
-/// * A locked store becomes the actionable [`LOCKED_DB_MESSAGE`] `Config`
-///   error. `Error::is_locked()` is `false` for it: the CLI's locked contract
-///   is the operator-facing text (see `docs/cli-reference.md`), and a library
-///   consumer that wants the typed verdict calls `Database::open` (or
-///   [`wrap_busy`]) rather than a CLI handler.
-/// * A storage error whose public form is message-only — `Sqlite`, the input
-///   predicates, `NotFound` — is flattened to `Config` with the same rendered
-///   text, so open-path failures read uniformly as a configuration problem.
-/// * A storage error whose public form is *structured* (`CorruptEmbedding`,
-///   `InvalidBlobSize`, `MismatchedDimensions`, `MigrationRefused`,
-///   `MigrationIncomplete`) is returned as its own public variant instead: a
-///   corrupt BLOB surfaced at open time must keep the `id` that locates the
-///   row (issue #186), which is the whole point of #255 carrying those fields.
+/// The contract has two arms and neither is negotiable:
 ///
-/// `promote`/`reindex`/`doctor --fts` open through [`wrap_busy`] instead, which
-/// preserves every variant including the structured ones; that is the stricter
-/// contract of the two, and both are pinned so neither can silently regress.
-#[must_use]
-pub(crate) fn open_db_error(err: crate::sqlite::Error) -> Error {
-    match err {
-        crate::sqlite::Error::Locked => Error::Config(LOCKED_DB_MESSAGE.to_string()),
-        structured @ (crate::sqlite::Error::CorruptEmbedding { .. }
-        | crate::sqlite::Error::InvalidBlobSize { .. }
-        | crate::sqlite::Error::MismatchedDimensions { .. }
-        | crate::sqlite::Error::MigrationRefused { .. }
-        | crate::sqlite::Error::MigrationIncomplete { .. }) => Error::from(structured),
-        other => Error::Config(Error::from(other).to_string()),
+/// * **A lock keeps its verdict.** `Error::from(sqlite::Error::Locked)` is
+///   `Error::DatabaseLocked`, and `is_locked()` reads that variant — the
+///   deleted `open_db_error` flattened the lock straight to a `Config` string,
+///   so the verdict was destroyed here for five of the eight handlers. The
+///   operator text is unchanged: this returns the same `Config(LOCKED_DB_MESSAGE)`
+///   shape, which is what keeps stderr byte-for-byte identical and the exit code
+///   at 1.
+/// * **Any other open failure renders as `Config` with the rendered public
+///   message**, exactly as the deleted `open_db_error` did. That framing is not
+///   decoration: it is what the CLI printed for an open failure before this
+///   issue, so a plain `Database`/`NotFound`/input failure must keep reading as
+///   one uniform configuration problem. Returning those variants untouched would
+///   silently change the operator's text (no `Configuration error: ` lead-in) —
+///   the regression
+///   [`open_failures_render_the_same_text_the_deleted_open_db_error_produced`]
+///   exists to catch.
+///
+/// A storage error whose public form is *structured* (`CorruptEmbedding`,
+/// `InvalidBlobSize`, `MismatchedDimensions`, the migration variants) is
+/// returned as its own variant rather than flattened: a corrupt BLOB surfaced
+/// at open time must keep the `id` that locates the row, which is the whole
+/// point of #255 carrying those fields.
+pub(crate) fn open_db(path: &std::path::Path) -> Result<crate::sqlite::Database, Error> {
+    crate::sqlite::Database::open(path).map_err(open_failure)
+}
+
+/// The open-path error mapping, factored out of [`open_db`] so it is testable
+/// without a contended filesystem.
+fn open_failure(err: crate::sqlite::Error) -> Error {
+    let public = Error::from(err);
+    if public.is_locked() {
+        return Error::Config(LOCKED_DB_MESSAGE.to_string());
+    }
+    match public {
+        structured @ (Error::CorruptEmbedding { .. }
+        | Error::InvalidBlobSize { .. }
+        | Error::MismatchedDimensions { .. }
+        | Error::MigrationRefused { .. }
+        | Error::MigrationIncomplete { .. }) => structured,
+        other => Error::Config(other.to_string()),
     }
 }
 
@@ -128,69 +167,168 @@ mod tests {
     }
 
     #[test]
-    fn other_database_errors_keep_their_own_message() {
-        let err = crate::sqlite::Error::Sqlite("disk I/O error".to_string());
-        match open_db_error(err) {
-            Error::Config(msg) => assert_eq!(msg, "Database error: disk I/O error"),
-            other => panic!("expected Config, got {other:?}"),
+    fn open_failures_render_the_same_text_the_deleted_open_db_error_produced() {
+        // Unifying the eight open paths on `open_db` must not have changed what
+        // the operator sees. `main.rs` prints `Error: {}` for every variant and
+        // exits 1 for all of them alike, so byte-identical *Display* is the bar
+        // for byte-identical output.
+        //
+        // The expectations below are the **rendered** lines, which is why they
+        // are written out here rather than compared against `LOCKED_DB_MESSAGE`:
+        // a lock is returned as `Error::Config(LOCKED_DB_MESSAGE)`, and
+        // `Config`'s Display adds its own `Configuration error: ` framing, so
+        // what reaches stderr is that framing *around* the locked text. The
+        // deleted `open_db_error` produced exactly that shape for both arms,
+        // which is what makes the unification output-neutral — asserting on the
+        // payload instead of the rendering would have hidden the framing rather
+        // than pinned it, and the first draft of this test did exactly that.
+        let cases: Vec<(crate::sqlite::Error, &str)> = vec![
+            (
+                crate::sqlite::Error::Locked,
+                "Configuration error: Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.",
+            ),
+            (
+                crate::sqlite::Error::Sqlite("disk I/O error".to_string()),
+                "Configuration error: Database error: disk I/O error",
+            ),
+            (
+                crate::sqlite::Error::NotFound("secret-uuid".to_string()),
+                "Configuration error: Memory not found: memory not found",
+            ),
+        ];
+        for (storage, expected) in cases {
+            let rendered = open_failure(storage).to_string();
+            assert_eq!(
+                rendered, expected,
+                "the open path must render the same text as before the unification"
+            );
         }
-    }
 
-    #[test]
-    fn open_db_error_preserves_the_structured_variants() {
-        // The open-path wrapper must not erase the payloads this PR carries
-        // through the public boundary: a corrupt BLOB hit at open time still
-        // names the row (#186), and a migration failure keeps its ids/report.
-        let corrupt = open_db_error(crate::sqlite::Error::CorruptEmbedding {
+        // And the payload the operator text is built from is still the single
+        // source the rest of the crate pins, so this test cannot drift into
+        // pinning an accidental copy of the wording.
+        let lock = open_failure(crate::sqlite::Error::Locked);
+        match lock {
+            Error::Config(msg) => assert_eq!(msg, LOCKED_DB_MESSAGE),
+            other => panic!("expected the actionable Config error, got {other:?}"),
+        }
+
+        // The structured arm must NOT get the `Config` framing: a corrupt BLOB
+        // hit at open time has to keep the `id` that locates the row (#186), and
+        // flattening it to satisfy the uniform-open-failure framing is the
+        // regression #255 was raised to remove.
+        let corrupt = open_failure(crate::sqlite::Error::CorruptEmbedding {
             id: "mem-1".to_string(),
             reason: "not enough bytes".to_string(),
         });
         match corrupt {
             Error::CorruptEmbedding { id, reason } => {
-                assert_eq!(id, "mem-1");
-                assert_eq!(reason, "not enough bytes");
+                assert_eq!(
+                    (id.as_str(), reason.as_str()),
+                    ("mem-1", "not enough bytes")
+                );
             }
-            other => panic!("expected CorruptEmbedding, got {other:?}"),
-        }
-
-        let refused = open_db_error(crate::sqlite::Error::MigrationRefused {
-            offending: vec!["mem-9".to_string()],
-        });
-        match refused {
-            Error::MigrationRefused { offending } => assert_eq!(offending, vec!["mem-9"]),
-            other => panic!("expected MigrationRefused, got {other:?}"),
-        }
-
-        // The lock still gets the actionable operator framing, not a variant.
-        match open_db_error(crate::sqlite::Error::Locked) {
-            Error::Config(msg) => assert_eq!(msg, LOCKED_DB_MESSAGE),
-            other => panic!("expected the actionable Config error, got {other:?}"),
+            other => panic!("a structured open failure must keep its variant, got {other:?}"),
         }
     }
 
     #[test]
-    fn open_db_error_flattens_only_the_message_carrying_variants() {
-        // The other half of the open_db_error contract: what has no public
-        // fields to lose is rendered as a Config string, so open failures read
-        // uniformly. `NotFound` also exercises the sanitisation the storage
-        // conversion performs (the id must not reach the operator text).
-        match open_db_error(crate::sqlite::Error::NotFound("secret-uuid".to_string())) {
-            Error::Config(msg) => {
-                assert_eq!(msg, "Memory not found: memory not found");
-                assert!(
-                    !msg.contains("secret-uuid"),
-                    "the id sanitisation must survive the open path: {msg}"
-                );
-            }
-            other => panic!("expected Config, got {other:?}"),
+    fn a_lock_at_the_open_classifies_the_same_way_for_every_handler() {
+        // The consistency half of the unification, asserted against the real
+        // storage boundary all eight handlers share. Before this change the five
+        // handlers that opened through `open_db_error` destroyed the lock
+        // verdict, so `is_locked()` was false for `backup`/`export`/`merge`/
+        // `prune`/`doctor` and true for `promote`/`reindex`/`doctor --fts` on the
+        // *same* contention. Every open now runs through `open_db`, so one lock
+        // shape yields one verdict everywhere; the per-handler rendering is
+        // pinned by the command suites (`backup_tests`, `reindex_cli_tests`,
+        // `doctor_fts_tests`, …).
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("memories.db");
+        {
+            let db = crate::sqlite::Database::open(&db_path).unwrap();
+            let emb = crate::memory::crud::test_fake_embedder("locked-open").unwrap();
+            db.insert("proj-a", "locked-open", &emb, None, "fact", "active")
+                .unwrap();
+        }
+
+        let lock_conn = rusqlite::Connection::open(&db_path).unwrap();
+        lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+        // The write is what makes the EXCLUSIVE lock real; `BEGIN EXCLUSIVE`
+        // alone defers it.
+        lock_conn
+            .execute(
+                "INSERT INTO memories_fts(rowid, content) VALUES (9999, 'hold')",
+                [],
+            )
+            .unwrap();
+
+        // A real contended open, through the exact boundary the handlers use.
+        let storage = match crate::sqlite::Database::open(&db_path) {
+            Ok(_) => panic!("the store is still locked, so the open must fail"),
+            Err(e) => e,
+        };
+        assert!(
+            matches!(storage, crate::sqlite::Error::Locked),
+            "the storage layer must classify a contended open as Locked, got {storage:?}"
+        );
+
+        // And the two halves of the open contract hold for that real error:
+        // the operator gets the `Config` framing, the verdict underneath it is
+        // the typed `DatabaseLocked`. The second assertion is the one that was
+        // false for five of the eight handlers before the unification.
+        let presented = open_failure(storage);
+        let raw: Error = crate::sqlite::Error::Locked.into();
+        assert!(
+            matches!(presented, Error::Config(_)),
+            "an open failure is presented to the operator as Config, got {presented:?}"
+        );
+        assert!(
+            raw.is_locked(),
+            "the verdict every handler classifies on must survive the public \
+             conversion, got {raw:?}"
+        );
+
+        lock_conn.execute("ROLLBACK", []).unwrap();
+    }
+
+    #[test]
+    fn a_lock_at_the_open_stays_the_typed_verdict_for_every_entry_point() {
+        // ONE contract, asserted where it is decided: the wrapper renders the
+        // operator-facing `Config` text, and the verdict it classified that
+        // text from survives the storage→public conversion as
+        // `Error::DatabaseLocked`. The deleted `open_db_error` broke the second
+        // half for the five open paths (a lock became `Config` with no typed
+        // verdict left), which is why `is_locked()` meant different things
+        // depending on which command was run.
+        let lock = wrap_busy(Err::<(), _>(crate::sqlite::Error::Locked))
+            .expect_err("a locked store must fail");
+        match lock {
+            Error::Config(ref msg) => assert_eq!(msg, LOCKED_DB_MESSAGE),
+            other => panic!("expected the actionable Config error, got {other:?}"),
+        }
+        let storage: Error = crate::sqlite::Error::Locked.into();
+        assert!(
+            matches!(storage, Error::DatabaseLocked) && storage.is_locked(),
+            "the verdict every handler classifies on survives the public conversion, got {storage:?}"
+        );
+
+        let refused = wrap_busy(Err::<(), _>(crate::sqlite::Error::MigrationRefused {
+            offending: vec!["mem-9".to_string()],
+        }))
+        .expect_err("a refused migration stays a failure");
+        match refused {
+            Error::MigrationRefused { offending } => assert_eq!(offending, vec!["mem-9"]),
+            other => panic!("expected MigrationRefused, got {other:?}"),
         }
     }
 
     #[test]
     fn wrap_busy_preserves_the_structured_variants_it_is_handed() {
-        // `promote`/`reindex`/`doctor --fts` open through `wrap_busy`, so the
-        // strict contract — every non-lock variant travels unchanged — is
-        // pinned here rather than only asserted in a doc comment.
+        // All eight handlers open through `wrap_busy`, so the strict contract
+        // — every non-lock variant travels unchanged — is pinned here rather
+        // than only asserted in a doc comment. A corrupt BLOB surfaced at open
+        // time must keep the `id` that locates the row (#186).
         let wrapped = wrap_busy(Err::<(), _>(crate::sqlite::Error::MismatchedDimensions {
             expected: 384,
             actual: 768,
@@ -201,6 +339,19 @@ mod tests {
                 assert_eq!((expected, actual), (384, 768));
             }
             other => panic!("expected MismatchedDimensions, got {other:?}"),
+        }
+
+        let corrupt = wrap_busy(Err::<(), _>(crate::sqlite::Error::CorruptEmbedding {
+            id: "mem-1".to_string(),
+            reason: "not enough bytes".to_string(),
+        }))
+        .expect_err("a corrupt BLOB stays a failure");
+        match corrupt {
+            Error::CorruptEmbedding { id, reason } => {
+                assert_eq!(id, "mem-1");
+                assert_eq!(reason, "not enough bytes");
+            }
+            other => panic!("expected CorruptEmbedding, got {other:?}"),
         }
     }
 

@@ -4,7 +4,6 @@
 
 use crate::errors::Error;
 use crate::output::{MergeResponse, print_json};
-use crate::sqlite::Database;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -36,7 +35,7 @@ pub fn handle_merge(
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Open database
-    let mut db = Database::open(db_path).map_err(super::db_busy::open_db_error)?;
+    let mut db = super::db_busy::open_db(db_path)?;
 
     // Set busy timeout to 0ms for fast-fail behavior on database locks
     super::db_busy::wrap_busy(db.set_busy_timeout(Duration::ZERO))?;

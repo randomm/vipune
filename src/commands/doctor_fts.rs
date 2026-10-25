@@ -165,7 +165,7 @@ fn handle_doctor_fts_repair(
 /// other read-write open in the CLI; the read-only diagnostic opens do not
 /// contend at all and fail fast.
 fn open_read_write(db_path: &Path) -> Result<Database, Error> {
-    let db = super::db_busy::wrap_busy(Database::open(db_path))?;
+    let db = super::db_busy::open_db(db_path)?;
     db.set_busy_timeout(std::time::Duration::ZERO)?;
     Ok(db)
 }

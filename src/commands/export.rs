@@ -34,7 +34,6 @@
 //! contract, and a stderr warning is emitted when it is passed.
 
 use crate::errors::Error;
-use crate::sqlite::Database;
 use crate::sqlite::export_scan::ExportRow;
 use crate::sqlite::identity;
 use std::io::Write;
@@ -292,7 +291,7 @@ pub fn handle_export(
         );
     }
 
-    let db = Database::open(db_path).map_err(super::db_busy::open_db_error)?;
+    let db = super::db_busy::open_db(db_path)?;
 
     // The header records the identity the store's embeddings were produced
     // with (the recorded identity, or the default bge identity when no row

@@ -189,7 +189,7 @@ pub fn handle_promote(
     project_id: &str,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    let db = super::db_busy::wrap_busy(Database::open(db_path))?;
+    let db = super::db_busy::open_db(db_path)?;
     // Same fast-fail contract as backup/merge/prune/reindex: a contended
     // promote must emit the actionable locked message, not block on SQLite's
     // default busy behaviour while it writes status updates per row.

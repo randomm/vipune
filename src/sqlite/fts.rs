@@ -4,6 +4,39 @@ use super::{Database, EMBEDDING_COLUMN, Error, Memory};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Route a raw `rusqlite::Error` raised by an FTS statement through the storage
+/// boundary's classifier instead of flattening it to a message (issue #255).
+///
+/// `Error::Sqlite(format!("…: {e}", e))` — the shape these call sites used —
+/// erases the SQLite result code before the boundary sees it, so a
+/// `SQLITE_BUSY` from the rebuild came back as `Error::Database` whose
+/// `is_locked()` is `false`. Converting through `From` first is what keeps the
+/// verdict as `Error::Locked`.
+fn classify_db_failure(err: rusqlite::Error) -> Error {
+    Error::from(err)
+}
+
+impl Error {
+    /// Prepend call-site context to a storage error *without* erasing its
+    /// variant, so the lock verdict the classifier just decided is still
+    /// readable by `is_locked()` on the way out.
+    ///
+    /// A message-only variant gets the context interpolated into its message
+    /// (which is where its whole payload lives); a verdict or a structured
+    /// variant passes through untouched, because flattening it to make room
+    /// for prose is exactly what loses the classification.
+    ///
+    /// Crate-visible rather than private only so
+    /// `sqlite::tests::fts::an_unclassified_fts_migration_failure_keeps_its_context_and_its_message`
+    /// can drive both arms directly; it is not part of the public surface.
+    pub(crate) fn with_context(self, context: &str) -> Self {
+        match self {
+            Error::Sqlite(message) => Error::Sqlite(format!("{context}: {message}")),
+            other => other,
+        }
+    }
+}
+
 /// Result of the bidirectional rowid-join FTS desync detection.
 ///
 /// Detection is a bidirectional rowid join, NOT a count comparison (a count-only
@@ -133,7 +166,14 @@ impl Database {
                      INSERT INTO memories_fts(rowid, content, project_id)
                      SELECT rowid, content, project_id FROM memories;",
                 )
-                .map_err(|e| Error::Sqlite(format!("FTS5 schema migration failed: {}", e)))?;
+                // The classifier, not a message: `execute_batch` fails with
+                // `SQLITE_BUSY` when another connection holds the write lock, and
+                // flattening that result code into a message here would hand the
+                // caller an unretryable `Error::Database` carrying busy text — the
+                // one thing `errors.rs` documents must never happen. Context is
+                // prepended after classification so the verdict survives
+                // (`classify_db_failure` in `migration.rs` is the same shape).
+                .map_err(|e| classify_db_failure(e).with_context("FTS5 schema migration failed"))?;
 
                 // Validate migration: verify row count matches
                 let fts_count: i64 =

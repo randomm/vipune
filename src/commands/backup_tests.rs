@@ -173,17 +173,21 @@ fn test_backup_fails_fast_when_source_locked() {
     // The actionable "Database is locked … MCP server" message is produced by
     // the `db_busy` helpers, which classify via `Error::is_locked` — backed by
     // the SQLite result code at the storage boundary — for both the
-    // `crate::sqlite::Error` path and the raw `rusqlite::Error` path that
+    // `crate::sqlite::Error` path (the `Database::open` above, through
+    // `db_busy::open_db`) and the raw `rusqlite::Error` path that
     // `rusqlite::backup::Backup::new` returns when the source is in a
     // hot-journal state (issue #255 removed the old
     // `Error::SQLite(rusqlite::Error)` arm).
     //
     // What this end-to-end case proves is the rendered CLI contract (the
     // `Error::Config` text the operator sees). It cannot assert `is_locked()`:
-    // the handler presents a lock as `Config` before returning, so the verdict
-    // is not observable here. The structured classification is pinned where the
-    // wrapper is exercised — `commands::db_busy::tests` (including the
-    // real-writer mid-statement case) and `sqlite::db_error::tests`.
+    // every handler presents a lock as `Config` before returning, so the
+    // verdict is not observable here — but it is the *same* verdict for every
+    // command now that all eight open through `db_busy::open_db`. The
+    // structured classification is pinned where the wrapper is exercised —
+    // `commands::db_busy::tests` (including the real-writer mid-statement case,
+    // the real contended open, and the storage→public conversion) and
+    // `sqlite::db_error::tests`.
     match result {
         Err(e) => {
             let msg = e.to_string();
