@@ -126,9 +126,9 @@ impl Error {
     /// and to be trusted as the source of a row-conversion failure.
     ///
     /// The single enumeration of that set: `db_error::is_trusted_domain_error`,
-    /// `From<crate::sqlite::Error> for vipune::Error` and the MCP `data` arms
-    /// all key off it, so adding a structured variant is one edit here rather
-    /// than three coordinated lists.
+    /// `commands::db_busy::open_failure`, `From<crate::sqlite::Error> for
+    /// vipune::Error` and the MCP `data` arms all key off it, so adding a
+    /// structured variant is one edit here rather than four coordinated lists.
     #[must_use]
     pub(crate) fn is_structured_embedding_error(&self) -> bool {
         matches!(

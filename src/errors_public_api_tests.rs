@@ -38,7 +38,11 @@ fn public_variants_are_constructible_from_owned_payloads() {
     // compile-time half of "no variant stores a third-party type"; the
     // wildcard arm below is what `#[non_exhaustive]` requires of consumers and
     // is exercised separately.
-    let _: fn(Option<String>) -> Error = |message| Error::Inference(message.unwrap_or_default());
+    //
+    // `Inference` is a required `String` (see the `#[error]` attribute), not an
+    // `Option<String>`: an `Option` here would pin a shape the variant does not
+    // have and let an `Option<String>` payload slip in unnoticed.
+    let _: fn(String) -> Error = |message| Error::Inference(message);
     let _: fn(String) -> Error = |message| Error::Config(message);
     let _: fn(String) -> Error = |message| Error::InvalidInput(message);
     let _: fn() -> Error = || Error::EmptyInput;
@@ -55,13 +59,11 @@ fn public_variants_are_constructible_from_owned_payloads() {
     let _: fn(String) -> Error = |id| Error::NotFound(id);
     let _: fn(String) -> Error = |message| Error::Validation(message);
     let _: fn(Vec<String>) -> Error = |offending| Error::MigrationRefused { offending };
+    let _: fn(crate::sqlite::migration_types::MigrationReport) -> Error =
+        |report| Error::MigrationIncomplete { report };
     let _: fn(String) -> Error = |reason| Error::EmbedderUnavailable { reason };
     let _: fn(String) -> Error = |message| Error::Onnx { message };
     let _: fn(String) -> Error = |message| Error::HfHub { message };
-    let _: fn(usize) -> Error = |token_count| Error::ContentTooLong {
-        token_count,
-        max_tokens: 0,
-    };
 
     // And the enum is `#[non_exhaustive]`, so consumers must carry a wildcard
     // arm: this match compiles only because of that attribute.
@@ -77,8 +79,6 @@ fn public_variants_are_constructible_from_owned_payloads() {
     // conversion below, so an unlisted variant that regressed to a
     // third-party payload would have to be added to this file to be seen at
     // all — and it could not be added without its payload type being named.
-    let _: fn(crate::sqlite::migration_types::MigrationReport) -> Error =
-        |report| Error::MigrationIncomplete { report };
 }
 
 #[test]

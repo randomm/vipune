@@ -208,3 +208,74 @@ fn an_unclassified_fts_migration_failure_keeps_its_context_and_its_message() {
         "context must never flatten the locked verdict, got {locked:?}"
     );
 }
+
+#[test]
+fn with_context_leaves_every_non_sqlite_variant_untouched() {
+    // The arms `with_context` must NOT touch. An earlier revision mapped the
+    // three structured decoding variants to `Error::Locked` here, which turned
+    // a corrupt BLOB into a retryable lock and dropped the `id`/`expected`/
+    // `actual` a caller acts on — so each is pinned individually, plus the
+    // verdict arm above, rather than covered by a blanket wildcard.
+    // Each case pairs a storage error with what its public form must be; the
+    // `fn` pointer is factored out because the pair type trips
+    // `clippy::type_complexity` when written inline.
+    type Kept = (crate::sqlite::Error, fn(&crate::sqlite::Error) -> bool);
+    let cases: Vec<Kept> = vec![
+        (
+            crate::sqlite::Error::CorruptEmbedding {
+                id: "mem-1".to_string(),
+                reason: "not enough bytes".to_string(),
+            },
+            |e| {
+                matches!(e, crate::sqlite::Error::CorruptEmbedding { id, reason }
+                if id == "mem-1" && reason == "not enough bytes")
+            },
+        ),
+        (
+            crate::sqlite::Error::InvalidBlobSize {
+                expected: crate::embedding::EMBEDDING_DIMS * 4,
+                actual: 4,
+            },
+            |e| {
+                matches!(
+                    e,
+                    crate::sqlite::Error::InvalidBlobSize {
+                        expected,
+                        actual: 4
+                    } if *expected == crate::embedding::EMBEDDING_DIMS * 4
+                )
+            },
+        ),
+        (
+            crate::sqlite::Error::MismatchedDimensions {
+                expected: 384,
+                actual: 768,
+            },
+            |e| {
+                matches!(
+                    e,
+                    crate::sqlite::Error::MismatchedDimensions {
+                        expected: 384,
+                        actual: 768
+                    }
+                )
+            },
+        ),
+        (crate::sqlite::Error::Locked, |e| {
+            matches!(e, crate::sqlite::Error::Locked)
+        }),
+    ];
+    for (err, is_kept) in cases {
+        let expected = err.to_string();
+        let after = err.with_context("FTS5 schema migration failed");
+        assert!(
+            is_kept(&after),
+            "a non-Sqlite variant must survive with_context with its payload, got {after:?}"
+        );
+        assert_eq!(
+            after.to_string(),
+            expected,
+            "with_context must not rewrite a non-Sqlite variant's rendering"
+        );
+    }
+}

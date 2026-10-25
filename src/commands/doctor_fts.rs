@@ -162,8 +162,11 @@ fn handle_doctor_fts_repair(
 /// external `BEGIN EXCLUSIVE` writer, `doctor --fts --repair` reports the
 /// actionable locked message ~5.0s after the call; statements on the returned
 /// handle (the rebuild among them) fail immediately. The same is true of every
-/// other read-write open in the CLI; the read-only diagnostic opens do not
-/// contend at all and fail fast.
+/// other open in the CLI, read-only ones included: an open is not lock-free, and
+/// neither is a read-only connection's *first* statement — a plain `SELECT` still
+/// takes the shared read lock that a `BEGIN EXCLUSIVE` writer holds — so those
+/// paths wait the same default 5s before the locked message appears. Only calls
+/// on a handle whose timeout was already zeroed fast-fail.
 fn open_read_write(db_path: &Path) -> Result<Database, Error> {
     let db = super::db_busy::open_db(db_path)?;
     db.set_busy_timeout(std::time::Duration::ZERO)?;

@@ -59,7 +59,11 @@ impl Database {
                  INDEXED BY idx_memories_project GROUP BY project_id",
         )?;
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+            // `isize`, not `i64` + `as usize`: rusqlite has no `FromSql` for
+            // `usize` (see its impl list), and `COUNT(*)` is an SQL integer
+            // that `isize` holds exactly, so the widening conversion is the
+            // one that cannot silently truncate a value the caller counts on.
+            Ok((row.get::<_, String>(0)?, row.get::<_, isize>(1)? as usize))
         })?;
         let mut results = Vec::new();
         for row_result in rows {

@@ -288,7 +288,7 @@ fn a_lock_at_the_promote_open_renders_the_actionable_text_and_classifies_as_lock
     // The old split (five handlers flattening a lock through
     // `db_busy::open_db_error`, three preserving it) is gone, so this test no
     // longer has to name a laxer sibling; the shared mapping is pinned in
-    // `commands::db_busy::tests`.
+    // `commands::db_busy::db_busy_tests`.
     let (_dir, path) = create_test_db();
     // The handler resolves the promotion threshold from the environment before
     // it opens the store, so hold the config guard for the whole test body to

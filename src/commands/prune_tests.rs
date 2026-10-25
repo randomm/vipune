@@ -360,13 +360,12 @@ fn test_add_time_importance_protects_from_prune() {
     assert_eq!(status_of(&db, &low), "deprecated");
 }
 
-/// The partial-failure gap the ignored case used to "pin": a lock partway
-/// through the per-row demotion loop leaves earlier rows already demoted while
-/// `handle_prune` reports only the locked message. Asserting it through the
-/// handler was impossible without fabricating a mid-loop lock, so that case was
-/// deleted (a `#[ignore]`d test asserting the behaviour which already holds
-/// discriminates nothing). This reproduces the gap against the same demotion
-/// path the handler drives — one `Database::update` per row — and asserts the
+/// The partial-failure gap: a lock partway through the per-row demotion loop
+/// leaves earlier rows already demoted while `handle_prune` reports only the
+/// locked message. Asserting it through the handler was impossible without
+/// fabricating a mid-loop lock, so the `#[ignore]`d test that claimed to pin it
+/// is gone — it asserted behaviour that already holds and so could not fail.
+/// This reproduces the gap against the same demotion path the handler drives — one `Database::update` per row — and asserts the
 /// two halves of it: rows committed before the lock stay demoted, and the
 /// failed update yields no ids, which is exactly what `wrap_busy`
 /// discards on its way to the locked message.

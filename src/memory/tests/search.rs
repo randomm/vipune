@@ -382,3 +382,82 @@ fn test_integration_update_changes_embedding() {
     let memory = store.get(&id, "test-project").unwrap().unwrap();
     assert_eq!(memory.content, "completely different content");
 }
+
+#[test]
+fn a_corrupt_blob_reaches_the_public_error_with_its_id() {
+    // The Domain arm of `sqlite::classify_db_error` is what promotes a row's
+    // decoding failure into the public `CorruptEmbedding`, and `errors.rs`
+    // says only the structured decoding variants may be trusted as a
+    // row-conversion payload. `sqlite::search`'s own test builds that error
+    // from the decoder; this drives the whole chain the CLI takes — a real
+    // store, a real corrupt BLOB, the store-level `search` that owns the
+    // identity gate and the recency pass — so a public lock- or
+    // classifier-shaped regression anywhere between the decoder and the caller
+    // shows up here rather than only at the storage boundary.
+    use crate::memory::SearchOptions;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("corrupt.db");
+    std::mem::forget(dir);
+
+    let id = {
+        let db = Database::open(&path).unwrap();
+        db.insert(
+            "test-project",
+            "corrupt embedding",
+            &vec![0.1f32; 384],
+            None,
+            "fact",
+            "active",
+        )
+        .unwrap()
+    };
+
+    // Corrupt the stored BLOB: a real row whose embedding is not a valid f32
+    // buffer (3 bytes), written through the same connection the store owns.
+    {
+        let db = Database::open(&path).unwrap();
+        db.conn()
+            .execute(
+                "UPDATE memories SET embedding = X'000102' WHERE id = ?1",
+                rusqlite::params![id.clone()],
+            )
+            .unwrap();
+    }
+
+    // `from_db_with_test_embedder` keeps the model identity the insert wrote,
+    // so the identity gate passes and the failure under test is the decode.
+    let mut store = MemoryStore::from_db_with_test_embedder(Database::open(&path).unwrap());
+    let err = store
+        .search(
+            "test-project",
+            "corrupt embedding",
+            10,
+            0.0,
+            SearchOptions::default(),
+        )
+        .expect_err("a row whose BLOB cannot be decoded must fail the search");
+
+    assert!(
+        matches!(&err, crate::errors::Error::CorruptEmbedding { id: corrupt_id, .. }
+            if corrupt_id == &id),
+        "the public error must stay CorruptEmbedding and name the row, got {err:?}"
+    );
+    // And it was not the classifier's Locked arm that produced it: the same
+    // row read through the non-search path (the shared `map_row_to_memory`
+    // decoder) fails the same way, so the verdict is the decode and nothing
+    // upstream of it.
+    assert!(
+        !err.is_locked(),
+        "a corrupt BLOB must not classify as a lock, got {err:?}"
+    );
+    let listed = store
+        .list("test-project", 10, None, None)
+        .expect_err("the same corrupt BLOB breaks the plain read path");
+    assert!(
+        matches!(&listed, crate::errors::Error::CorruptEmbedding { id: corrupt_id, .. }
+            if corrupt_id == &id),
+        "the read path must name the same row, got {listed:?}"
+    );
+}

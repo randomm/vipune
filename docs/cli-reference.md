@@ -675,10 +675,13 @@ export, merge, prune, promote, reindex) open the store through one shared
 helper. How fast that arrives depends on
 where the lock is hit: statements issued after the command has its handle
 (the writes, the FTS rebuild) fail immediately, because those handlers set a
-zero busy timeout; the **open** itself — which runs schema creation and, when a
-migration is pending, a `BEGIN EXCLUSIVE` — happens before that timeout is
+zero busy timeout; the **open** itself — which runs schema creation, migrations,
+and, when one is pending, a `BEGIN EXCLUSIVE` — happens before that timeout is
 applied, so a contended open waits SQLite's default busy timeout (5s) and then
-fails. The wording itself is not a contract — library consumers match
+fails. The same 5s applies to a read-only diagnostic open and to its first
+statement: taking even a shared read lock contends with an exclusive writer, so
+nothing in the CLI is lock-free — only calls on a handle whose timeout was
+already zeroed fast-fail. The wording itself is not a contract — library consumers match
 `vipune::Error::DatabaseLocked` or call `Error::is_locked()` instead: the CLI
 renders a lock as a `Config` line for the operator, but it classifies that line
 from the typed variant on every entry point alike, so `is_locked()` reads the

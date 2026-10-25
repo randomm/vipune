@@ -21,10 +21,12 @@ impl Error {
     /// variant, so the lock verdict the classifier just decided is still
     /// readable by `is_locked()` on the way out.
     ///
-    /// A message-only variant gets the context interpolated into its message
-    /// (which is where its whole payload lives); a verdict or a structured
-    /// variant passes through untouched, because flattening it to make room
-    /// for prose is exactly what loses the classification.
+    /// A message-only variant (`Sqlite`) gets the context interpolated into its
+    /// message, which is where its whole payload lives. Every other variant
+    /// keeps its identity and gets **no** context: `Locked` is a verdict and
+    /// `CorruptEmbedding`/`InvalidBlobSize`/`MismatchedDimensions` carry fields
+    /// a caller acts on, so flattening any of them to make room for prose is
+    /// exactly what loses the classification.
     ///
     /// Crate-visible rather than private only so
     /// `sqlite::tests::fts::an_unclassified_fts_migration_failure_keeps_its_context_and_its_message`

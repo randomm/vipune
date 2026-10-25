@@ -191,7 +191,7 @@ mod tests {
         // message text. The two raw-rusqlite call sites (`backup::Backup::new`
         // via `sqlite3_backup_init`, and the read-only diagnostic opens) both
         // surface `SqliteFailure`, so the lock verdict survives them — pinned
-        // by `commands::db_busy::tests` for the wrapper and by the backup
+        // by `commands::db_busy::db_busy_tests` for the wrapper and by the backup
         // handler's `BEGIN EXCLUSIVE` test end to end.
         let no_code = rusqlite::Error::InvalidColumnType(
             0,

@@ -185,7 +185,7 @@ fn test_backup_fails_fast_when_source_locked() {
     // verdict is not observable here — but it is the *same* verdict for every
     // command now that all eight open through `db_busy::open_db`. The
     // structured classification is pinned where the wrapper is exercised —
-    // `commands::db_busy::tests` (including the real-writer mid-statement case,
+    // `commands::db_busy::db_busy_tests` (including the real-writer mid-statement case,
     // the real contended open, and the storage→public conversion) and
     // `sqlite::db_error::tests`.
     match result {
