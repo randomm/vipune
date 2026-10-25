@@ -18,14 +18,16 @@ use super::store::MemoryStore;
 /// The caller-supplied fields of a memory the store is about to create on the
 /// add path.
 ///
-/// The supersede path is a separate entry point that takes its fields as
-/// plain parameters, so this shape belongs to the add entry points only (the
-/// store-layer counterpart of the storage layer's `UpdateOptions`, and the
-/// sibling of [`UpdateParams`](crate::memory::UpdateParams) on the write
-/// side). Grouping the fields keeps the internal helpers short without a
-/// `too_many_arguments` suppression, and keeps the importance level a named
-/// value at every call site — the trailing argument `--importance` dropped on
-/// its way to the column in issue #238.
+/// The supersede path is a separate entry point that builds its own
+/// [`NewSupersedingMemory`](crate::memory::NewSupersedingMemory), which embeds
+/// this shape and adds the replaced-id and level fields, so the shared columns
+/// have one definition (the store-layer counterpart of the storage layer's
+/// `UpdateOptions`, and the sibling of
+/// [`UpdateParams`](crate::memory::UpdateParams) on the write side). Grouping
+/// the fields keeps the internal helpers short without a `too_many_arguments`
+/// suppression, and keeps the importance level a named value at every call
+/// site — the trailing argument `--importance` dropped on its way to the column
+/// in issue #238.
 #[derive(Clone, Copy, Debug)]
 pub struct NewMemory<'a> {
     /// Project identifier (e.g., git repo URL or user-defined).
@@ -52,12 +54,26 @@ impl MemoryStore {
     /// prune exemption). A caller that expresses no level passes `None` and
     /// gets [`MemoryImportance::default`], bound by name by the public
     /// `Database::insert` wrapper — never the column's `NOT NULL DEFAULT`.
+    ///
+    /// The insert-status rule has exactly one call site for the add side, in
+    /// the first statement of this body, which [`Self::add_with_conflict`] (and
+    /// through it `ingest`, `ingest_with_type_status` and `batch_ingest`) and
+    /// [`Self::ingest_with_importance`] both forward to — so no add entry point
+    /// can insert a `superseded`/`deprecated` row whatever default it binds. See
+    /// [`MemoryStatus::ensure_valid_for_insert`] for the map of call sites.
     pub(crate) fn add_impl(
         &mut self,
         row: &NewMemory<'_>,
         force: bool,
         importance: Option<MemoryImportance>,
     ) -> Result<AddResult, Error> {
+        // The insert-status rule, at the one body every add path shares:
+        // `add_with_conflict` (and through it `ingest`,
+        // `ingest_with_type_status` and `batch_ingest`) and
+        // `ingest_with_importance` both call this, so no add entry point can
+        // insert a `superseded`/`deprecated` row whatever default it binds.
+        row.status.ensure_valid_for_insert()?;
+
         Self::validate_input_length(row.content)?;
 
         let embedding = self.get_embedding(row.content, EmbeddingRole::Passage)?;

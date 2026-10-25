@@ -3,7 +3,7 @@
 use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
-use crate::memory::{MemoryStore, NewMemory, UpdateParams};
+use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
 use crate::{config, embedding::EmbeddingEngine, temporal};
@@ -67,12 +67,7 @@ pub(crate) fn handle_add(
     let memory_type_val = MemoryType::from_str(memory_type)?;
     let status_val = MemoryStatus::from_str(status)?;
     let importance_val = MemoryImportance::from_str(importance)?;
-    if !status_val.is_valid_for_insert() {
-        return Err(Error::InvalidInput(format!(
-            "Status '{}' is not valid for new memory insertion. Must be 'active' or 'candidate'.",
-            status
-        )));
-    }
+    status_val.ensure_valid_for_insert()?;
 
     if supersedes.is_some() && force {
         return Err(Error::InvalidInput(
@@ -82,15 +77,20 @@ pub(crate) fn handle_add(
 
     if let Some(old_id) = supersedes {
         // This branch creates its own row inside the store's supersede
-        // transaction, so the validated level has to travel with it (issue #238).
-        let new_id = store.supersede_with_importance(
-            project_id,
-            text,
-            metadata,
-            memory_type_val,
+        // transaction, so the validated level AND the validated status have to
+        // travel with it (issues #238, #258): handing over only the level left
+        // `--status candidate` silently stored as `active`.
+        let new_id = store.supersede_with(&NewSupersedingMemory {
+            row: NewMemory {
+                project_id,
+                content: text,
+                metadata,
+                memory_type: memory_type_val,
+                status: status_val,
+            },
             old_id,
-            importance_val,
-        )?;
+            importance: importance_val,
+        })?;
 
         if json {
             print_json(&AddResponse {

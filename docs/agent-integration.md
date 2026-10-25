@@ -30,6 +30,11 @@ vipune search "deployment rules" --memory-type guard
 
 # Replace an outdated memory
 vipune add "Alice now works at Google" --supersedes <old-memory-id>
+
+# ...or stage the replacement as a candidate: hidden from default search/list
+# until activated with `vipune update <id> --status active` (see
+# cli-reference.md → "Supersede with a candidate replacement")
+vipune add "Alice now works at Google" --supersedes <old-memory-id> --status candidate
 ```
 
 Available types: `fact` (default), `preference`, `procedure`, `guard`, `observation`
@@ -70,7 +75,7 @@ After completing work, store important findings:
 - `vipune --help` displays all available commands
 
 **MCP tools** are also available (via `vipune mcp`):
-- `store_memory(text, metadata?, memory_type?, status?, supersedes?, force?)` — store with optional type/status/supersede
+- `store_memory(text, metadata?, memory_type?, status?, supersedes?, force?)` — store with optional type/status/supersede; `status` is honoured on the row `supersedes` creates, so `status: "candidate"` + `supersedes` stages a hidden replacement (see `cli-reference.md` → "Supersede with a candidate replacement" for what that means and how to activate it)
 - `search_memories(query, limit?, memory_types?, statuses?, recency_weight?, hybrid?, no_touch?)` — find by meaning
 - `list_memories(limit?, memory_types?, statuses?)` — list recent
 - `supersede_memory(new_text, old_memory_id, memory_type?, metadata?)` — replace existing memory

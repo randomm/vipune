@@ -1,4 +1,11 @@
-//! Batch operations for the memory store.
+//! The store's supersede path and its batch ingest entry point.
+//!
+//! The supersede path owns an INSERT of its own — it writes the replacement row
+//! and the old row's `superseded` UPDATE in one transaction — so it is kept
+//! apart from `crud.rs`, which holds the plain add, read and update operations.
+//! Every supersede caller funnels through [`MemoryStore::supersede_with`], the
+//! one body that names the columns, because a second body is how `--importance`
+//! became a no-op in issue #238 and `--status` in issue #258.
 
 use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
@@ -6,7 +13,46 @@ use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory_types::{AddResult, BatchIngestItemResult, BatchIngestResult, IngestPolicy};
 use crate::sqlite::NewRow;
 
+use super::NewMemory;
 use super::store::MemoryStore;
+
+/// The caller-supplied fields of a memory the store is about to create on the
+/// supersede path: a [`NewMemory`] row composed with the replaced id and the
+/// operator's level.
+///
+/// The shared columns are embedded rather than copied, so the two INSERT paths
+/// cannot drift column-for-column — the defect class of #238 and #258. The
+/// struct is `#[non_exhaustive]` because it is re-exported from the crate root
+/// and built by name: that keeps a future field additive for external callers
+/// instead of silently breaking every literal.
+///
+/// `importance` is **required** rather than `Option`, for the same reason: the
+/// whole point of the supersede body is that both lifecycle columns are named in
+/// the INSERT, so a caller cannot express "no level" and quietly get the column
+/// DEFAULT. The level-less public wrapper ([`MemoryStore::supersede`]) binds the
+/// default by name instead. The status is not duplicated here — it is the
+/// `status` field of the embedded [`NewMemory`], the same shape the add path
+/// carries, and [`MemoryStore::supersede_with`] validates it with
+/// [`MemoryStatus::ensure_valid_for_insert`] before any INSERT.
+///
+/// The type is `MemoryStatus`, **not** the narrower `Option<MemoryStatus>` it
+/// might seem to want: the released
+/// [`MemoryStore::supersede_with_importance`](MemoryStore::supersede_with_importance)
+/// builds one, and `None` there means "`active`", a value this field can already
+/// express. An `Option` would invite a caller to write the status the old row
+/// receives (`superseded`) as "no status", which is the #258 defect re-typed
+/// rather than fixed.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct NewSupersedingMemory<'a> {
+    /// The new row's shared columns (project, content, metadata, type, status).
+    pub row: NewMemory<'a>,
+    /// Id of the memory this new row replaces; marked `superseded` in the same
+    /// transaction.
+    pub old_id: &'a str,
+    /// Operator-assigned importance of the new row.
+    pub importance: MemoryImportance,
+}
 
 impl MemoryStore {
     #[must_use = "handle the error or results may be lost"]
@@ -108,14 +154,15 @@ impl MemoryStore {
     #[allow(dead_code)] // Public API for library consumers (e.g., kide)
     #[must_use = "the new memory ID is needed for downstream operations"]
     /// Supersede an existing memory with a new one at the `medium` importance
-    /// default.
+    /// and `active` status defaults.
     ///
     /// Atomically replaces the old memory (marked as "superseded") with a new memory
     /// that supersedes it. Both memories remain in the database but the old one
-    /// has status "superseded" and superseded_by pointing to the new ID.
-    ///
-    /// The level-carrying variant is [`Self::supersede_with_importance`] — the
-    /// one `vipune add --supersedes <id> --importance <level>` drives.
+    /// has status "superseded" and superseded_by pointing to the new ID. The new
+    /// row is `active` at the `medium` level; a caller that names either column
+    /// uses [`Self::supersede_with`] — it takes the status and the level and is
+    /// what the CLI and MCP supersede paths drive — or
+    /// [`Self::supersede_with_importance`], which names only the level.
     pub fn supersede(
         &mut self,
         project_id: &str,
@@ -124,15 +171,116 @@ impl MemoryStore {
         memory_type: MemoryType,
         old_id: &str,
     ) -> Result<String, Error> {
-        self.supersede_impl(project_id, content, metadata, memory_type, old_id, None)
+        self.supersede_with(&NewSupersedingMemory {
+            row: NewMemory {
+                project_id,
+                content,
+                metadata,
+                memory_type,
+                status: MemoryStatus::Active,
+            },
+            old_id,
+            importance: MemoryImportance::default(),
+        })
     }
 
     #[must_use = "the new memory ID is needed for downstream operations"]
+    /// Supersede an existing memory with a new row whose importance and
+    /// lifecycle status are named by `row` — the body every supersede reaches:
+    /// the CLI (`vipune add --supersedes --importance <level> --status
+    /// <status>`) and the MCP `store_memory` supersedes arm call it directly,
+    /// and the two defaulting wrappers, [`Self::supersede`] (no level, no
+    /// status) and [`Self::supersede_with_importance`] (a level, `active`),
+    /// forward to it with the columns they do not take bound by name. A
+    /// supersede is not a family of entry points with their own argument lists
+    /// any more; there is one body, so there is one place that can name the
+    /// wrong column (issues #238, #258).
+    ///
+    /// Before issue #258 the supersede path hardcoded `active` into the row it
+    /// built, so `--status candidate` was accepted, validated, and then dropped
+    /// two frames above the INSERT. Insertability is enforced here and nowhere
+    /// else in the store — [`MemoryStatus::ensure_valid_for_insert`] is the
+    /// rule, and this is the only call site that guards the write: a superseding
+    /// row is a *new* row, so `superseded`/`deprecated` are not insertable and
+    /// that lifecycle belongs to the old row's UPDATE, which this body issues
+    /// itself. The CLI and MCP layers call the same method before arriving here
+    /// only to answer with their own error shape; a library caller that skips
+    /// that precheck is stopped by this copy.
+    ///
+    /// A `candidate` replacement is invisible to default search/list (which bind
+    /// `status = 'active'`), and supersede does not touch its retrieval
+    /// telemetry, so `vipune promote` will not select it: the deterministic way
+    /// to activate one is `vipune update <id> --status active` with the id this
+    /// method returns. Promotion stays retrieval-driven and correct — see the
+    /// `promote` module doc. Documented in `docs/cli-reference.md`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidInput`] if `row.row.status` is not insertable, if
+    /// the content is empty or over the limit, or if `row.row.metadata` is blank
+    /// or invalid JSON; a storage-layer error if `row.old_id` does not exist in
+    /// `row.row.project_id`.
+    pub fn supersede_with(&mut self, row: &NewSupersedingMemory<'_>) -> Result<String, Error> {
+        // The insert-status rule, enforced on the one path every supersede
+        // takes — no entry point above this can admit a `superseded` or
+        // `deprecated` replacement.
+        row.row.status.ensure_valid_for_insert()?;
+
+        Self::validate_input_length(row.row.content)?;
+
+        // Validate metadata: reject empty strings and invalid JSON
+        if let Some(meta) = row.row.metadata {
+            if meta.trim().is_empty() {
+                return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
+            }
+            serde_json::from_str::<serde_json::Value>(meta)
+                .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
+        }
+
+        let embedding = self.get_embedding(row.row.content, EmbeddingRole::Passage)?;
+
+        // One INSERT shape for every supersede caller (issues #238, #258).
+        Ok(self.db.supersede_with_importance(
+            &NewRow {
+                project_id: row.row.project_id,
+                content: row.row.content,
+                metadata: row.row.metadata,
+                memory_type: row.row.memory_type.as_str(),
+                status: row.row.status.as_str(),
+                importance: row.importance.as_str(),
+            },
+            &embedding,
+            row.old_id,
+        )?)
+    }
+
+    // Same exemption as the level-less `supersede` above: this is the released
+    // library surface, reached by external consumers (e.g. kide) and by the
+    // tests in `memory/tests/crud.rs`, never by this crate's own binary since
+    // #258 routed the CLI's `--supersedes --importance` through `supersede_with`.
+    #[cfg_attr(not(test), allow(dead_code))] // Public API for library consumers
+    #[must_use = "the new memory ID is needed for downstream operations"]
     /// Supersede an existing memory with a new row carrying an explicit
-    /// importance level — the path `vipune add --supersedes --importance` drives.
+    /// importance level, leaving every other column of the replacement at the
+    /// [`Self::supersede`] defaults — `active` status, [`MemoryType::Fact`]
+    /// supplied by the caller as before.
+    ///
+    /// The path `vipune add --supersedes --importance` drove before issue #258
+    /// replaced it with the status-carrying [`Self::supersede_with`]; it stays
+    /// because it shipped in v0.15.4 and the public library API is additive-only
+    /// (issue #258). It is a thin wrapper: it composes the same
+    /// [`NewSupersedingMemory`] the other entry points build and forwards, so it
+    /// cannot learn to write a different column set (#238, #258).
+    ///
     /// The parsed level (canonical `as_str` spelling) is what reaches the INSERT:
     /// an omitted column would silently reset it to the DEFAULT and cost the row
     /// the `high`/`critical` prune exemption (issue #238).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::supersede_with`]: [`Error::InvalidInput`] for empty or
+    /// over-long content, or blank or invalid JSON metadata; a storage-layer
+    /// error if `old_id` does not exist in `project_id`.
     pub fn supersede_with_importance(
         &mut self,
         project_id: &str,
@@ -142,65 +290,16 @@ impl MemoryStore {
         old_id: &str,
         importance: MemoryImportance,
     ) -> Result<String, Error> {
-        self.supersede_impl(
-            project_id,
-            content,
-            metadata,
-            memory_type,
-            old_id,
-            Some(importance),
-        )
-    }
-
-    /// Validate, embed, and insert the replacement row — the shared body of
-    /// both public supersede entry points, so neither can drift from the other.
-    ///
-    /// A named level goes to `supersede_with_importance`, no level to the
-    /// public `Database::supersede`, which binds the default by name.
-    fn supersede_impl(
-        &mut self,
-        project_id: &str,
-        content: &str,
-        metadata: Option<&str>,
-        memory_type: MemoryType,
-        old_id: &str,
-        importance: Option<MemoryImportance>,
-    ) -> Result<String, Error> {
-        Self::validate_input_length(content)?;
-
-        // Validate metadata: reject empty strings and invalid JSON
-        if let Some(meta) = metadata {
-            if meta.trim().is_empty() {
-                return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
-            }
-            serde_json::from_str::<serde_json::Value>(meta)
-                .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
-        }
-
-        let embedding = self.get_embedding(content, EmbeddingRole::Passage)?;
-
-        // Both arms write the same column set (issue #238).
-        match importance {
-            Some(level) => Ok(self.db.supersede_with_importance(
-                &NewRow {
-                    project_id,
-                    content,
-                    metadata,
-                    memory_type: memory_type.as_str(),
-                    status: "active",
-                    importance: level.as_str(),
-                },
-                &embedding,
-                old_id,
-            )?),
-            None => Ok(self.db.supersede(
+        self.supersede_with(&NewSupersedingMemory {
+            row: NewMemory {
                 project_id,
                 content,
-                &embedding,
                 metadata,
-                memory_type.as_str(),
-                old_id,
-            )?),
-        }
+                memory_type,
+                status: MemoryStatus::Active,
+            },
+            old_id,
+            importance,
+        })
     }
 }

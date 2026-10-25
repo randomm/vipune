@@ -14,6 +14,7 @@ pub(crate) mod store;
 pub mod lifecycle;
 
 pub use add::NewMemory;
+pub use batch::NewSupersedingMemory;
 pub use crud::UpdateParams;
 pub use search::SearchOptions;
 pub use store::MemoryStore;

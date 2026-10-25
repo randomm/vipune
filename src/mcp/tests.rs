@@ -31,6 +31,39 @@ fn create_test_store() -> MemoryStore {
 mod tool_handler_tests {
     use super::*;
 
+    /// Pull the `id` out of a tool result's JSON text content.
+    ///
+    /// The tool handlers return `CallToolResult`, whose payload is a list of
+    /// text contents holding the serialised response, so a handler-driven test
+    /// has to unwrap that envelope once instead of per assertion.
+    fn tool_result_id(result: &rmcp::model::CallToolResult) -> String {
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
+            .next()
+            .expect("tool result carries text content");
+        serde_json::from_str::<serde_json::Value>(text)
+            .expect("tool result text is JSON")
+            .get("id")
+            .and_then(|v| v.as_str())
+            .expect("tool result JSON carries an id")
+            .to_string()
+    }
+
+    /// The arguments an MCP client would send for a `store_memory` call.
+    fn store_memory_args(
+        text: &str,
+        status: Option<&str>,
+        supersedes: Option<&str>,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "text": text,
+            "status": status,
+            "supersedes": supersedes,
+        })
+    }
+
     /// Test that MCP server can be initialized.
     #[test]
     fn test_mcp_server_initialization() {
@@ -567,5 +600,183 @@ mod tool_handler_tests {
         let memory_final = memory_final_opt.unwrap();
         assert_eq!(memory_final.memory_type, MemoryType::Preference.as_str());
         assert_eq!(memory_final.status, MemoryStatus::Candidate.as_str());
+    }
+
+    /// Issue #258: `store_memory`'s `supersedes` arm parsed and validated
+    /// `status` and then called the status-less `StoreWrapper::supersede`, so an
+    /// agent passing `status: "candidate"` together with `supersedes` got an
+    /// `active` replacement row with no warning — the MCP twin of the CLI drop.
+    ///
+    /// Drives the `store_memory` TOOL HANDLER itself (the frame where the status
+    /// was dropped, and the frame that decides which wrapper the supersedes arm
+    /// reaches), not the wrapper below it, and reads the stored column back via
+    /// `StoreWrapper::get`, the read path that applies no status filter.
+    #[tokio::test]
+    async fn store_memory_supersedes_honours_the_requested_status() {
+        use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+
+        let store = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = StoreWrapper::new(store.clone());
+        let handler = ToolHandler::new(store, "status-proj".to_string(), Config::default());
+
+        let seeded = wrapper
+            .ingest_with_type_status(
+                "status-proj",
+                "original content",
+                "null",
+                true,
+                MemoryType::Fact,
+                MemoryStatus::Active,
+            )
+            .expect("seed add");
+        let old_id = seeded["id"].as_str().expect("seed id").to_string();
+
+        // The MCP equivalent of `add --supersedes <id> --status candidate`,
+        // called the way an agent calls it: through the tool router, so the
+        // wiring inside `store_memory` is what is under test.
+        let result = handler
+            .call_tool_for_test(
+                "store_memory",
+                store_memory_args("replacement content", Some("candidate"), Some(&old_id)),
+            )
+            .await
+            .expect("store_memory with supersedes must succeed");
+        let new_id = tool_result_id(&result);
+
+        let replacement = wrapper
+            .get(&new_id, "status-proj")
+            .expect("get")
+            .expect("replacement row stored");
+        assert_eq!(
+            replacement.status,
+            MemoryStatus::Candidate.as_str(),
+            "the tool handler must hand its validated status to the store, not the wrapper's default"
+        );
+        assert_eq!(replacement.content, "replacement content");
+
+        // The old row keeps the lifecycle the supersede transaction owns.
+        let replaced_row = wrapper
+            .get(&old_id, "status-proj")
+            .expect("get")
+            .expect("superseded row still readable");
+        assert_eq!(replaced_row.status, "superseded");
+        assert_eq!(replaced_row.superseded_by.as_deref(), Some(new_id.as_str()));
+
+        // Identical outcome to the CLI: a candidate replacement is invisible to
+        // the active-only default list on this surface too. A second, unrelated
+        // active row is seeded as the control — the superseded original is not
+        // listed either — so the guard cannot be satisfied by a list call that
+        // returned nothing.
+        let control = wrapper
+            .ingest_with_type_status(
+                "status-proj",
+                "unrelated active control",
+                "null",
+                true,
+                MemoryType::Fact,
+                MemoryStatus::Active,
+            )
+            .expect("seed control");
+        let control_id = control["id"].as_str().expect("control id").to_string();
+
+        let listed: Vec<serde_json::Value> =
+            serde_json::from_value(wrapper.list("status-proj", 20, None, None).expect("list"))
+                .expect("list payload is an array");
+        let listed_ids: Vec<&str> = listed
+            .iter()
+            .map(|m| m["id"].as_str().expect("listed id"))
+            .collect();
+        assert!(
+            listed_ids.contains(&control_id.as_str()),
+            "the default list itself works, so its silence about the candidate is meaningful: {listed_ids:?}"
+        );
+        assert!(
+            !listed_ids.contains(&new_id.as_str()),
+            "a candidate replacement must stay out of the default list: {listed_ids:?}"
+        );
+
+        // And the status-less entry point (`supersede_memory`, which has no
+        // `status` parameter at all) still writes `active` by name.
+        let plain = wrapper
+            .supersede(
+                "status-proj",
+                "plain replacement",
+                "null",
+                MemoryType::Fact,
+                &new_id,
+            )
+            .expect("level-less supersede");
+        let plain_id = plain["id"].as_str().expect("plain id").to_string();
+        assert_eq!(
+            wrapper
+                .get(&plain_id, "status-proj")
+                .expect("get")
+                .expect("plain row stored")
+                .status,
+            MemoryStatus::Active.as_str(),
+            "the status-less wrapper keeps writing active explicitly"
+        );
+    }
+
+    /// `StoreWrapper::supersede_with_status` takes a `MemoryStatus`, wider than
+    /// the `active`/`candidate` vocabulary an inserted row may carry, so the
+    /// wrapper itself cannot be the thing that rejects the rest: the store must.
+    /// Issue #258 was a status that travelled the wrong frame, and a
+    /// `superseded` replacement row would be the same class of silent corruption
+    /// seen from the MCP surface, where the tool schema is just a string.
+    #[tokio::test]
+    async fn supersede_with_status_refuses_a_status_that_is_not_insertable() {
+        use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+
+        let store = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = StoreWrapper::new(store.clone());
+
+        let seeded = wrapper
+            .ingest_with_type_status(
+                "guard-proj",
+                "original content",
+                "null",
+                true,
+                MemoryType::Fact,
+                MemoryStatus::Active,
+            )
+            .expect("seed add");
+        let old_id = seeded["id"].as_str().expect("seed id").to_string();
+
+        for status in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {
+            let err = wrapper
+                .supersede_with_status(
+                    "guard-proj",
+                    "replacement content",
+                    "null",
+                    MemoryType::Fact,
+                    &old_id,
+                    status,
+                )
+                .expect_err("the widened wrapper must not reach the INSERT");
+            assert!(
+                err.message
+                    .contains("is not valid for new memory insertion"),
+                "{status:?} reached the supersede INSERT: {err:?}"
+            );
+        }
+
+        // Nothing was replaced and nothing was inserted: the original is still
+        // the live row, and the only rows in scope are the original.
+        let replaced_row = wrapper
+            .get(&old_id, "guard-proj")
+            .expect("get")
+            .expect("original row still readable");
+        assert_eq!(replaced_row.status, MemoryStatus::Active.as_str());
+        let listed: Vec<serde_json::Value> =
+            serde_json::from_value(wrapper.list("guard-proj", 20, None, None).expect("list"))
+                .expect("list payload is an array");
+        assert_eq!(
+            listed.len(),
+            1,
+            "a refused supersede must insert no replacement row"
+        );
     }
 }

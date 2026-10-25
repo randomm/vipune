@@ -1,12 +1,12 @@
 //! StoreWrapper for MCP tool implementations.
 
 use crate::errors::Error;
-use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory_types::ConflictMemory as InternalConflictMemory;
 use crate::memory_types::IngestPolicy;
 use std::sync::{Arc, Mutex};
 
-use crate::memory::{MemoryStore, UpdateParams};
+use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 
 /// Wrapper for MemoryStore to allow async-sound use.
 ///
@@ -117,7 +117,8 @@ impl StoreWrapper {
         }
     }
 
-    /// Supersede an existing memory with new content.
+    /// Supersede an existing memory with new content, at the `active` status —
+    /// what the `supersede_memory` tool drives (it has no `status` parameter).
     #[allow(dead_code)] // Used by supersede_memory tool
     pub(crate) fn supersede(
         &self,
@@ -127,6 +128,41 @@ impl StoreWrapper {
         memory_type: MemoryType,
         old_memory_id: &str,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
+        self.supersede_with_status(
+            project_id,
+            new_text,
+            metadata,
+            memory_type,
+            old_memory_id,
+            MemoryStatus::Active,
+        )
+    }
+
+    /// Supersede an existing memory with new content and an explicit lifecycle
+    /// status on the replacement row — what `store_memory`'s `supersedes` path
+    /// drives. `supersede_memory` reaches the same store call through
+    /// [`Self::supersede`], which passes `active`; the two tools differ only in
+    /// their schemas, not in a second write path.
+    ///
+    /// The `supersedes` arm of `store_memory` used to call [`Self::supersede`]
+    /// with the status it had just parsed and validated still in a local, so a
+    /// caller passing `status: "candidate"` together with `supersedes` got an
+    /// `active` row and no warning (issue #258). The status is threaded to the
+    /// store here so the MCP surface matches the CLI. This frame adds nothing to
+    /// the insert-status rule: it takes `MemoryStatus`, the same type the store
+    /// takes, so no string can become an unvalidated status one frame lower, and
+    /// [`MemoryStore::supersede_with`] is the one place that rejects
+    /// `superseded`/`deprecated` — the error arrives back as `invalid_input`
+    /// through `From<Error> for rmcp::ErrorData`.
+    pub(crate) fn supersede_with_status(
+        &self,
+        project_id: &str,
+        new_text: &str,
+        metadata: &str,
+        memory_type: MemoryType,
+        old_memory_id: &str,
+        status: MemoryStatus,
+    ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let mut store = self.0.lock().unwrap();
 
         let metadata_str = if metadata == "null" {
@@ -135,13 +171,19 @@ impl StoreWrapper {
             Some(metadata)
         };
 
-        let new_id = match store.supersede(
-            project_id,
-            new_text,
-            metadata_str,
-            memory_type,
-            old_memory_id,
-        ) {
+        let new_id = match store.supersede_with(&NewSupersedingMemory {
+            row: NewMemory {
+                project_id,
+                content: new_text,
+                metadata: metadata_str,
+                memory_type,
+                status,
+            },
+            old_id: old_memory_id,
+            // No MCP tool takes an importance today, so the level is the store
+            // default bound by name — never the column DEFAULT (#238).
+            importance: MemoryImportance::default(),
+        }) {
             Ok(id) => id,
             Err(err) => {
                 return Err(err.into());
