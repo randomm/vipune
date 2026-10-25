@@ -65,11 +65,13 @@ Before creating ANY code, ask:
 `git push`. Never push to "see if CI catches anything."
 
 `CONTRIBUTING.md` (Quality Gates, Dependency advisories) is the human-facing
-copy of this chain — it omits `--all-targets` and the `--no-default-features`
-pair, so this file keeps its own full chain rather than pointing at it.
+copy of this chain, but a weaker one: it runs `cargo clippy -- -D warnings`
+without `--all-targets` and has no `--no-default-features` lane, so this file
+keeps its own full chain rather than pointing at it.
 
-Each gate is run separately by CI (`cargo deny` on push and nightly, the
-`#[ignore]`d real-model lane on the nightly schedule only).
+Each gate is run separately by CI. `cargo deny` runs on PR, on push to `main`,
+and nightly; the `#[ignore]`d real-model lane runs only on the schedule
+(`if: github.event_name == 'schedule'`).
 
 ```bash
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny --locked check advisories bans
@@ -235,36 +237,52 @@ Orientation for agents new to the codebase (verify against the tree — the
 
 **Key invariants:**
 
-- **`Memory` read fan-in** — the `Memory` struct in `src/sqlite/` is the
-  single row-level type the read paths share (`src/rrf.rs`, `src/memory/crud.rs`,
-  `src/memory/search.rs`, `src/mcp/helpers.rs`,
-  `src/sqlite/{list,search,fts,export_scan}.rs`, `src/commands/prune.rs`;
-  not exhaustive — `mod sqlite` is private so the public name is
-  `vipune::Memory`). `map_row_to_memory`
-  (`src/sqlite/query_mod.rs`) is the canonical decoder, but **three readers
-  bypass it and decode by literal position** — `sqlite/search.rs`,
-  `sqlite/fts.rs` and `sqlite/export_scan.rs` (`scan_all_rows`) — and the
-  13-column projection is copy-pasted across `query_mod.rs`, `list.rs`,
-  `search.rs`, `export_scan.rs`, `prune.rs` and `Database::get`. Nothing guards
-  those offsets (the `EMBEDDING_COLUMN` constant covers column 4 alone), so a
-  column reorder silently mis-maps fields unless the mapper *and* the three
-  positional decoders are edited together. Find them with
-  `rg 'SELECT id, project_id, content, metadata, embedding' src/`.
+- **`Memory` read fan-in** — `Memory` (`src/sqlite/mod.rs`) is the single
+  row-level type the read paths share (`src/rrf.rs`, `src/memory/crud.rs`,
+  `src/memory/search.rs`, `src/mcp/helpers.rs`, `src/sqlite/`, `src/commands/
+  prune.rs`; not exhaustive — discover with `rg 'sqlite::Memory' src/`; inside
+  the crate it is `crate::sqlite::Memory`, and `vipune::Memory` is the public
+  name). Two distinct hazards:
+  - **Positional decoders that bypass `map_row_to_memory`
+    (`src/sqlite/query_mod.rs`)**: `sqlite/search.rs`, `sqlite/fts.rs` and
+    `sqlite/export_scan.rs` (`scan_all_rows`) construct `Memory { .. }` from
+    literal `row.get(N)` offsets; `sqlite/list.rs` `get_many` is a hybrid — it
+    calls `map_row_to_memory` but re-selects the projection itself. Discover
+    with `rg -e 'row\.get\(12\)' -e 'row\.get::<_, String>\(12\)' src/`
+    (the last positional read — hits `query_mod.rs` too, the mapper itself)
+    plus `rg 'map_row_to_memory' src/` (who re-uses it).
+  - **Callers that reuse the projection and decode via `map_row_to_memory`**:
+    `sqlite/query_mod.rs`, `sqlite/list.rs`, `commands/prune.rs` and
+    `Database::get`.
+
+  Nothing guards those offsets (the `EMBEDDING_COLUMN` constant covers column 4
+  alone), so a column reorder silently mis-maps fields unless the mapper *and*
+  every positional decoder are edited together. The "12-column" comments at
+  `src/sqlite/query_mod.rs:40` and `src/sqlite/mod.rs:175` are **stale** — the
+  shape is 13 columns.
+
   `src/output.rs` does **not** import `Memory` — it declares its own DTOs,
   which `src/commands/handlers.rs` fills by projecting `Memory` fields, so a
   rename/retype does break those projections but the compiler catches it in
   `handlers.rs`, not in `output.rs`.
 - **`Memory` stores `memory_type`/`status`/`importance` as `String`** with no
-  CHECK constraint — validated only at the write boundaries
-  (`MemoryType`/`MemoryStatus`/`MemoryImportance::from_str` in
-  `src/memory/lifecycle.rs`, called from `src/commands/handlers.rs`,
-  `src/commands/mod.rs`, `src/mcp/tools.rs`, and `parse_row` in
-  `src/commands/import.rs`). Neither `memory_type` nor `status` is validated on
-  any read path, so a bad value that gets in is persisted *and* echoed back to
-  the user. `importance` is the exception: the search path rejects it —
-  `ImportanceLevel::parse(&memory.importance).map_err(Error::InvalidInput)?`
-  (`src/memory/search.rs:95` and `:204`) — so a corrupt value surfaces as a
-  search error rather than an echo.
+  CHECK constraint, and validation is per column — the enum `from_str` helpers
+  in `src/memory/lifecycle.rs` name the *validating edges*, not every write.
+  `MemoryType`/`MemoryStatus::from_str`: `commands/handlers.rs`,
+  `commands/mod.rs` (update) and `mcp/tools.rs`. `MemoryImportance::from_str`:
+  `commands/handlers.rs`, `commands/mod.rs` **and** `parse_row` in
+  `commands/import.rs` — which validates `importance` only, so imported
+  `memory_type`/`status` are inserted unvalidated. The MCP update tool parses
+  but the write itself goes through `store_wrapper`/`UpdateParams` (enum-typed,
+  `src/memory/crud.rs`). The storage layer takes all three as `&str` and
+  validates nothing: `Database::insert*`/`update` and the hook path
+  (`src/hook/run.rs` → `Database::insert_with_hash`).
+  On the **read** side: `memory_type` is never validated; `status` is only
+  *compared* (`candidate.status != MemoryStatus::Candidate.as_str()`,
+  `src/commands/prune.rs:149`); `importance` is rejected only when recency
+  scoring runs — both `ImportanceLevel::parse` sites (`src/memory/search.rs:95`,
+  `:204`) sit inside `if recency_weight > 0.0`, so with `--recency 0` (or
+  omitted) a corrupt value is echoed back like the other two.
 - **`importance` has two independent vocabularies** — the write-side
   `MemoryImportance` (`src/memory/lifecycle.rs`) and the read-side
   `temporal::ImportanceLevel::parse` used by recency scoring, plus `prune`'s
@@ -273,12 +291,11 @@ Orientation for agents new to the codebase (verify against the tree — the
   (`src/memory/lifecycle.rs`) does, and it enumerates the variants **by hand**,
   so it catches a new level only if someone adds it to the test's lists too.
 - **`Database::conn()` (`src/sqlite/mod.rs`) is a leaky storage boundary** — it
-  hands out the raw `rusqlite::Connection`, and `src/commands/{import,export,
-  backup,promote,reindex,prune}.rs`, `src/migration.rs`, `src/hook/` and
-  `src/memory/store.rs` bypass `Database` to issue raw SQL against it (not
-  exhaustive — `rg 'db\.conn\(\)'` is). New queries belong on `Database`
-  unless they need a handle only it can give (the Online Backup API in
-  `backup.rs`).
+  hands out the raw `rusqlite::Connection` and callers bypass `Database` to
+  issue raw SQL against it (commands, `src/migration.rs`, `src/hook/`,
+  `src/memory/store.rs`; discover with `rg '\.conn\(\)' src/`). New queries
+  belong on `Database` unless they need a handle only it can give (the Online
+  Backup API in `backup.rs`).
 - **Migrations use `PRAGMA user_version`** — version is bumped only after a
   successful migration (the pragma is not transactional); tests assert
   `user_version == total_migrations()` and that a failing migration leaves the
@@ -365,7 +382,7 @@ Before creating documentation, ask: "Will this be true in 200 PRs?"
 | A single test | `cargo test <name>` |
 | Ignored real-model tests | `cargo test -- --ignored` |
 | No-default-features lint + tests (CI job `test-no-default-features`) | `cargo clippy --no-default-features --all-targets -- -D warnings` then `cargo test --no-default-features` |
-| Benchmarks (criterion target `db_search`, `benches/db_search.rs`) | `cargo bench` — see README (Benchmarks) for the baseline flags |
+| Benchmarks (criterion target `db_search`, `benches/db_search.rs`) | `cargo bench` — **not a CI gate**; see README (Benchmarks) for the baseline flags |
 | Release build | `cargo build --release` |
 | Run the CLI locally | `cargo run -- add "test memory"` |
 | Query semantics docs | see `docs/search.md`, `docs/vipune-query-guide.md` |
