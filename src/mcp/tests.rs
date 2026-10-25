@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::mcp::params::*;
 use crate::mcp::store_wrapper::StoreWrapper;
 use crate::mcp::tools::ToolHandler;
-use crate::memory::{MemoryStore, UpdateParams};
+use crate::memory::{MemoryStore, NewMemory, UpdateParams};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
@@ -30,6 +30,39 @@ fn create_test_store() -> MemoryStore {
 #[cfg(all(test, feature = "mcp"))]
 mod tool_handler_tests {
     use super::*;
+    use crate::memory::lifecycle::MemoryImportance;
+
+    /// Seed an active row at a chosen level through the wrapper, so a
+    /// handler-driven test starts from a known row without going through the
+    /// tool under test.
+    fn seed_row_at(
+        wrapper: &StoreWrapper,
+        project: &str,
+        text: &str,
+        importance: MemoryImportance,
+    ) -> crate::Memory {
+        use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+        let row = NewMemory {
+            project_id: project,
+            content: text,
+            metadata: None,
+            memory_type: MemoryType::Fact,
+            status: MemoryStatus::Active,
+        };
+        let seeded = wrapper
+            .ingest_with_lifecycle(&row, true, importance)
+            .expect("seed add");
+        let id = seeded["id"].as_str().expect("seed id").to_string();
+        wrapper
+            .get(&id, project)
+            .expect("get")
+            .expect("seeded row readable")
+    }
+
+    /// Seed one active row at the default level. See [`seed_row_at`].
+    fn seed_row(wrapper: &StoreWrapper, project: &str, text: &str) -> crate::Memory {
+        seed_row_at(wrapper, project, text, MemoryImportance::Medium)
+    }
 
     /// Pull the `id` out of a tool result's JSON text content.
     ///
@@ -57,11 +90,226 @@ mod tool_handler_tests {
         status: Option<&str>,
         supersedes: Option<&str>,
     ) -> serde_json::Value {
+        store_memory_args_full(text, status, supersedes, None)
+    }
+
+    /// As [`store_memory_args`], with the `importance` an agent would send.
+    /// An absent key and `"importance": null` both deserialize to `None`, so
+    /// passing `None` here is the omitted-field case.
+    fn store_memory_args_full(
+        text: &str,
+        status: Option<&str>,
+        supersedes: Option<&str>,
+        importance: Option<&str>,
+    ) -> serde_json::Value {
         serde_json::json!({
             "text": text,
             "status": status,
             "supersedes": supersedes,
+            "importance": importance,
         })
+    }
+
+    /// Issue #256: `store_memory` exposed no `importance`, so every row an agent
+    /// stored landed at `medium` and prune could demote a memory the operator had
+    /// called critical — the MCP twin of the CLI defect #238.
+    ///
+    /// Drives the tool handler through `call_tool_for_test` (the router path a
+    /// client takes) and reads the column back through `StoreWrapper::get`, which
+    /// applies no status or importance filter.
+    #[tokio::test]
+    async fn store_memory_writes_the_importance_the_agent_named() {
+        let store = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = StoreWrapper::new(store.clone());
+        let handler = ToolHandler::new(store, "imp-proj".to_string(), Config::default());
+
+        // "medium" is the tool's own default, so the omitted case is the same
+        // call — the level must reach the column either way, never be dropped
+        // one frame down.
+        for (i, level) in ["critical", "high", "low", "medium"].iter().enumerate() {
+            let text = format!("importance probe {i}");
+            let result = handler
+                .call_tool_for_test(
+                    "store_memory",
+                    store_memory_args_full(&text, None, None, Some(level)),
+                )
+                .await
+                .expect("store_memory with a valid importance must succeed");
+            let id = tool_result_id(&result);
+            assert_eq!(
+                wrapper
+                    .get(&id, "imp-proj")
+                    .expect("get")
+                    .expect("row stored")
+                    .importance,
+                *level,
+                "the level named in the tool call must reach the column, not its DEFAULT"
+            );
+        }
+    }
+
+    /// Omitting the field keeps the default level, and the level an agent names
+    /// is case-insensitive on the way in and canonical lowercase on the way out.
+    #[tokio::test]
+    async fn store_memory_importance_defaults_to_medium_and_stores_lowercase() {
+        let store = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = StoreWrapper::new(store.clone());
+        let handler = ToolHandler::new(store, "imp-default-proj".to_string(), Config::default());
+
+        let omitted = handler
+            .call_tool_for_test(
+                "store_memory",
+                store_memory_args("a memory with no importance", None, None),
+            )
+            .await
+            .expect("omitting importance must succeed");
+        assert_eq!(
+            wrapper
+                .get(&tool_result_id(&omitted), "imp-default-proj")
+                .expect("get")
+                .expect("row stored")
+                .importance,
+            "medium",
+            "an omitted importance is the named default, not the column DEFAULT"
+        );
+
+        for (input, expected) in [("HIGH", "high"), ("Critical", "critical"), ("Low", "low")] {
+            let text = format!("uppercase probe for {input}");
+            let result = handler
+                .call_tool_for_test(
+                    "store_memory",
+                    store_memory_args_full(&text, None, None, Some(input)),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{input} must be accepted: {e:?}"));
+            assert_eq!(
+                wrapper
+                    .get(&tool_result_id(&result), "imp-default-proj")
+                    .expect("get")
+                    .expect("row stored")
+                    .importance,
+                expected,
+                "{input} must be stored as the canonical spelling"
+            );
+        }
+    }
+
+    /// An invalid level is an input error answered before either write branch:
+    /// nothing is inserted, on the plain path or the `supersedes` path.
+    #[tokio::test]
+    async fn store_memory_rejects_an_invalid_importance_without_writing() {
+        let store = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = StoreWrapper::new(store.clone());
+        let handler = ToolHandler::new(store, "imp-bad-proj".to_string(), Config::default());
+
+        let old = seed_row(&wrapper, "imp-bad-proj", "original fact");
+
+        for bad in ["urgent", "", "normal"] {
+            let text = format!("probe against {bad:?}");
+            for supersedes in [None, Some(old.id.as_str())] {
+                let err = handler
+                    .call_tool_for_test(
+                        "store_memory",
+                        store_memory_args_full(&text, None, supersedes, Some(bad)),
+                    )
+                    .await
+                    .expect_err("an invalid importance must be rejected");
+                assert!(
+                    err.message.contains("Invalid importance"),
+                    "the tool error must name the offending field ({bad:?}): {err:?}"
+                );
+            }
+        }
+
+        // Nothing written anywhere: only the seeded row remains, and it is
+        // untouched — no replacement row, no level change.
+        let listed: Vec<serde_json::Value> =
+            serde_json::from_value(wrapper.list("imp-bad-proj", 20, None, None).expect("list"))
+                .expect("list payload is an array");
+        assert_eq!(
+            listed.len(),
+            1,
+            "a rejected call must insert no row on either branch"
+        );
+        let original = wrapper
+            .get(&old.id, "imp-bad-proj")
+            .expect("get")
+            .expect("original still readable");
+        assert_eq!(original.status, "active");
+        assert_eq!(original.importance, "medium");
+    }
+
+    /// With `supersedes` the level belongs to the NEW row, matching the CLI
+    /// (`vipune add --supersedes <id> --importance critical`): the replaced row
+    /// keeps its own level and its superseded lifecycle.
+    #[tokio::test]
+    async fn store_memory_supersedes_applies_the_importance_to_the_new_row() {
+        let store = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = StoreWrapper::new(store.clone());
+        let handler = ToolHandler::new(store, "imp-sup-proj".to_string(), Config::default());
+
+        let old = seed_row(&wrapper, "imp-sup-proj", "original fact");
+
+        let result = handler
+            .call_tool_for_test(
+                "store_memory",
+                store_memory_args_full("replacement fact", None, Some(&old.id), Some("critical")),
+            )
+            .await
+            .expect("store_memory with supersedes and importance must succeed");
+        let new_id = tool_result_id(&result);
+
+        let replacement = wrapper
+            .get(&new_id, "imp-sup-proj")
+            .expect("get")
+            .expect("replacement row stored");
+        assert_eq!(
+            replacement.importance, "critical",
+            "the superseding row must carry the level the agent asked for"
+        );
+        assert_eq!(replacement.content, "replacement fact");
+
+        let replaced = wrapper
+            .get(&old.id, "imp-sup-proj")
+            .expect("get")
+            .expect("superseded row still readable");
+        assert_eq!(replaced.status, "superseded");
+        assert_eq!(
+            replaced.importance, "medium",
+            "the new row's level must not leak into the row it replaced"
+        );
+        assert_eq!(replaced.superseded_by.as_deref(), Some(new_id.as_str()));
+    }
+
+    /// The `importance` parameter has to be visible in the schema a client
+    /// discovers, with the vocabulary spelled out — the tool schema is plain JSON
+    /// and an agent only sees what is advertised there (acceptance criterion: the
+    /// MCP tool schema/description documents the field).
+    #[test]
+    fn store_memory_tool_schema_documents_the_importance_field() {
+        let tool = ToolHandler::test_tool_definition("store_memory").expect("store_memory tool");
+        let properties = tool
+            .input_schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("input_schema properties");
+        let importance = properties
+            .get("importance")
+            .expect("input_schema advertises an importance parameter");
+        let description = importance
+            .get("description")
+            .and_then(|v| v.as_str())
+            .expect("importance carries a description");
+        for level in ["low", "medium", "high", "critical"] {
+            assert!(
+                description.contains(level),
+                "the advertised description must name every level ({level}): {description}"
+            );
+        }
     }
 
     /// Test that MCP server can be initialized.
@@ -108,6 +356,7 @@ mod tool_handler_tests {
             metadata: Some(serde_json::json!({"topic": "test"})),
             memory_type: None,
             status: None,
+            importance: None,
             supersedes: None,
             force: None,
         };
@@ -118,6 +367,7 @@ mod tool_handler_tests {
         assert!(decoded.metadata.is_some());
         assert!(decoded.memory_type.is_none());
         assert!(decoded.status.is_none());
+        assert!(decoded.importance.is_none());
         assert!(decoded.supersedes.is_none());
         assert!(decoded.force.is_none());
     }
@@ -130,6 +380,7 @@ mod tool_handler_tests {
             metadata: Some(serde_json::json!({"topic": "test"})),
             memory_type: Some("preference".to_string()),
             status: Some("active".to_string()),
+            importance: Some("critical".to_string()),
             supersedes: Some("old-memory-id".to_string()),
             force: Some(true),
         };
@@ -140,6 +391,7 @@ mod tool_handler_tests {
         assert!(decoded.metadata.is_some());
         assert_eq!(decoded.memory_type, Some("preference".to_string()));
         assert_eq!(decoded.status, Some("active".to_string()));
+        assert_eq!(decoded.importance, Some("critical".to_string()));
         assert_eq!(decoded.supersedes, Some("old-memory-id".to_string()));
         assert_eq!(decoded.force, Some(true));
     }
@@ -516,13 +768,16 @@ mod tool_handler_tests {
         let project_id = "test-project";
 
         // Store a memory
-        let result = wrapper.ingest_with_type_status(
-            project_id,
-            "original content",
-            "null",
+        let result = wrapper.ingest_with_lifecycle(
+            &NewMemory {
+                project_id,
+                content: "original content",
+                metadata: None,
+                memory_type: MemoryType::Fact,
+                status: MemoryStatus::Active,
+            },
             false,
-            MemoryType::Fact,
-            MemoryStatus::Active,
+            MemoryImportance::Medium,
         );
         assert!(result.is_ok());
         let value = result.unwrap();
@@ -621,13 +876,16 @@ mod tool_handler_tests {
         let handler = ToolHandler::new(store, "status-proj".to_string(), Config::default());
 
         let seeded = wrapper
-            .ingest_with_type_status(
-                "status-proj",
-                "original content",
-                "null",
+            .ingest_with_lifecycle(
+                &NewMemory {
+                    project_id: "status-proj",
+                    content: "original content",
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status: MemoryStatus::Active,
+                },
                 true,
-                MemoryType::Fact,
-                MemoryStatus::Active,
+                MemoryImportance::Medium,
             )
             .expect("seed add");
         let old_id = seeded["id"].as_str().expect("seed id").to_string();
@@ -669,13 +927,16 @@ mod tool_handler_tests {
         // listed either — so the guard cannot be satisfied by a list call that
         // returned nothing.
         let control = wrapper
-            .ingest_with_type_status(
-                "status-proj",
-                "unrelated active control",
-                "null",
+            .ingest_with_lifecycle(
+                &NewMemory {
+                    project_id: "status-proj",
+                    content: "unrelated active control",
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status: MemoryStatus::Active,
+                },
                 true,
-                MemoryType::Fact,
-                MemoryStatus::Active,
+                MemoryImportance::Medium,
             )
             .expect("seed control");
         let control_id = control["id"].as_str().expect("control id").to_string();
@@ -719,41 +980,35 @@ mod tool_handler_tests {
         );
     }
 
-    /// `StoreWrapper::supersede_with_status` takes a `MemoryStatus`, wider than
-    /// the `active`/`candidate` vocabulary an inserted row may carry, so the
-    /// wrapper itself cannot be the thing that rejects the rest: the store must.
-    /// Issue #258 was a status that travelled the wrong frame, and a
-    /// `superseded` replacement row would be the same class of silent corruption
-    /// seen from the MCP surface, where the tool schema is just a string.
+    /// `StoreWrapper::supersede_with_row` takes a row whose `status` is a
+    /// `MemoryStatus`, wider than the `active`/`candidate` vocabulary an inserted
+    /// row may carry, so the wrapper itself cannot be the thing that rejects the
+    /// rest: the store must. Issue #258 was a status that travelled the wrong
+    /// frame, and a `superseded` replacement row would be the same class of silent
+    /// corruption seen from the MCP surface, where the tool schema is just a
+    /// string.
     #[tokio::test]
-    async fn supersede_with_status_refuses_a_status_that_is_not_insertable() {
+    async fn supersede_with_row_refuses_a_status_that_is_not_insertable() {
         use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 
         let store = create_test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
 
-        let seeded = wrapper
-            .ingest_with_type_status(
-                "guard-proj",
-                "original content",
-                "null",
-                true,
-                MemoryType::Fact,
-                MemoryStatus::Active,
-            )
-            .expect("seed add");
-        let old_id = seeded["id"].as_str().expect("seed id").to_string();
+        let old_id = seed_row(&wrapper, "guard-proj", "original content").id;
 
         for status in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {
             let err = wrapper
-                .supersede_with_status(
-                    "guard-proj",
-                    "replacement content",
-                    "null",
-                    MemoryType::Fact,
+                .supersede_with_row(
+                    &NewMemory {
+                        project_id: "guard-proj",
+                        content: "replacement content",
+                        metadata: None,
+                        memory_type: MemoryType::Fact,
+                        status,
+                    },
                     &old_id,
-                    status,
+                    MemoryImportance::Medium,
                 )
                 .expect_err("the widened wrapper must not reach the INSERT");
             assert!(

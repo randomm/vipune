@@ -5,8 +5,8 @@ use crate::mcp::store_wrapper::{McpError, StoreWrapper};
 
 use crate::errors::Error;
 use crate::mcp::params::*;
-use crate::memory::lifecycle::{MemoryStatus, MemoryType};
-use crate::memory::{MemoryStore, UpdateParams};
+use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
+use crate::memory::{MemoryStore, NewMemory, UpdateParams};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::tool;
@@ -72,6 +72,15 @@ impl ToolHandler {
         &self.config
     }
 
+    /// Test-only: the tool definitions the server advertises via `tools/list`,
+    /// including each tool's JSON-schema `input_schema`. The schema is generated
+    /// from the params structs' `#[schemars(description = ...)]` attributes, so
+    /// this is the only crate-visible path to what a client actually sees.
+    #[cfg(test)]
+    pub(crate) fn test_tool_definition(name: &str) -> Option<rmcp::model::Tool> {
+        Self::test_tool_router().get(name).cloned()
+    }
+
     /// `#[tool_router]` generates a **private** `tool_router()` constructor
     /// (rmcp-macros 1.8.0 src/tool_router.rs:63-67 emits `#vis fn tool_router()`
     /// and `#vis` is filled only from the macro's own `vis = "..."` attribute),
@@ -119,6 +128,13 @@ impl ToolHandler {
             .map_err(|e| McpError::invalid_input(&format!("Invalid status: {}", e)))?;
         status_val.ensure_valid_for_insert()?;
 
+        // Parse and validate importance (default: "medium"). The level is parsed
+        // here, before either write branch, so an invalid value answers with an
+        // MCP invalid_input and no row is inserted on either path (#256).
+        let importance_str = params.importance.as_deref().unwrap_or("medium");
+        let importance_val = MemoryImportance::from_str(importance_str)
+            .map_err(|e| McpError::invalid_input(&format!("Invalid importance: {}", e)))?;
+
         // Serialize metadata
         let metadata_str = match &params.metadata {
             Some(meta) => serde_json::to_string(meta)
@@ -126,32 +142,38 @@ impl ToolHandler {
             None => "null".to_string(),
         };
 
-        // Handle supersedes path — the validated status has to travel with the
-        // new row or `status: "candidate"` is silently stored as `active`
-        // (issue #258, the MCP twin of the CLI defect).
+        // Handle supersedes path — the validated status and importance have to
+        // travel with the new row or `status: "candidate"` is silently stored as
+        // `active` (issue #258) and a named level as `medium` (issue #256), both
+        // the MCP twins of the CLI drops. The row is the store's own `NewMemory`,
+        // so the two add paths share one row type rather than duplicating it.
+        let metadata_ref = if metadata_str == "null" {
+            None
+        } else {
+            Some(metadata_str.as_str())
+        };
+        let row = NewMemory {
+            project_id: &self.project_id,
+            content: &params.text,
+            metadata: metadata_ref,
+            memory_type: memory_type_val,
+            status: status_val,
+        };
+
         if let Some(supersedes_id) = &params.supersedes {
-            let value = self.store.supersede_with_status(
-                &self.project_id,
-                &params.text,
-                &metadata_str,
-                memory_type_val,
-                supersedes_id,
-                status_val,
-            )?;
+            let value = self
+                .store
+                .supersede_with_row(&row, supersedes_id, importance_val)?;
             return Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
             )]));
         }
 
-        // Normal ingest path with type and status
-        let force = params.force.unwrap_or(false);
-        let value = self.store.ingest_with_type_status(
-            &self.project_id,
-            &params.text,
-            &metadata_str,
-            force,
-            memory_type_val,
-            status_val,
+        // Normal ingest path with type, status and importance
+        let value = self.store.ingest_with_lifecycle(
+            &row,
+            params.force.unwrap_or(false),
+            importance_val,
         )?;
 
         Ok(CallToolResult::success(vec![Content::text(

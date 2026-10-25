@@ -64,16 +64,18 @@ impl StoreWrapper {
         }
     }
 
-    /// Store a memory with explicit type and status.
-    #[allow(dead_code)] // Used by store_memory with type/status
-    pub(crate) fn ingest_with_type_status(
+    /// Store a memory with the full lifecycle the `store_memory` tool carries.
+    ///
+    /// The row and its level travel together in the store's own `NewMemory` +
+    /// `MemoryImportance` params — no MCP-side row struct that could drift from
+    /// them — so the frame that parses the strings is not the frame that drops
+    /// one (#256, the MCP twin of the CLI defect #238). `force` decides the
+    /// ingest policy; the other three are the parsed lifecycle columns.
+    pub(crate) fn ingest_with_lifecycle<'a>(
         &self,
-        project_id: &str,
-        text: &str,
-        metadata: &str,
+        row: &NewMemory<'a>,
         force: bool,
-        memory_type: MemoryType,
-        status: MemoryStatus,
+        importance: MemoryImportance,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let mut store = self.0.lock().unwrap();
         let policy = if force {
@@ -83,14 +85,7 @@ impl StoreWrapper {
         };
 
         match store
-            .ingest_with_type_status(
-                project_id,
-                text,
-                Some(metadata),
-                policy,
-                memory_type,
-                status,
-            )
+            .ingest_with_importance(row, policy, importance)
             .map_err(|e| -> rmcp::ErrorData { e.into() })?
         {
             crate::memory_types::AddResult::Added { id } => {
@@ -117,8 +112,9 @@ impl StoreWrapper {
         }
     }
 
-    /// Supersede an existing memory with new content, at the `active` status —
-    /// what the `supersede_memory` tool drives (it has no `status` parameter).
+    /// Supersede an existing memory with new content, at the `active` status and
+    /// the default importance — what the `supersede_memory` tool drives (it has
+    /// neither a `status` nor an `importance` parameter).
     #[allow(dead_code)] // Used by supersede_memory tool
     pub(crate) fn supersede(
         &self,
@@ -128,61 +124,49 @@ impl StoreWrapper {
         memory_type: MemoryType,
         old_memory_id: &str,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
-        self.supersede_with_status(
+        let row = NewMemory {
             project_id,
-            new_text,
-            metadata,
+            content: new_text,
+            metadata: Some(metadata),
             memory_type,
-            old_memory_id,
-            MemoryStatus::Active,
-        )
+            status: MemoryStatus::Active,
+        };
+        self.supersede_with_row(&row, old_memory_id, MemoryImportance::default())
     }
 
-    /// Supersede an existing memory with new content and an explicit lifecycle
-    /// status on the replacement row — what `store_memory`'s `supersedes` path
-    /// drives. `supersede_memory` reaches the same store call through
-    /// [`Self::supersede`], which passes `active`; the two tools differ only in
-    /// their schemas, not in a second write path.
+    /// Supersede an existing memory with a fully specified replacement row — what
+    /// `store_memory`'s `supersedes` path drives, since that tool takes `status`
+    /// and `importance` (#258, #256). `supersede_memory` reaches the same store
+    /// call through [`Self::supersede`], which composes the row with `active` and
+    /// the default level; the two tools differ only in their schemas, not in a
+    /// second write path.
     ///
-    /// The `supersedes` arm of `store_memory` used to call [`Self::supersede`]
-    /// with the status it had just parsed and validated still in a local, so a
-    /// caller passing `status: "candidate"` together with `supersedes` got an
-    /// `active` row and no warning (issue #258). The status is threaded to the
-    /// store here so the MCP surface matches the CLI. This frame adds nothing to
-    /// the insert-status rule: it takes `MemoryStatus`, the same type the store
-    /// takes, so no string can become an unvalidated status one frame lower, and
+    /// The replacement row is the store's own [`NewMemory`] — the same type the
+    /// add path carries — composed with the replaced id and the level into
+    /// [`NewSupersedingMemory`] right here, so the two INSERT paths cannot drift
+    /// column-for-column and no MCP-side row struct duplicates `NewMemory`.
+    ///
+    /// This frame adds nothing to the insert-status rule: it takes the row whose
+    /// `status` is a `MemoryStatus`, the same type the store takes, so no string
+    /// can become an unvalidated status one frame lower, and
     /// [`MemoryStore::supersede_with`] is the one place that rejects
     /// `superseded`/`deprecated` — the error arrives back as `invalid_input`
     /// through `From<Error> for rmcp::ErrorData`.
-    pub(crate) fn supersede_with_status(
+    pub(crate) fn supersede_with_row(
         &self,
-        project_id: &str,
-        new_text: &str,
-        metadata: &str,
-        memory_type: MemoryType,
+        row: &NewMemory<'_>,
         old_memory_id: &str,
-        status: MemoryStatus,
+        importance: MemoryImportance,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let mut store = self.0.lock().unwrap();
 
-        let metadata_str = if metadata == "null" {
-            None
-        } else {
-            Some(metadata)
-        };
-
         let new_id = match store.supersede_with(&NewSupersedingMemory {
-            row: NewMemory {
-                project_id,
-                content: new_text,
-                metadata: metadata_str,
-                memory_type,
-                status,
-            },
+            row: *row,
             old_id: old_memory_id,
-            // No MCP tool takes an importance today, so the level is the store
-            // default bound by name — never the column DEFAULT (#238).
-            importance: MemoryImportance::default(),
+            // The level the caller named, defaulted by name to `medium` in the
+            // tool handler — never the column DEFAULT (#238, #256). On the
+            // supersedes path it applies to the NEW row, matching the CLI.
+            importance,
         }) {
             Ok(id) => id,
             Err(err) => {
