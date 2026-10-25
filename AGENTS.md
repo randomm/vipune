@@ -84,7 +84,7 @@ cargo test --no-default-features
 `Cargo.toml` (so plain `cargo test` does not run it) and clippy does not lint
 it without `--all-targets` — so without that flag the target can rot with a
 green build. The `--no-default-features` pair is a real second build, not an
-edge case, because `mcp` is a default feature.
+edge case, because `mcp` is a default feature (see the dependency list above).
 
 `cargo deny` needs `cargo install cargo-deny` once. It checks the committed `Cargo.lock`
 against RustSec (`--locked` is what makes the gate describe the graph we actually ship) and
@@ -122,15 +122,13 @@ Do NOT:
 
 - **500-line hard cap per source file** — refactor into submodules past the
   limit (the `memory/`, `sqlite/`, `config/`, `hook/` splits exist because of
-  this). Several tracked files are already over it (`src/main.rs`,
-  `src/sqlite/migrations.rs`, `src/commands/prune.rs`,
-  `src/commands/hook_install.rs`), so the cap is the target for new and touched
-  code, not a claim about the current tree.
+  this). Some tracked files are already over it — find them with
+  `wc -l src/**/*.rs` — the cap is the target for new and touched code, not a
+  claim about the current tree.
 - **Synchronous library core** — `src/lib.rs` is synchronous apart from the
-  async runtime (`tokio`), which appears only inside the MCP server — and that
-  server is a **default** Cargo feature (`default = ["mcp"]`), so the default
-  build *does* compile tokio/rmcp/schemars; build with `--no-default-features`
-  for a tokio-free tree
+  async runtime (`tokio`), which appears only inside the MCP server (see the
+  `mcp` feature note above: default on, `--no-default-features` for the
+  tokio-free tree)
 - **Stdlib-first** — do not add a dependency without a concrete, vetted reason
 - No `TODO` / `FIXME` / `HACK` comments — the GitHub issue is the TODO; file
   an issue instead
@@ -138,10 +136,9 @@ Do NOT:
 - Errors via `thiserror` for new error types; no `unwrap()` or `expect()` on
   fallible results in library code outside tests. `Mutex::lock()` poisoning is
   the one accepted exception — it is still worth handling rather than
-  unwrapping in a long-lived process (the MCP server turns one poison into
-  every later request), and `src/mcp/store_wrapper.rs` does both today: four
-  acquisitions answer the poison as `INTERNAL_ERROR`, eight bare `unwrap()`s
-  do not
+  unwrapping in a long-lived process, where one poison would fail every later
+  request — `src/mcp/store_wrapper.rs` handles some lock acquisitions as
+  `INTERNAL_ERROR` and `unwrap()`s the rest; no test asserts either behaviour
 
 ---
 
@@ -170,9 +167,8 @@ Do NOT:
 - **Release PRs**: release-plz opens `chore: release vX.Y.Z` PRs via
   `.github/workflows/release-plz.yml`; a release PR is armed — merging it
   publishes to crates.io irreversibly. If one must be abandoned, close it via
-  the GitHub UI **and delete its branch** (remote and local), and never leave a
-  release PR open across subsequent merges to main (it can go stale and be
-  merged as-is, issue #155).
+  the GitHub UI (never leave a release PR open across subsequent merges to
+  main — it can go stale and be merged as-is, issue #155).
 - **This file overrides the generic pi-ensemble instruction files**
   (`AGENTS.md` templates, `modules/workflows/git-workflow.md`, etc.) that
   still prescribe the issue-number-scope form.
@@ -217,50 +213,48 @@ Orientation for agents new to the codebase (verify against the tree — the
 
 | Module | Responsibility |
 |--------|---------------|
-| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` onto the library `vipune::Config` and feeds **only** `run_mcp` (`main.rs`, `#[cfg(feature = "mcp")]`), so an unmapped field silently takes its `Default` in MCP sessions while the CLI honours the configured value — `vipune::Config` has a hand-written `Default` (`src/config/mod.rs`), so there is no compile-time signal. The guard test is `test_to_lib_config_maps_all_fields_non_default` (`src/main.rs`), itself `#[cfg(feature = "mcp")]`: it asserts each field of **today's 9-field** shape by hand, so a field added to either struct compiles without failing it |
-| `src/lib.rs` | Synchronous library core; public API surface (`MemoryStore`, `MemoryType`, `MemoryStatus`, `Config`). `mod sqlite` is **private** — `Memory` escapes only through the `pub use sqlite::Memory` re-export, so the type's public name is `vipune::Memory` |
-| `src/memory/` | Domain layer: `store` (`MemoryStore`), `add` (`NewMemory`, `MemoryStore::add_impl`/`insert_row` — the validating write edge that funnels every `vipune add`), `crud` (`UpdateParams`, the enum-typed update boundary), `search`, `batch`, `lifecycle` (types/status) |
-| `src/sqlite/` | Storage: `Database`, `Memory` struct, `search`, `fts` (FTS5), `migrations`, `supersede`, `insert`, `update`, `import`/`export_scan` |
+| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` onto the library `vipune::Config` and feeds **only** `run_mcp` (`#[cfg(feature = "mcp")]`), so an unmapped field silently takes its hand-written `Default` in MCP sessions while the CLI honours the configured value |
+| `src/lib.rs` | Synchronous library core; public API surface (`MemoryStore`, the lifecycle enums, `Config`) |
+| `src/memory/` | Domain layer: store, the validating add edge that funnels every `vipune add`, the enum-typed update boundary, search, batch, and the lifecycle types |
+| `src/sqlite/` | Storage: `Database`, `Memory` struct, search, FTS5, migrations, and the supersede/insert/update/import paths |
 | `src/embedding/` | ONNX pipeline; `EMBED_MODEL_ID` / `EMBED_MODEL_REVISION` pin the model |
 | `src/config/` | Env + TOML loading, validation, paths |
 | `src/project.rs` | Git-root project detection/scoping |
 | `src/rrf.rs` | Reciprocal-rank fusion of dense + FTS results |
 | `src/temporal.rs` | Recency/decay scoring |
-| `src/hook/` | Hook *event* machinery only — `payload.rs` (`HookPayload`, `parse_hook_payload`, `HookEvent`), `extract.rs` (`extract_candidate`, `CREDENTIAL_PATTERNS`), `embedding.rs` (`placeholder_embedding`, `ensure_hook_identity_ok`), `run.rs` (`run_hook_event`, which inserts via `Database::insert_with_hash`). **Not** install/uninstall — those live in `src/commands/hook_install.rs` (`handle_hook_install`/`handle_hook_uninstall`), with event dispatch in `src/commands/hook_run.rs` |
-| `src/commands/` | Subcommand handlers (add/search/get/delete/promote/prune/merge/reindex/import/export/backup/doctor/validate/list/update/version). The clap surface is three enums in `mod.rs` — `Commands`, `ProjectCommands` (`Merge`) and `HookCommands` (the five events + `Install`/`Uninstall`); `handlers.rs` projects `Memory` into the `output.rs` DTOs |
-| `src/migration.rs` | Model-revision migration: `migrate_model` plus the marker-first crash-safe lifecycle (`write_migration_marker`, `record_identity_and_clear_marker`); reaches for `Database::conn()` directly |
-| `src/sqlite/identity.rs` | `ModelIdentity` and the read side of the identity marker (`read_identity`, `is_migrating`, `assert_identity_ok`) — the gate every embedding-capable path must pass |
+| `src/hook/` | Hook *event* machinery only (payload parsing, candidate extraction, placeholder embeddings, `run_hook_event`). **Not** install/uninstall — those live in `src/commands/hook_install.rs` |
+| `src/commands/` | Subcommand handlers; the clap surface is the `Commands` / `ProjectCommands` / `HookCommands` enums in `mod.rs`, and `handlers.rs` projects `Memory` into the `output.rs` DTOs |
+| `src/migration.rs` | Model-revision migration: `migrate_model` plus the marker-first crash-safe lifecycle; reaches for `Database::conn()` directly |
+| `src/sqlite/identity.rs` | `ModelIdentity` and the read side of the identity marker — the gate every embedding-capable path must pass |
 | `src/embedding_profiles.rs` | `BUILTIN_PROFILES` (bge + `intfloat/multilingual-e5-small`), `profile_for`, and the per-model query/passage prefixes |
-| `src/memory_types.rs` | Cross-layer result types (not storage): `AddResult`, `ConflictMemory`, `IngestPolicy`, the batch-ingest types |
+| `src/memory_types.rs` | Cross-layer result types (not storage): conflict and batch-ingest results |
 | `src/mcp/` | MCP server (`rmcp` + `tokio`) behind the **default** `mcp` feature. Long-lived process over a `Mutex<MemoryStore>`: a poisoned lock must surface as a per-request error, never abort the server |
-| `src/errors.rs`, `src/output.rs` | `thiserror` errors; JSON/text response DTOs (`SearchResultItem`, `GetResponse`, …) — `output.rs` declares its **own** DTOs and never imports `Memory` |
+| `src/errors.rs`, `src/output.rs` | `thiserror` errors; JSON/text response DTOs — `output.rs` declares its **own** DTOs and never imports `Memory` |
 
 **Key invariants:**
 
 - **`Memory` read fan-in** — `Memory` (`src/sqlite/mod.rs`) is the single
-  row-level type the read paths share (`src/rrf.rs`, `src/memory/crud.rs`,
-  `src/memory/search.rs`, `src/mcp/helpers.rs`, `src/sqlite/`, `src/commands/
-  prune.rs`; not exhaustive — discover with `rg 'sqlite::Memory' src/`; inside
-  the crate it is `crate::sqlite::Memory`, and `vipune::Memory` is the public
-  name). Two distinct hazards:
-  - **Positional decoders that bypass `map_row_to_memory`
-    (`src/sqlite/query_mod.rs`)**: `sqlite/search.rs` and `sqlite/fts.rs`
-    construct `Memory { .. }` from literal `row.get(N)` offsets, and
-    `sqlite/export_scan.rs` (`scan_all_rows`) decodes the same 13 offsets into
-    `ExportRow`; `sqlite/list.rs` `get_many` is a hybrid — it
-    calls `map_row_to_memory` but re-selects the projection itself. Discover
-    with `rg -e 'row\.get\(12\)' -e 'row\.get::<_, String>\(12\)' src/`
-    (the last positional read — hits `query_mod.rs` too, the mapper itself)
-    plus `rg 'map_row_to_memory' src/` (who re-uses it).
-  - **Callers that reuse the projection and decode via `map_row_to_memory`**:
-    `sqlite/query_mod.rs`, `sqlite/list.rs`, `commands/prune.rs` and
-    `Database::get`.
+  row-level type the read paths share (`mod sqlite` is **private** in
+  `src/lib.rs`, so inside the crate it is `crate::sqlite::Memory` and
+  `vipune::Memory` is the public name). Discover consumers with
+  `rg 'sqlite::Memory' src/`. Two hazards:
+  - **Positional decoders that bypass `map_row_to_memory`**: the search and FTS
+    rows construct `Memory { .. }` from literal `row.get(N)` offsets, and
+    `sqlite/export_scan.rs` (`scan_all_rows`) decodes the same offsets into
+    `ExportRow`. The roster is representative, not complete — other raw
+    positional reads exist (e.g.
+    `Database::list_all_rows_for_project` decodes `id`/`content`/`embedding`
+    by offset). Discover with `rg 'row\.get(' src/` plus
+    `rg 'map_row_to_memory' src/` (who re-uses the mapper).
+  - **Callers that reuse the projection and decode via `map_row_to_memory`**,
+    re-selecting the 13-column projection themselves (e.g. `sqlite/list.rs`,
+    `commands/prune.rs`, `Database::get`).
 
-  Nothing guards those offsets (the `EMBEDDING_COLUMN` constant covers column 4
-  alone), so a column reorder silently mis-maps fields unless the mapper *and*
-  every positional decoder are edited together. The "12-column" comments at
-  `src/sqlite/query_mod.rs:40` and `src/sqlite/mod.rs:175` are **stale** — the
-  shape is 13 columns.
+  Nothing guards those offsets (the `EMBEDDING_COLUMN` constant covers the
+  embedding column alone), so a column reorder silently mis-maps fields unless
+  the mapper *and* every positional decoder are edited together. The
+  "12-column" comments in `src/sqlite/query_mod.rs` and `src/sqlite/mod.rs` are
+  **stale** — the shape is 13 columns.
 
   `src/output.rs` does **not** import `Memory` — it declares its own DTOs,
   which `src/commands/handlers.rs` fills by projecting `Memory` fields, so a
@@ -269,22 +263,21 @@ Orientation for agents new to the codebase (verify against the tree — the
 - **`Memory` stores `memory_type`/`status`/`importance` as `String`** with no
   CHECK constraint, and validation is per column — the enum `from_str` helpers
   in `src/memory/lifecycle.rs` name the *validating edges*, not every write.
-  `MemoryType`/`MemoryStatus::from_str`: `commands/handlers.rs`,
-  `commands/mod.rs` (update) and `mcp/tools.rs`. `MemoryImportance::from_str`:
-  `commands/handlers.rs`, `commands/mod.rs` **and** `parse_row` in
-  `commands/import.rs` (the validating edge, not the INSERT) — which validates
-  `importance` only, so imported
+  Find the callers with `rg 'Memory(Type|Status|Importance)::from_str' src/`;
+  `commands/import.rs` `parse_row` validates `importance` **only**, so imported
   `memory_type`/`status` are inserted unvalidated. The MCP update tool parses
   but the write itself goes through `store_wrapper`/`UpdateParams` (enum-typed,
   `src/memory/crud.rs`). The storage layer takes all three as `&str` and
   validates nothing: `Database::insert*`/`update` and the hook path
   (`src/hook/run.rs` → `Database::insert_with_hash`).
   On the **read** side: `memory_type` is never validated; `status` is only
-  *compared* (`candidate.status != MemoryStatus::Candidate.as_str()`,
-  `src/commands/prune.rs:149`); `importance` is rejected only when recency
-  scoring runs — both `ImportanceLevel::parse` sites (`src/memory/search.rs:95`,
-  `:204`) sit inside `if recency_weight > 0.0`, so with `--recency 0` (or
-  omitted) a corrupt value is echoed back like the other two.
+  *compared* (`prune` compares against `MemoryStatus::Candidate.as_str()`);
+  `importance` is parsed by `temporal::ImportanceLevel::parse` only inside the
+  `if recency_weight > 0.0` block in `src/memory/search.rs`. The default
+  `recency_weight` is **0.3** (`Config::default()`, `src/config/mod.rs`; the
+  CLI's `--recency` and the MCP `recency_weight` param both fall back to it), so
+  a corrupt `importance` makes search **fail** by default and is echoed back
+  unvalidated only when recency is explicitly set to `0`.
 - **`importance` has two independent vocabularies** — the write-side
   `MemoryImportance` (`src/memory/lifecycle.rs`) and the read-side
   `temporal::ImportanceLevel::parse` used by recency scoring, plus `prune`'s
@@ -293,11 +286,10 @@ Orientation for agents new to the codebase (verify against the tree — the
   (`src/memory/lifecycle.rs`) does, and it enumerates the variants **by hand**,
   so it catches a new level only if someone adds it to the test's lists too.
 - **`Database::conn()` (`src/sqlite/mod.rs`) is a leaky storage boundary** — it
-  hands out the raw `rusqlite::Connection` and callers bypass `Database` to
-  issue raw SQL against it (commands, `src/migration.rs`, `src/hook/`,
-  `src/memory/store.rs`; discover with `rg '\.conn\(\)' src/`). New queries
-  belong on `Database` unless they need a handle only it can give (the Online
-  Backup API in `backup.rs`).
+  hands out `&rusqlite::Connection`, which can **write**: several callers
+  `execute` raw SQL through it (`rg '\.conn\(\)' src/` for the current set).
+  New queries belong on `Database` unless they genuinely need connection-level
+  access — the Online Backup API, or `PRAGMA`s such as `busy_timeout`.
 - **Migrations use `PRAGMA user_version`** — version is bumped only after a
   successful migration (the pragma is not transactional); tests assert
   `user_version == total_migrations()` and that a failing migration leaves the
@@ -308,9 +300,15 @@ Orientation for agents new to the codebase (verify against the tree — the
   error path is not tested, so do not lean on it. `migrations()` is a
   positional `Vec`, so **version == index + 1**: never renumber, insert before,
   or remove an applied migration — append a new one. `run_migrations` runs on
-  every `Database::open`, so a migration that scans or rewrites rows holds
-  `BEGIN EXCLUSIVE` and stalls every concurrent vipune/mcp process — keep new
-  migrations DDL-only or bound the work.
+  every `Database::open` — reached by the CLI via `MemoryStore::new` and the
+  per-command `Database::open` calls, and by the MCP server via
+  `MemoryStore::new` in `run_mcp` — and each migration holds `BEGIN EXCLUSIVE`
+  until it commits, so a migration that scans or rewrites rows blocks every
+  concurrent vipune/mcp process for that whole window: keep new migrations
+  DDL-only or bound the work. The model-revision re-embed in `src/migration.rs`
+  is *not* a schema migration: its per-project `reembed_project` transactions
+  commit before the failure is reported, so `MigrationIncomplete` means rows
+  are already rewritten while the marker is retained.
 - **Embedding pinned revision** — the default model downloads at the exact
   `EMBED_MODEL_REVISION` commit for reproducibility. The test
   `test_air_gapped_docs_and_ci_cache_match_embed_revision` pins that the
