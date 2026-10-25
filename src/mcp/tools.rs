@@ -134,11 +134,16 @@ impl ToolHandler {
             None => MemoryImportance::default(),
         };
 
-        // Serialize metadata
+        // Serialize metadata; no metadata stays `None` rather than a sentinel
+        // string, so the store never sees "null" as column content (it validates
+        // metadata only when it is `Some`), and both write arms of this tool
+        // represent absence the same way.
         let metadata_str = match &params.metadata {
-            Some(meta) => serde_json::to_string(meta)
-                .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?,
-            None => McpRow::NO_METADATA.to_string(),
+            Some(meta) => Some(
+                serde_json::to_string(meta)
+                    .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?,
+            ),
+            None => None,
         };
 
         // The row both arms create, named once so the two branches cannot differ
@@ -146,7 +151,7 @@ impl ToolHandler {
         let row = McpRow {
             project_id: &self.project_id,
             text: &params.text,
-            metadata: &metadata_str,
+            metadata: metadata_str.as_deref(),
             memory_type: memory_type_val,
             status: status_val,
             importance: importance_val,
@@ -337,17 +342,19 @@ impl ToolHandler {
         let memory_type_val = MemoryType::from_str(memory_type)
             .map_err(|e| McpError::invalid_input(&format!("Invalid memory type: {}", e)))?;
 
-        // Serialize metadata
+        // Serialize metadata (see `store_memory`: absence is `None`, not "null")
         let metadata_str = match &params.metadata {
-            Some(meta) => serde_json::to_string(meta)
-                .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?,
-            None => "null".to_string(),
+            Some(meta) => Some(
+                serde_json::to_string(meta)
+                    .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?,
+            ),
+            None => None,
         };
 
         let value = self.store.supersede(
             &self.project_id,
             &params.new_text,
-            &metadata_str,
+            metadata_str.as_deref(),
             memory_type_val,
             &params.old_memory_id,
         )?;

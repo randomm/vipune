@@ -182,6 +182,27 @@ pub enum MemoryImportance {
 }
 
 impl MemoryImportance {
+    /// Every level the parser accepts, in spelling order.
+    ///
+    /// The roster the docs-drift and schema tests derive their vocabulary from
+    /// (`src/mcp/store_memory_docs_tests.rs`, `src/mcp/tests.rs`): a hand-typed
+    /// copy of the four levels in a test goes stale silently when a fifth variant
+    /// is added here, which is the fragility AGENTS.md records for
+    /// `test_importance_vocabularies_agree_with_the_read_side`.
+    #[cfg_attr(not(test), allow(dead_code))] // Read by the test rosters; public surface
+    pub const ALL: [MemoryImportance; 4] = [
+        MemoryImportance::Low,
+        MemoryImportance::Medium,
+        MemoryImportance::High,
+        MemoryImportance::Critical,
+    ];
+
+    /// The canonical column spellings of every level — what the documentation and
+    /// the tool schema have to advertise. A `const` item rather than a function so
+    /// a test can bind it as a constant instead of re-typing the list.
+    #[cfg_attr(not(test), allow(dead_code))] // Read by the test rosters; public surface
+    pub const STRINGS: [&'static str; 4] = ["low", "medium", "high", "critical"];
+
     /// Get the string representation of the importance.
     #[allow(dead_code)] // Public API for library consumers
     pub fn as_str(&self) -> &'static str {
@@ -301,6 +322,35 @@ mod tests {
         assert!(MemoryImportance::from_str("normal").is_err());
     }
 
+    /// `STRINGS` is the roster the MCP docs/schema pins compare against
+    /// (`src/mcp/store_memory_docs_tests.rs`), and `ALL` the roster the sibling
+    /// vocabulary test iterates. Both are hand-typed beside the variants, so a
+    /// fifth variant added below must be added there too — pinned here rather
+    /// than left to whoever notices the docs stopped covering a level.
+    #[test]
+    fn test_all_and_strings_match_the_variants() {
+        // The enum is the owner: a variant without a `from_str` arm cannot be named
+        // at all, so a test roster can go stale only against the variant list, which
+        // the equality below is the only guard for.
+        assert_eq!(
+            MemoryImportance::ALL.len(),
+            MemoryImportance::STRINGS.len(),
+            "the two rosters must be the same length as each other and the variants"
+        );
+        for (variant, spelling) in MemoryImportance::ALL.iter().zip(MemoryImportance::STRINGS) {
+            assert_eq!(variant.as_str(), spelling);
+            assert_eq!(MemoryImportance::from_str(spelling).unwrap(), *variant);
+        }
+        // The read side (`temporal::ImportanceLevel`) is a separate enum with its own
+        // variants; `test_importance_vocabularies_agree_with_the_read_side` compares
+        // the vocabularies word by word, and this catches a size change first.
+        assert_eq!(
+            MemoryImportance::ALL.len(),
+            crate::temporal::ImportanceLevel::VARIANTS_LEN,
+            "the write-side level enum and the read-side decay enum must stay the same size"
+        );
+    }
+
     /// The two importance vocabularies in this crate are maintained apart: this
     /// one gates what may be written (the `--importance` flag and the import
     /// path), while `temporal::ImportanceLevel::parse` reads the stored column
@@ -323,12 +373,7 @@ mod tests {
             );
         }
         // Whatever this enum can name, the decay pipeline must be able to read.
-        for level in [
-            MemoryImportance::Low,
-            MemoryImportance::Medium,
-            MemoryImportance::High,
-            MemoryImportance::Critical,
-        ] {
+        for level in MemoryImportance::ALL {
             assert!(
                 ImportanceLevel::parse(level.as_str()).is_ok(),
                 "the read side must understand {}",

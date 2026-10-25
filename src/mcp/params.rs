@@ -36,7 +36,7 @@ pub struct StoreMemoryParams {
     /// like `vipune add --importance --supersedes` (issue #256).
     #[serde(default)]
     #[schemars(
-        description = "Importance: low, medium (default), high, critical (case-insensitive). high and critical rows are exempt from prune. On the supersedes path this is the level of the new row."
+        description = "Importance: low, medium (default), high or critical (case-insensitive). The two upper levels are exempt from prune. On the supersedes path this is the level of the new row."
     )]
     pub importance: Option<String>,
 

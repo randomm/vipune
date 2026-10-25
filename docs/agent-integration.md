@@ -75,7 +75,7 @@ After completing work, store important findings:
 - `vipune --help` displays all available commands
 
 **MCP tools** are also available (via `vipune mcp`):
-- `store_memory(text, metadata?, memory_type?, status?, importance?, supersedes?, force?)` — store with optional type/status/importance/supersede; `status` is honoured on the row `supersedes` creates, so `status: "candidate"` + `supersedes` stages a hidden replacement (see `cli-reference.md` → "Supersede with a candidate replacement" for what that means and how to activate it); `importance` (`low`/`medium`/`high`/`critical`, default `medium`) is stored on whichever row the call creates — the ingested row or the one `supersedes` creates — and `high`/`critical` exempt it from `prune`; reserve those two levels for the few memories the operator has designated durable, since mass use defeats the pruning lifecycle
+- `store_memory(text, metadata?, memory_type?, status?, importance?, supersedes?, force?)` — store with optional type/status/importance/supersede; `status` is honoured on the row `supersedes` creates, so `status: "candidate"` + `supersedes` stages a hidden replacement (see `cli-reference.md` → "Supersede with a candidate replacement" for what that means and how to activate it); `importance` (`low`/`medium`/`high`/`critical`, default `medium`) is stored on whichever row the call creates — the ingested row or the one `supersedes` creates — and `high`/`critical` exempt it from `prune`; reserve those two levels for the few memories the operator has designated durable, since mass use defeats the pruning lifecycle (see `cli-reference.md` → “Prune thresholds and the importance exemption” for the thresholds the exemption interacts with)
 - `search_memories(query, limit?, memory_types?, statuses?, recency_weight?, hybrid?, no_touch?)` — find by meaning
 - `list_memories(limit?, memory_types?, statuses?)` — list recent
 - `supersede_memory(new_text, old_memory_id, memory_type?, metadata?)` — replace existing memory
@@ -126,7 +126,7 @@ If you installed the prebuilt binary to `/usr/local/bin/`, use this path instead
 Replace `<you>` with your actual username. Do NOT use `~` in absolute paths — Desktop expands from launch directory, not your home.
 
 **Available MCP tools:**
-- `store_memory` — store information for later recall
+- `store_memory` — store information for later recall (`importance` accepts `low`/`medium`/`high`/`critical`; reserve `high`/`critical` for the few memories the operator has designated durable — mass use defeats the pruning lifecycle, see `cli-reference.md` → “Prune thresholds and the importance exemption”)
 - `search_memories` — find memories by meaning (supports `hybrid` param for semantic + BM25)
 - `list_memories` — list recent memories
 - `supersede_memory` — replace an existing memory with new content

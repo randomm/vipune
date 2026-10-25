@@ -30,6 +30,7 @@ fn create_test_store() -> MemoryStore {
 #[cfg(all(test, feature = "mcp"))]
 mod tool_handler_tests {
     use super::*;
+    use crate::mcp::store_memory_docs_tests::{LEVELS, level_words};
     use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 
     /// Pull the `id` out of a tool result's JSON text content.
@@ -52,7 +53,7 @@ mod tool_handler_tests {
             .to_string()
     }
 
-    /// The prune outcome the `importance` parameter exists to guarantee.
+    /// The level spellings `prune`'s SQL excludes are the spellings the tool writes.
     ///
     /// The level tests below assert the *column string*; what an operator actually
     /// buys is that `prune` never demotes such a row. That rests on the write-side
@@ -60,42 +61,46 @@ mod tool_handler_tests {
     /// `PruneEvaluator::select_candidates` (`src/commands/prune.rs`), and nothing
     /// structural links the two — only
     /// `test_importance_vocabularies_agree_with_the_read_side`, which enumerates its
-    /// cases by hand. A spelling change (`Critical` → `crit`) would revoke prune
-    /// protection for every MCP row with every MCP test still green, so the level the
-    /// tool wrote is compared against `prune`'s own exclusion predicate, and the
-    /// consumer's demotion is exercised on the row it is supposed to reach.
+    /// cases by hand.
+    ///
+    /// This test pins the write half only, and deliberately does *not* re-implement
+    /// the exclusion as a local predicate: an earlier version transcribed
+    /// `level == "high" || level == "critical"` into a closure and asserted against
+    /// its own copy, which stayed green when the real query changed. The consumer's
+    /// own select-and-demote is exercised in
+    /// `candidate_at_critical_importance_is_not_demoted_by_prune`
+    /// (`src/commands/prune_tests.rs`), which drives `run_for_project` and is
+    /// therefore pinned to the SQL; what is pinned here is that a row the MCP tool
+    /// stored at a level lands on exactly those two spellings, casing included, so
+    /// the exemption survives an agent sending `CRITICAL`.
     #[tokio::test]
-    async fn store_memory_importance_protects_the_row_from_prune() {
-        let store = create_test_store();
-        let store = Arc::new(Mutex::new(store));
-        let wrapper = StoreWrapper::new(store.clone());
-        let handler = ToolHandler::new(store, "prune-proj".to_string(), Config::default());
+    async fn store_memory_writes_the_spellings_prune_excludes() {
+        let (wrapper, handler) = fixtures("prune-proj");
 
-        // Candidates written through the tool: the level that is meant to be a hard
-        // exclusion, the same level in another casing (the exemption must not be
-        // voidable by casing), and the ordinary default as the control.
-        let mut ids = Vec::new();
-        for (i, level) in ["critical", "CRITICAL", "medium"].iter().enumerate() {
-            let result = handler
-                .call_tool_for_test(
-                    "store_memory",
-                    store_memory_args(
-                        &format!("durable probe {i}"),
-                        Some("candidate"),
-                        Some(level),
-                        None,
-                    ),
-                )
-                .await
-                .unwrap_or_else(|e| panic!("store_memory at {level} failed: {e:?}"));
-            ids.push(tool_result_id(&result));
-        }
-        let [protected, uppercase_protected, disposable] =
-            [ids[0].clone(), ids[1].clone(), ids[2].clone()];
-
-        // The same database the tool wrote through, reached through the wrapper
-        // rather than a second handle, so what is demoted here is what was stored.
-        let store = wrapper.0.clone();
+        // The level that is meant to be a hard exclusion, the same level in another
+        // casing, and the ordinary default as the control that must NOT match.
+        let [protected, uppercase_protected, disposable] = {
+            let mut ids: [String; 3] = Default::default();
+            for (id, (i, level)) in ids
+                .iter_mut()
+                .zip(["critical", "CRITICAL", "medium"].iter().enumerate())
+            {
+                let result = handler
+                    .call_tool_for_test(
+                        "store_memory",
+                        store_memory_args(
+                            &format!("durable probe {i}"),
+                            Some("candidate"),
+                            Some(level),
+                            None,
+                        ),
+                    )
+                    .await
+                    .unwrap_or_else(|e| panic!("store_memory at {level} failed: {e:?}"));
+                *id = tool_result_id(&result);
+            }
+            ids
+        };
 
         let row = |id: &str| {
             wrapper
@@ -104,85 +109,94 @@ mod tool_handler_tests {
                 .expect("row still readable")
         };
 
-        // prune's exclusion, transcribed from its SQL: a row whose stored level is
-        // one of these two words is never demoted. Read straight from the column, so
-        // a spelling the write side invented cannot look exempt here and still be
-        // demoted by the real query.
-        let excluded = |id: &str| {
-            let level = row(id).importance;
-            level == "high" || level == "critical"
-        };
-
         for id in [&protected, &uppercase_protected, &disposable] {
             assert_eq!(
                 row(id).status,
                 MemoryStatus::Candidate.as_str(),
-                "every row starts as a candidate, so only its level can spare it"
+                "every row starts as a candidate, so only its level can spare it from prune"
             );
         }
-
-        assert!(
-            excluded(&protected),
-            "a row the agent stored at `critical` must be spelled the way `prune`'s \n             exclusion spells it, or the exemption is silently revoked for every MCP row"
-        );
-        assert!(
-            excluded(&uppercase_protected),
-            "`CRITICAL` must reach the column as the canonical `critical` — the caller \n             asked for the exemption and casing must not void it"
-        );
-        assert!(
-            !excluded(&disposable),
-            "the `medium` control must not match the exclusion, or the two asserts above \n             are proved by a predicate nothing satisfies"
-        );
-
-        // The control is demoted through prune's own write (`UPDATE status =
-        // 'deprecated'` via `Database::update`), which is what makes the asserts
-        // above about the exemption rather than about a demotion that never happens.
-        {
-            let guard = store.lock().expect("store lock");
-            guard
-                .db
-                .update(
-                    &disposable,
-                    "prune-proj",
-                    crate::sqlite::UpdateOptions {
-                        content: None,
-                        embedding: None,
-                        metadata: None,
-                        memory_type: None,
-                        status: Some(MemoryStatus::Deprecated.as_str()),
-                        importance: None,
-                    },
-                )
-                .expect("prune's demotion update succeeds");
-        }
+        // Asserted against the enum's own spellings rather than a transcription: the
+        // consumer compares the column against `'high'`/`'critical'`, so this is the
+        // link that keeps a rename (`Critical` → `crit`) from revoking the exemption
+        // for every MCP row with every MCP test green.
         assert_eq!(
-            row(&disposable).status,
-            MemoryStatus::Deprecated.as_str(),
-            "the eligible row is demoted by the consumer's own path"
+            row(&protected).importance,
+            MemoryImportance::Critical.as_str(),
+            "a row the agent stored at `critical` must be spelled the way prune's exclusion \n             spells it"
         );
         assert_eq!(
-            row(&protected).status,
-            MemoryStatus::Candidate.as_str(),
-            "the exempt row was never passed to that update"
+            row(&uppercase_protected).importance,
+            MemoryImportance::Critical.as_str(),
+            "`CRITICAL` must reach the column as the canonical `critical` — the caller asked \n             for the exemption and casing must not void it"
         );
+        assert_eq!(
+            row(&disposable).importance,
+            MemoryImportance::Medium.as_str(),
+            "the control must sit on a level prune does not exclude, or the two asserts \n             above are proved by a level nothing is exempt at"
+        );
+    }
+
+    /// The wrapper + handler pair every tool-driven test needs, over one shared
+    /// `Arc<Mutex<MemoryStore>>`, at the default config.
+    ///
+    /// The two handles must be the *same* store: a test that seeded through one and
+    /// read through the other would be asserting nothing. Tests state the project
+    /// they care about and nothing else.
+    fn fixtures(project_id: &str) -> (StoreWrapper, ToolHandler) {
+        let store = Arc::new(Mutex::new(create_test_store()));
+        (
+            StoreWrapper::new(store.clone()),
+            ToolHandler::new(store, project_id.to_string(), Config::default()),
+        )
     }
 
     /// The arguments an MCP client would send for a `store_memory` call.
     ///
-    /// `None` for `importance` means the client omitted the field — which is the
-    /// case that must land on `medium`, not on a missing column (#256).
+    /// An absent level is *omitted* from the payload rather than sent as `null`, so
+    /// "the client omitted the field" — the case that must land on `medium`, not on
+    /// a missing column (#256) — is really the shape on the wire. `force` is
+    /// omitted by every caller unless a test passes it, since the parameter is
+    /// optional and the docs claim it is ignored alongside `supersedes`.
     fn store_memory_args(
         text: &str,
         status: Option<&str>,
         importance: Option<&str>,
         supersedes: Option<&str>,
     ) -> serde_json::Value {
-        serde_json::json!({
-            "text": text,
-            "status": status,
-            "importance": importance,
-            "supersedes": supersedes,
-        })
+        let mut args = serde_json::Map::new();
+        args.insert(
+            "text".to_string(),
+            serde_json::Value::String(text.to_string()),
+        );
+        for (key, value) in [
+            ("status", status),
+            ("importance", importance),
+            ("supersedes", supersedes),
+        ] {
+            if let Some(value) = value {
+                args.insert(
+                    key.to_string(),
+                    serde_json::Value::String(value.to_string()),
+                );
+            }
+        }
+        serde_json::Value::Object(args)
+    }
+
+    /// The same call with `force` set, for the test that pins what `force` does (and
+    /// does not) do alongside `supersedes`.
+    fn store_memory_args_with_force(
+        text: &str,
+        importance: Option<&str>,
+        supersedes: Option<&str>,
+        force: bool,
+    ) -> serde_json::Value {
+        let mut args = store_memory_args(text, None, importance, supersedes);
+        args.as_object_mut()
+            .expect("args object")
+            .insert("force".to_string(), serde_json::Value::Bool(force));
+        args
     }
 
     /// The ingest the read-path tests want: one ordinary row, `fact`/`active`/
@@ -193,9 +207,26 @@ mod tool_handler_tests {
         project_id: &str,
         text: &str,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
+        ingest_fact_with(wrapper, project_id, text, None, false)
+    }
+
+    /// The same seed with the two columns the plain helper leaves at their defaults:
+    /// a metadata string (the store validates it as JSON when present) and the
+    /// conflict-gate override. One spelling for "seed a row" in this file, so a test
+    /// never builds `McpIngest`/`McpRow` by hand for an ordinary row.
+    fn ingest_fact_with(
+        wrapper: &StoreWrapper,
+        project_id: &str,
+        text: &str,
+        metadata: Option<&str>,
+        force: bool,
+    ) -> Result<serde_json::Value, rmcp::ErrorData> {
         wrapper.ingest_with_type_status(&McpIngest {
-            row: McpRow::fact(project_id, text),
-            force: false,
+            row: McpRow {
+                metadata,
+                ..McpRow::fact(project_id, text)
+            },
+            force,
         })
     }
 
@@ -512,13 +543,13 @@ mod tool_handler_tests {
         // Ingest a memory with metadata
         let metadata_json = serde_json::json!({"topic": "rust", "type": "fact"});
         let metadata_str = serde_json::to_string(&metadata_json).unwrap();
-        let result = wrapper.ingest_with_type_status(&McpIngest {
-            row: McpRow {
-                metadata: &metadata_str,
-                ..McpRow::fact(project_id, "rust is awesome")
-            },
-            force: false,
-        });
+        let result = ingest_fact_with(
+            &wrapper,
+            project_id,
+            "rust is awesome",
+            Some(&metadata_str),
+            false,
+        );
         assert!(result.is_ok());
 
         // Search for it
@@ -769,16 +800,9 @@ mod tool_handler_tests {
     /// `StoreWrapper::get`, the read path that applies no status filter.
     #[tokio::test]
     async fn store_memory_supersedes_honours_the_requested_status() {
-        let store = create_test_store();
-        let store = Arc::new(Mutex::new(store));
-        let wrapper = StoreWrapper::new(store.clone());
-        let handler = ToolHandler::new(store, "status-proj".to_string(), Config::default());
+        let (wrapper, handler) = fixtures("status-proj");
 
-        let seeded = wrapper
-            .ingest_with_type_status(&McpIngest {
-                row: McpRow::fact("status-proj", "original content"),
-                force: true,
-            })
+        let seeded = ingest_fact_with(&wrapper, "status-proj", "original content", None, true)
             .expect("seed add");
         let old_id = seeded["id"].as_str().expect("seed id").to_string();
 
@@ -823,12 +847,14 @@ mod tool_handler_tests {
         // active row is seeded as the control — the superseded original is not
         // listed either — so the guard cannot be satisfied by a list call that
         // returned nothing.
-        let control = wrapper
-            .ingest_with_type_status(&McpIngest {
-                row: McpRow::fact("status-proj", "unrelated active control"),
-                force: true,
-            })
-            .expect("seed control");
+        let control = ingest_fact_with(
+            &wrapper,
+            "status-proj",
+            "unrelated active control",
+            None,
+            true,
+        )
+        .expect("seed control");
         let control_id = control["id"].as_str().expect("control id").to_string();
 
         let listed = listed_ids(&wrapper, "status-proj");
@@ -847,7 +873,7 @@ mod tool_handler_tests {
             .supersede(
                 "status-proj",
                 "plain replacement",
-                "null",
+                None,
                 MemoryType::Fact,
                 &new_id,
             )
@@ -922,10 +948,7 @@ mod tool_handler_tests {
     /// question and the row is the only source of truth.
     #[tokio::test]
     async fn store_memory_writes_the_importance_the_caller_named() {
-        let store = create_test_store();
-        let store = Arc::new(Mutex::new(store));
-        let wrapper = StoreWrapper::new(store.clone());
-        let handler = ToolHandler::new(store, "imp-proj".to_string(), Config::default());
+        let (wrapper, handler) = fixtures("imp-proj");
 
         // Each case names the level the caller sent and the spelling the column
         // must hold: asserted against a literal, never against `from_str` of the
@@ -992,10 +1015,7 @@ mod tool_handler_tests {
     /// "validate then write" ordering the `memory_type`/`status` checks have.
     #[tokio::test]
     async fn store_memory_rejects_an_invalid_importance_without_writing() {
-        let store = create_test_store();
-        let store = Arc::new(Mutex::new(store));
-        let wrapper = StoreWrapper::new(store.clone());
-        let handler = ToolHandler::new(store, "bad-imp-proj".to_string(), Config::default());
+        let (wrapper, handler) = fixtures("bad-imp-proj");
 
         for (level, expected_reason) in [
             ("urgent", "urgent"),
@@ -1059,10 +1079,7 @@ mod tool_handler_tests {
     /// name through `StoreWrapper::supersede`.
     #[tokio::test]
     async fn store_memory_supersedes_writes_the_importance_on_the_new_row() {
-        let store = create_test_store();
-        let store = Arc::new(Mutex::new(store));
-        let wrapper = StoreWrapper::new(store.clone());
-        let handler = ToolHandler::new(store, "sup-imp-proj".to_string(), Config::default());
+        let (wrapper, handler) = fixtures("sup-imp-proj");
 
         // The row that is about to be replaced is seeded at `low` so the
         // assertion below cannot be satisfied by the old row's level leaking.
@@ -1113,7 +1130,7 @@ mod tool_handler_tests {
             .supersede(
                 "sup-imp-proj",
                 "plain replacement",
-                "null",
+                None,
                 MemoryType::Fact,
                 &new_id,
             )
@@ -1126,6 +1143,124 @@ mod tool_handler_tests {
                 .importance,
             MemoryImportance::Medium.as_str(),
             "the level-less wrapper keeps naming the default explicitly"
+        );
+    }
+
+    /// The documented "`force` is ignored when `supersedes` is set" contract
+    /// (`params.rs`, `docs/cli-reference.md`) has no owner other than its prose, so
+    /// it is pinned here.
+    ///
+    /// The two arms are separate types (`McpIngest` carries `force`, `McpSupersede`
+    /// carries the replaced id), so the supersede arm structurally cannot reach the
+    /// conflict gate — but a future re-merge of the arms would reintroduce the
+    /// bypass silently. The assertion that makes this observable: the ingest arm
+    /// really does refuse a duplicate, while the same text through the supersede arm
+    /// is accepted whatever `force` says.
+    #[tokio::test]
+    async fn store_memory_ignores_force_when_supersedes_is_set() {
+        let (wrapper, handler) = fixtures("force-proj");
+
+        let original = ingest_fact_with(&wrapper, "force-proj", "the original row", None, true)
+            .expect("seed original");
+        let old_id = original["id"].as_str().expect("seed id").to_string();
+
+        // The ingest arm's conflict gate is live, so the supersede results below are
+        // about the arm that was chosen and not about a gate that never fires.
+        let blocked = handler
+            .call_tool_for_test(
+                "store_memory",
+                store_memory_args("the original row", None, None, None),
+            )
+            .await;
+        assert!(
+            blocked.is_err(),
+            "the ingest arm refuses a duplicate, so `force` is doing something on that \n             arm and its silence on the other arm is the documented behaviour"
+        );
+
+        for force in [true, false] {
+            let result = handler
+                .call_tool_for_test(
+                    "store_memory",
+                    store_memory_args_with_force("a replacement row", None, Some(&old_id), force),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("supersede with force={force} must succeed: {e:?}"));
+            let new_id = tool_result_id(&result);
+            assert_eq!(
+                wrapper
+                    .get(&new_id, "force-proj")
+                    .expect("get")
+                    .expect("replacement row stored")
+                    .status,
+                MemoryStatus::Active.as_str(),
+                "force={force} must not change what the supersede arm writes"
+            );
+            assert_eq!(
+                wrapper
+                    .get(&old_id, "force-proj")
+                    .expect("get")
+                    .expect("superseded row still readable")
+                    .status,
+                MemoryStatus::Superseded.as_str(),
+                "force={force} must not change the old row's fate either"
+            );
+        }
+    }
+
+    /// A poisoned store must answer each request as an error, not panic the
+    /// long-lived server (AGENTS.md, `src/mcp` invariants). AGENTS.md notes no test
+    /// asserted either behaviour, and `lock_store` is now the single owner of the
+    /// policy, so both a write wrapper and the read path `list` are driven here.
+    #[test]
+    fn a_poisoned_store_answers_errors_instead_of_panicking() {
+        let store = Arc::new(Mutex::new(create_test_store()));
+        // Poison it the way a panicking request would: panic while holding the guard.
+        let poison = {
+            let store = store.clone();
+            std::thread::spawn(move || {
+                let _guard = store.lock().expect("lock before poisoning");
+                panic!("poisoning the store mutex on purpose")
+            })
+        };
+        // The panicked thread leaves the mutex poisoned; the JoinHandle's error is the
+        // expected outcome, not something to propagate.
+        let _ = poison.join();
+
+        let wrapper = StoreWrapper::new(store);
+        let err = wrapper
+            .ingest_with_type_status(&McpIngest {
+                row: McpRow::fact("poison-proj", "any row"),
+                force: false,
+            })
+            .expect_err("a poisoned store must not write");
+        assert_eq!(
+            err.code,
+            rmcp::model::ErrorCode::INTERNAL_ERROR,
+            "the write wrapper answers the poison as an internal error"
+        );
+        assert!(
+            err.message.contains("store lock poisoned"),
+            "the message names the cause: {:?}",
+            err.message
+        );
+        assert!(
+            err.data
+                .as_ref()
+                .and_then(|d| d.get("type"))
+                .and_then(|t| t.as_str())
+                == Some("internal_error"),
+            "the payload carries the type tag every other internal error carries: {:?}",
+            err.data
+        );
+
+        // The read path takes the same lock through the same helper: `list` must
+        // answer too rather than `unwrap()`ing and aborting the server.
+        let read_err = wrapper
+            .list("poison-proj", 10, None, None)
+            .expect_err("a poisoned store must not be read either");
+        assert!(
+            read_err.to_string().contains("store lock poisoned"),
+            "the read wrapper surfaces the same cause: {read_err}"
         );
     }
 
@@ -1172,12 +1307,21 @@ mod tool_handler_tests {
             .get("description")
             .and_then(|v| v.as_str())
             .expect("the importance parameter is documented in the schema");
-        for level in ["low", "medium", "high", "critical"] {
+        // Compared against the enum's roster (`LEVELS`, shared with the docs-drift
+        // module) and by parsed word rather than `contains`, so a description that
+        // said `lowish` — or named a fifth level the parser rejects — fails here
+        // instead of satisfying a substring check.
+        let named = level_words(description);
+        for level in LEVELS {
             assert!(
-                description.contains(level),
+                named.iter().any(|word| word == level),
                 "the schema description must name the accepted level {level:?}: {description}"
             );
         }
+        assert!(
+            named.iter().all(|word| LEVELS.contains(&word.as_str())),
+            "the schema description advertises a level outside the parser's roster: \n             {description}"
+        );
         // `importance` is optional: only `text` may be required, so omitting it
         // stays a valid call (the medium default is applied in the handler).
         let required: Vec<&str> = tool

@@ -247,6 +247,14 @@ pub enum ImportanceLevel {
 }
 
 impl ImportanceLevel {
+    /// The number of levels the read side understands.
+    ///
+    /// Pinned against `MemoryImportance::ALL` by
+    /// `test_all_and_strings_match_the_variants`, so a level added to the write
+    /// enum without a matching decay arm fails there rather than in production.
+    #[cfg_attr(not(test), allow(dead_code))] // Read by the vocabulary pin in lifecycle.rs
+    pub const VARIANTS_LEN: usize = 4;
+
     /// Parse an importance string.
     ///
     /// Accepts the four canonical levels (lowercase, case-insensitive).

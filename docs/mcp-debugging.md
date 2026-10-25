@@ -66,6 +66,11 @@ Each MCP tool has a specific JSON-RPC format:
 }
 ```
 
+`importance` is optional (`low`/`medium`/`high`/`critical`, default `medium`). Omit it unless the
+operator has designated the memory durable: `high` and `critical` are exempt from `prune`, so
+mass use of them defeats the pruning lifecycle (see `cli-reference.md` → “Prune thresholds and
+the importance exemption”).
+
 #### search_memories
 
 ```json

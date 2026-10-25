@@ -30,7 +30,7 @@ vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status
 - `--force` - Bypass conflict detection and add regardless
 - `--memory-type <type>` - Memory type: `fact` (default), `preference`, `procedure`, `guard`, `observation`
 - `--status <status>` - Initial status: `active` (default) or `candidate`
-- `--importance <level>` - Initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive). `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row
+- `--importance <level>` - Initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive). `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row — reserve them for memories the operator has designated durable (see [Prune thresholds and the importance exemption](#prune-thresholds-and-the-importance-exemption))
 - `--supersedes <id>` - Atomically supersede an existing memory (mutually exclusive with `--force`)
 
 **Behavior:**
@@ -486,7 +486,7 @@ vipune mcp
 - `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
 - `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
 - `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes` (see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for what a hidden `candidate` replacement means and how to activate it)
-- `importance` — initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive). Stored on whichever row the call creates — the ingested row or the one `supersedes` creates; `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row (the count/age thresholds `prune` applies are operator-configurable, so the exemption is only worth reserving for genuinely durable memories)
+- `importance` — initial importance: `low`, `medium` (default), `high`, `critical` (case-insensitive). Stored on whichever row the call creates; the two upper levels are a hard exclusion for `prune`, which never demotes such a row — reserve them for memories the operator has designated durable (see [Prune thresholds and the importance exemption](#prune-thresholds-and-the-importance-exemption))
 - `supersedes` — ID of memory to supersede (atomically replaces old memory)
 - `force` — force store even if conflicts detected (default: `false`); ignored when `supersedes` is set, which skips the conflict gate entirely
 
@@ -496,7 +496,7 @@ vipune mcp
 - `memory_type` — optional type for the new memory (default: `fact`)
 - `metadata` — optional structured labels as JSON
 
-It has no `status` parameter, so the row it creates is always `active`, and no `importance` parameter, so that row is always `medium` (and therefore eligible for `prune`). Stage a `candidate` or a prune-exempt replacement through `store_memory` with `supersedes` + `status`/`importance` instead.
+It has no `status` parameter, so the row it creates is always `active`, and no `importance` parameter, so the row it creates is stored at the default `medium` (and is therefore eligible for `prune`). Stage a `candidate` or a prune-exempt replacement through `store_memory` with `supersedes` + `status`/`importance` instead.
 
 `get_memory` accepts:
 - `id` — ID of the memory to retrieve (required)
@@ -547,6 +547,25 @@ v0.3 includes automatic schema migrations — no manual steps required. On first
 `search` and `get` maintain two telemetry columns per memory: `retrieval_count` (how many times the memory has been returned by `search` or `get`) and `last_retrieved_at` (timestamp of the most recent retrieval). Both commands accept `--no-touch` to skip updating them — useful for reads that should not influence ranking or promotion signals.
 
 `search` and `get` include `retrieval_count` and `last_retrieved_at` in their JSON output (`--json`). Retrieval via `list` does not count as a retrieval and never touches telemetry.
+
+---
+
+## Prune thresholds and the importance exemption
+
+`vipune prune` demotes stale candidates to `deprecated` (it never deletes) when
+`status = 'candidate' AND retrieval_count < N AND age(created_at) > T`. N and T
+are operator-configurable: TOML `prune_count` (default 3) and `prune_age_days`
+(default 14) in `~/.config/vipune/config.toml`, with `VIPUNE_PRUNE_COUNT` /
+`VIPUNE_PRUNE_AGE_DAYS` environment overrides, or the per-run `--count` /
+`--age-days` flags.
+
+`guard`-type memories and rows whose `importance` is `high` or `critical` are
+**hard exclusions** — never demoted, whatever the thresholds. That exemption is
+why the levels are worth reserving: an agent that assigns `high`/`critical` to
+everything makes the whole candidate pool exempt, so `prune` stops shrinking it
+and the pruning lifecycle defeats itself. Reserve the two levels for the few
+memories the operator has designated durable; `low` and `medium` (the default)
+stay eligible.
 
 ---
 

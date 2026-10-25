@@ -70,7 +70,10 @@ At the natural end of a unit of work, distill the findings into typed memories:
 vipune add "Build runs via 'cargo test --release' not 'cargo test' (release tests reveal UB)" \
   --memory-type procedure
 
-# A user correction — high importance
+# A user correction — the type carries the weight; `--importance` is the
+# rarer knob. `high`/`critical` are exempt from `prune`, so reserve them for
+# memories the operator has designated durable (docs/cli-reference.md → "Prune
+# thresholds and the importance exemption"); everything else stays `medium`.
 vipune add "Operator wants error messages to reference actual model_id from DB, not hardcoded MODEL_ID const" \
   --memory-type guard
 

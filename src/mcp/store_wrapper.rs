@@ -21,14 +21,16 @@ use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 /// the other arm's value. An earlier version carried both fields on one struct
 /// and answered a mismatch at runtime — the same class of defect as #238, one
 /// frame lower.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub(crate) struct McpRow<'a> {
     /// Project the row belongs to.
     pub project_id: &'a str,
     /// Text content to store.
     pub text: &'a str,
-    /// Serialised metadata, or the [`McpRow::NO_METADATA`] sentinel for none.
-    pub metadata: &'a str,
+    /// Serialised metadata, or `None` for no metadata. The store takes the
+    /// column as `Option`, so absence is expressed here rather than by a magic
+    /// string that a later frame would have to recognise.
+    pub metadata: Option<&'a str>,
     /// Memory type of the new row.
     pub memory_type: MemoryType,
     /// Lifecycle status of the new row.
@@ -39,10 +41,6 @@ pub(crate) struct McpRow<'a> {
 }
 
 impl<'a> McpRow<'a> {
-    /// The metadata sentinel meaning "no metadata", which the store stores as-is
-    /// and the read paths map back to `null`.
-    pub(crate) const NO_METADATA: &'static str = "null";
-
     /// The one row an MCP test wants to seed: `fact`/`active`/`medium`, no
     /// metadata. Tests that pin a level or a status name that field at the call
     /// site with struct-update syntax (`..McpRow::fact(..)`).
@@ -51,7 +49,7 @@ impl<'a> McpRow<'a> {
         Self {
             project_id,
             text,
-            metadata: Self::NO_METADATA,
+            metadata: None,
             memory_type: MemoryType::Fact,
             status: MemoryStatus::Active,
             importance: MemoryImportance::default(),
@@ -60,20 +58,22 @@ impl<'a> McpRow<'a> {
 }
 
 /// The row an ingest call creates, plus the conflict-gate override.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub(crate) struct McpIngest<'a> {
-    /// The row to create.
     pub row: McpRow<'a>,
-    /// Bypass the conflict gate.
+    /// Bypass the conflict gate. Inert on the supersede arm, which reaches
+    /// neither the gate nor this struct — see the `force` parameter's schema
+    /// description in `params.rs`.
     pub force: bool,
 }
 
 /// The row a supersede call creates, plus the id it replaces.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub(crate) struct McpSupersede<'a> {
-    /// The replacement row.
     pub row: McpRow<'a>,
-    /// The memory the new row replaces.
+    /// Must name a live row in `row.project_id`; the check lives in
+    /// [`MemoryStore::supersede_with`], which is also what rejects a
+    /// non-insertable status.
     pub old_memory_id: &'a str,
 }
 
@@ -103,6 +103,9 @@ impl StoreWrapper {
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let row = &write.row;
         let mut store = self.lock_store()?;
+        // Embedding inference happens under this lock (see `lock_store`): the
+        // server pre-initialises the embedder before it accepts a connection
+        // (`run_mcp`, `src/mcp/server.rs`), so the engine is already built here.
         let policy = if write.force {
             IngestPolicy::Force
         } else {
@@ -114,7 +117,7 @@ impl StoreWrapper {
                 &NewMemory {
                     project_id: row.project_id,
                     content: row.text,
-                    metadata: Some(row.metadata),
+                    metadata: row.metadata,
                     memory_type: row.memory_type,
                     status: row.status,
                 },
@@ -155,7 +158,7 @@ impl StoreWrapper {
         &self,
         project_id: &str,
         new_text: &str,
-        metadata: &str,
+        metadata: Option<&str>,
         memory_type: MemoryType,
         old_memory_id: &str,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
@@ -186,12 +189,14 @@ impl StoreWrapper {
     /// travels the same frame for the same reason: `vipune add --importance`
     /// sets it on the row `--supersedes` creates.
     ///
-    /// This frame adds nothing to the insert-status rule: it takes
-    /// `MemoryStatus`, the same type the store takes, so no string can become an
-    /// unvalidated status one frame lower, and
-    /// [`MemoryStore::supersede_with`] is the one place that rejects
-    /// `superseded`/`deprecated` — the error arrives back as `invalid_input`
-    /// through `From<Error> for rmcp::ErrorData`.
+    /// This frame adds nothing to the insert-status rule: the level and status
+    /// are enum-typed, so no raw string reaches the INSERT, but the authority on
+    /// which of those statuses is insertable is
+    /// [`MemoryStatus::ensure_valid_for_insert`], called by
+    /// [`MemoryStore::supersede_with`] (`src/memory/batch.rs`) — the rejection
+    /// arrives back as `invalid_input` through `From<Error> for rmcp::ErrorData`.
+    /// As with [`Self::ingest_with_type_status`], embedding inference runs under
+    /// this lock, which is only free because the server pre-loads the engine.
     pub(crate) fn supersede_with_status(
         &self,
         write: &McpSupersede<'_>,
@@ -199,17 +204,11 @@ impl StoreWrapper {
         let row = &write.row;
         let mut store = self.lock_store()?;
 
-        let metadata_str = if row.metadata == McpRow::NO_METADATA {
-            None
-        } else {
-            Some(row.metadata)
-        };
-
         let new_id = match store.supersede_with(&NewSupersedingMemory {
             row: NewMemory {
                 project_id: row.project_id,
                 content: row.text,
-                metadata: metadata_str,
+                metadata: row.metadata,
                 memory_type: row.memory_type,
                 status: row.status,
             },
@@ -239,7 +238,7 @@ impl StoreWrapper {
         recency_weight: f64,
         options: crate::memory::SearchOptions,
     ) -> Result<Vec<crate::Memory>, Error> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = self.lock_store_library()?;
         store.search(project_id, query, limit, recency_weight, options)
     }
 
@@ -252,7 +251,7 @@ impl StoreWrapper {
         recency_weight: f64,
         options: crate::memory::SearchOptions,
     ) -> Result<Vec<crate::Memory>, Error> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = self.lock_store_library()?;
         store.search_hybrid(project_id, query, limit, recency_weight, options)
     }
 
@@ -267,7 +266,7 @@ impl StoreWrapper {
         memory_types: Option<Vec<&str>>,
         statuses: Option<Vec<&str>>,
     ) -> Result<serde_json::Value, Error> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = self.lock_store_library()?;
         let memories = store.search(
             project_id,
             query,
@@ -316,7 +315,7 @@ impl StoreWrapper {
         memory_types: Option<Vec<&str>>,
         statuses: Option<Vec<&str>>,
     ) -> Result<serde_json::Value, Error> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = self.lock_store_library()?;
         let options = crate::memory::SearchOptions {
             memory_types,
             statuses,
@@ -357,7 +356,7 @@ impl StoreWrapper {
         memory_types: Option<&[&str]>,
         statuses: Option<&[&str]>,
     ) -> Result<serde_json::Value, Error> {
-        let store = self.0.lock().unwrap();
+        let store = self.lock_store_library()?;
         let memories = store.list(project_id, limit, memory_types, statuses)?;
 
         let results: Vec<serde_json::Value> = memories
@@ -393,15 +392,28 @@ impl StoreWrapper {
 
     /// Lock the store, answering a poisoned mutex as an internal error for this
     /// request rather than panicking the long-lived MCP server — one poison must
-    /// not make every later request fail (AGENTS.md, `src/mcp` invariants).
+    /// not make every later request fail (AGENTS.md, `src/mcp` invariants). The
+    /// read paths return the library error type, so they take
+    /// [`Self::lock_store_library`]; both go through here, so the poison response
+    /// has one owner (`McpError::internal_error`) and one payload shape.
+    ///
+    /// Every acquisition in this file goes through one of the two. The write
+    /// wrappers hold the lock across embedding inference, which is only bounded
+    /// because the server pre-loads the engine before it accepts a connection
+    /// (`run_mcp`, `src/mcp/server.rs`).
     fn lock_store(&self) -> Result<std::sync::MutexGuard<'_, MemoryStore>, rmcp::ErrorData> {
         self.0.lock().map_err(|e| {
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INTERNAL_ERROR,
-                format!("store lock poisoned: {e}"),
-                None,
-            )
+            McpError::internal_error(&format!(
+                "store lock poisoned: {e} — the MCP server cannot serve this request"
+            ))
         })
+    }
+
+    /// [`Self::lock_store`] for the read wrappers, whose error type is the
+    /// library's. A poisoned store is an internal failure, not a store error.
+    fn lock_store_library(&self) -> Result<std::sync::MutexGuard<'_, MemoryStore>, Error> {
+        self.lock_store()
+            .map_err(|e| Error::Validation(format!("store lock poisoned: {}", e.message)))
     }
 
     /// Get a specific memory by ID scoped to a project.
@@ -411,13 +423,7 @@ impl StoreWrapper {
         id: &str,
         project_id: &str,
     ) -> Result<Option<crate::Memory>, rmcp::ErrorData> {
-        let store = self.0.lock().map_err(|e| {
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INTERNAL_ERROR,
-                format!("store lock poisoned: {e}"),
-                None,
-            )
-        })?;
+        let store = self.lock_store()?;
         store
             .get(id, project_id)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
@@ -426,13 +432,7 @@ impl StoreWrapper {
     /// Delete a memory by ID scoped to a project.
     #[allow(dead_code)] // Used by delete_memory tool
     pub(crate) fn delete(&self, id: &str, project_id: &str) -> Result<bool, rmcp::ErrorData> {
-        let store = self.0.lock().map_err(|e| {
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INTERNAL_ERROR,
-                format!("store lock poisoned: {e}"),
-                None,
-            )
-        })?;
+        let store = self.lock_store()?;
         store
             .delete(id, project_id)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
@@ -446,13 +446,7 @@ impl StoreWrapper {
         project_id: &str,
         params: UpdateParams<'_>,
     ) -> Result<(), rmcp::ErrorData> {
-        let mut store = self.0.lock().map_err(|e| {
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INTERNAL_ERROR,
-                format!("store lock poisoned: {e}"),
-                None,
-            )
-        })?;
+        let mut store = self.lock_store()?;
         store
             .update(id, project_id, params)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
@@ -461,13 +455,7 @@ impl StoreWrapper {
     /// Update retrieval telemetry for a list of memory IDs.
     #[allow(dead_code)] // Used by search_memories and get_memory tools
     pub(crate) fn touch_memories(&self, ids: &[&str]) -> Result<(), rmcp::ErrorData> {
-        let store = self.0.lock().map_err(|e| {
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INTERNAL_ERROR,
-                format!("store lock poisoned: {e}"),
-                None,
-            )
-        })?;
+        let store = self.lock_store()?;
         store
             .touch_memories(ids)
             .map_err(|e| -> rmcp::ErrorData { e.into() })

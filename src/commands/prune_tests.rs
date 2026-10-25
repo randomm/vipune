@@ -359,3 +359,72 @@ fn test_add_time_importance_protects_from_prune() {
     assert_eq!(status_of(&db, &critical), "candidate");
     assert_eq!(status_of(&db, &low), "deprecated");
 }
+
+/// The MCP `store_memory` twin of the exemption above (issue #256).
+///
+/// The level the tool writes is the level the storage layer stores, so a row an
+/// agent stored at `critical` must survive the real query the same way one added
+/// through the CLI does. Driven through `run_for_project` rather than a
+/// transcription of the exclusion, so a change to the SQL literals, the guard-type
+/// clause or the demotion path fails here — which is what the MCP-side test
+/// (`store_memory_writes_the_spellings_prune_excludes`, `src/mcp/tests.rs`) cannot
+/// see, since it asserts the column the write produced and never calls prune.
+///
+/// `MemoryStore::ingest_with_importance` is the same call
+/// `StoreWrapper::ingest_with_type_status` forwards to, so the row reaches the
+/// column by the MCP path's own route.
+#[test]
+fn test_mcp_written_critical_row_survives_prune() {
+    use crate::memory::NewMemory;
+    use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
+    use crate::memory::store::MemoryStore;
+    use crate::memory_types::{AddResult, IngestPolicy};
+
+    let (_dir, db_path) = create_test_db();
+    let mut store = MemoryStore::from_db_with_test_embedder(Database::open(&db_path).unwrap());
+
+    let mut added = |level: MemoryImportance, content: &str| match store
+        .ingest_with_importance(
+            &NewMemory {
+                project_id: "mcp-proj",
+                content,
+                metadata: None,
+                memory_type: MemoryType::Fact,
+                status: MemoryStatus::Candidate,
+            },
+            IngestPolicy::Force,
+            level,
+        )
+        .unwrap()
+    {
+        AddResult::Added { id } => id,
+        other => panic!("a forced add stores the row, got {other:?}"),
+    };
+    let critical = added(MemoryImportance::Critical, "agent-stored critical");
+    let medium = added(MemoryImportance::Medium, "agent-stored medium");
+    drop(store);
+
+    let mut db = Database::open(&db_path).unwrap();
+    // Age both past the threshold and leave retrieval at 0, so the only thing that
+    // can spare `critical` from a run that demotes everything else is its level.
+    for id in [&critical, &medium] {
+        set_retrieval(&db, id, 0);
+        db.conn()
+            .execute(
+                "UPDATE memories SET created_at = ?1, updated_at = ?1 WHERE id = ?2",
+                (OLD, id.clone()),
+            )
+            .unwrap();
+    }
+
+    let ev = PruneEvaluator::new(DEFAULT_PRUNE_COUNT, DEFAULT_PRUNE_AGE_DAYS);
+    let demoted = ev.run_for_project(&mut db, "mcp-proj").unwrap();
+
+    assert_eq!(
+        demoted,
+        vec![medium.clone()],
+        "the row the MCP path stored at `medium` is demoted and the one it stored at \n         `critical` is not: {demoted:?}"
+    );
+    assert_eq!(status_of(&db, &critical), "candidate");
+    assert_eq!(status_of(&db, &medium), "deprecated");
+}
