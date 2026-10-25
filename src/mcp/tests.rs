@@ -289,6 +289,14 @@ mod tool_handler_tests {
     /// discovers, with the vocabulary spelled out — the tool schema is plain JSON
     /// and an agent only sees what is advertised there (acceptance criterion: the
     /// MCP tool schema/description documents the field).
+    ///
+    /// `#[schemars(extend("enum" = ...))]` on the field, which schemars 1.2.3
+    /// merges into the `Option<String>`'s `{"type":["string","null"]}` schema
+    /// rather than replacing it. The vocabulary is advertised twice: in the
+    /// description (prose) and as a closed `enum` (machine-checkable). The enum
+    /// names the canonical lowercase spellings only; the handler's `from_str`
+    /// remains the validator and still accepts any casing, so an enum-strict
+    /// client that rejects `"HIGH"` is the accepted trade-off (#279 round 1).
     #[test]
     fn store_memory_tool_schema_documents_the_importance_field() {
         let tool = ToolHandler::test_tool_definition("store_memory").expect("store_memory tool");
@@ -310,6 +318,75 @@ mod tool_handler_tests {
                 "the advertised description must name every level ({level}): {description}"
             );
         }
+
+        let levels = importance
+            .get("enum")
+            .and_then(|v| v.as_array())
+            .unwrap_or_else(|| panic!("importance advertises a closed enum: {importance}"));
+        let advertised: Vec<&str> = levels
+            .iter()
+            .map(|v| v.as_str().expect("enum entry is a string"))
+            .collect();
+        assert_eq!(
+            advertised,
+            vec!["low", "medium", "high", "critical"],
+            "the enum must name exactly the four levels, in canonical spelling"
+        );
+    }
+
+    /// `store_memory` accepted `supersedes` together with `force`, which the CLI
+    /// refuses: the supersede arm never runs the conflict gate, so `force` was a
+    /// no-op the client believed had meaning. The handler now rejects the pair
+    /// before any write, with the CLI's own wording (#279 round 1).
+    #[tokio::test]
+    async fn store_memory_rejects_supersedes_together_with_force() {
+        let store = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = StoreWrapper::new(store.clone());
+        let handler = ToolHandler::new(store, "sup-force-proj".to_string(), Config::default());
+
+        let seed = seed_row(&wrapper, "sup-force-proj", "original fact");
+
+        let mut args = store_memory_args_full(
+            "replacement fact",
+            None,
+            Some(seed.id.as_str()),
+            Some("critical"),
+        );
+        args["force"] = serde_json::json!(true);
+
+        let err = handler
+            .call_tool_for_test("store_memory", args)
+            .await
+            .expect_err("supersedes together with force must be refused");
+        assert!(
+            err.message.contains("--supersedes") && err.message.contains("--force"),
+            "the refusal must use the CLI's wording, got: {}",
+            err.message
+        );
+
+        // Nothing was written: no replacement row, and the seed row is exactly
+        // as it was — still active, still at the default level, unlinked.
+        let seed_after = wrapper
+            .get(&seed.id, "sup-force-proj")
+            .expect("get")
+            .expect("seed row still present");
+        assert_eq!(seed_after.status, "active");
+        assert_eq!(seed_after.importance, "medium");
+        assert_eq!(seed_after.superseded_by, None);
+
+        let listed: Vec<serde_json::Value> = serde_json::from_value(
+            wrapper
+                .list("sup-force-proj", 20, None, None)
+                .expect("list"),
+        )
+        .expect("list payload is an array");
+        assert_eq!(
+            listed.len(),
+            1,
+            "the refused call must not have stored a row: {listed:?}"
+        );
+        assert_eq!(listed[0]["content"], "original fact");
     }
 
     /// Test that MCP server can be initialized.

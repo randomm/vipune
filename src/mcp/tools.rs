@@ -161,6 +161,15 @@ impl ToolHandler {
         };
 
         if let Some(supersedes_id) = &params.supersedes {
+            // `--supersedes` and `--force` are mutually exclusive on the CLI
+            // (`handle_add`); the MCP twin has to refuse them together too, or a
+            // client could ask for a supersede that skips the conflict gate the
+            // supersede path never runs. Checked before any write.
+            if params.force.unwrap_or(false) {
+                return Err(McpError::invalid_input(
+                    "Cannot use both --supersedes and --force flags together",
+                ));
+            }
             let value = self
                 .store
                 .supersede_with_row(&row, supersedes_id, importance_val)?;

@@ -71,9 +71,9 @@ impl StoreWrapper {
     /// them — so the frame that parses the strings is not the frame that drops
     /// one (#256, the MCP twin of the CLI defect #238). `force` decides the
     /// ingest policy; the other three are the parsed lifecycle columns.
-    pub(crate) fn ingest_with_lifecycle<'a>(
+    pub(crate) fn ingest_with_lifecycle(
         &self,
-        row: &NewMemory<'a>,
+        row: &NewMemory<'_>,
         force: bool,
         importance: MemoryImportance,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {

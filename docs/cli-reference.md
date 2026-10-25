@@ -486,8 +486,8 @@ vipune mcp
 - `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
 - `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
 - `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes` (see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for what a hidden `candidate` replacement means and how to activate it)
-- `importance` — initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive). `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row. Stored on the new row, including the row created by `supersedes`
-- `supersedes` — ID of memory to supersede (atomically replaces old memory)
+- `importance` — initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive; the tool schema advertises the four canonical spellings as an `enum`, and the handler accepts any casing). `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row. The level also affects search ranking: `critical` never recency-decays and `high` decays slowly, so they keep their recency score longer than `medium` and `low`. Stored on the new row, including the row created by `supersedes`. Importance is set at store time — `update_memory` does not change it yet. `supersedes` and `force` are mutually exclusive, as on the CLI: sending both is rejected with no row written
+- `supersedes` — ID of memory to supersede (atomically replaces old memory; mutually exclusive with `force`)
 - `force` — force store even if conflicts detected (default: `false`)
 
 `supersede_memory` accepts:

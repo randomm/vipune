@@ -34,7 +34,8 @@ pub struct StoreMemoryParams {
     /// `critical` are protected from prune.
     #[serde(default)]
     #[schemars(
-        description = "Importance: low, medium, high, critical (default: medium). Case-insensitive. high and critical are never demoted by prune."
+        description = "Importance: low, medium, high, critical (default: medium). Case-insensitive. The level affects search ranking: critical never recency-decays and high decays slowly. high and critical are never demoted by prune. Set at store time - update_memory does not change it.",
+        extend("enum" = &["low", "medium", "high", "critical"])
     )]
     pub importance: Option<String>,
 
