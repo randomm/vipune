@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-25
+
+### Bug Fixes
+
+- Honour --status on the superseding row of vipune add --supersedes ([#264](https://github.com/randomm/vipune/pull/264))
+
+### Documentation
+
+- AGENTS.md accuracy and completeness follow-ups ([#272](https://github.com/randomm/vipune/pull/272))
+
+### Features
+
+- Let the MCP store_memory tool set a memory's importance ([#279](https://github.com/randomm/vipune/pull/279))
+- Hide third-party error types behind vipune-owned variants in vipune::Error ([#273](https://github.com/randomm/vipune/pull/273))
+
+### Miscellaneous
+
+- Add a cargo-deny dependency advisory gate to CI ([#263](https://github.com/randomm/vipune/pull/263))
+
+
 ## [0.16.2] - 2026-10-24
 
 ### Documentation
