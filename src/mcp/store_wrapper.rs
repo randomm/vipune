@@ -117,7 +117,7 @@ impl StoreWrapper {
         }
     }
 
-    /// Supersede an existing memory with new content.
+    /// Supersede an existing memory with new content, at the `active` status.
     #[allow(dead_code)] // Used by supersede_memory tool
     pub(crate) fn supersede(
         &self,
@@ -127,6 +127,34 @@ impl StoreWrapper {
         memory_type: MemoryType,
         old_memory_id: &str,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
+        self.supersede_with_status(
+            project_id,
+            new_text,
+            metadata,
+            memory_type,
+            old_memory_id,
+            MemoryStatus::Active,
+        )
+    }
+
+    /// Supersede an existing memory with new content and an explicit lifecycle
+    /// status on the replacement row — what `store_memory`'s `supersedes` path
+    /// drives.
+    ///
+    /// The `supersedes` arm of `store_memory` used to call [`Self::supersede`]
+    /// with the status it had just parsed and validated still in a local, so a
+    /// caller passing `status: "candidate"` together with `supersedes` got an
+    /// `active` row and no warning (issue #258). The status is threaded to the
+    /// store here so the MCP surface matches the CLI.
+    pub(crate) fn supersede_with_status(
+        &self,
+        project_id: &str,
+        new_text: &str,
+        metadata: &str,
+        memory_type: MemoryType,
+        old_memory_id: &str,
+        status: MemoryStatus,
+    ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let mut store = self.0.lock().unwrap();
 
         let metadata_str = if metadata == "null" {
@@ -135,13 +163,17 @@ impl StoreWrapper {
             Some(metadata)
         };
 
-        let new_id = match store.supersede(
+        let new_id = match store.supersede_with_lifecycle(&crate::memory::NewSupersedingMemory {
             project_id,
-            new_text,
-            metadata_str,
+            content: new_text,
+            metadata: metadata_str,
             memory_type,
-            old_memory_id,
-        ) {
+            old_id: old_memory_id,
+            // No MCP tool takes an importance today, so the level is the store
+            // default bound by name — never the column DEFAULT (#238).
+            importance: crate::memory::lifecycle::MemoryImportance::default(),
+            status,
+        }) {
             Ok(id) => id,
             Err(err) => {
                 return Err(err.into());

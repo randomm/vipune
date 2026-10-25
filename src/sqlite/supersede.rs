@@ -10,14 +10,20 @@ use super::{Error, NewRow, Result, vec_to_blob};
 
 impl super::Database {
     /// Atomically supersede an old memory with a new one at the `medium`
-    /// importance default.
+    /// importance and `active` status defaults.
     ///
     /// In a single transaction:
     /// 1. Inserts the new memory
     /// 2. Sets old memory's status to 'superseded' and superseded_by to new ID
     ///
     /// Delegates to [`Self::supersede_with_importance`], the one supersede
-    /// INSERT, so the two paths cannot drift.
+    /// INSERT, so the two paths cannot drift — and binds both lifecycle columns
+    /// by name rather than leaving either to the column DEFAULT. This is the
+    /// entry point for a caller that names neither level nor status; a caller
+    /// that names them builds the [`NewRow`] itself (see
+    /// [`crate::MemoryStore::supersede_with_lifecycle`], which is how the CLI and
+    /// MCP supersede paths reach the INSERT).
+    #[allow(dead_code)] // Public API for library consumers (e.g., kide)
     pub fn supersede(
         &self,
         project_id: &str,
@@ -41,16 +47,18 @@ impl super::Database {
         )
     }
 
-    /// Atomically supersede an old memory with a new one carrying an explicit
-    /// importance level.
+    /// Atomically supersede an old memory with a new row whose lifecycle
+    /// columns are bound explicitly.
     ///
-    /// The new row's `importance` is bound, not left to the column DEFAULT:
-    /// `vipune add --supersedes <id> --importance critical` creates that row
-    /// through here, and an omitted column silently reset the level the
-    /// operator had just asked for — with it the prune protection that keys
-    /// off `high`/`critical` (issue #238). The caller supplies the canonical
-    /// spelling, and `active` for `row.status`: the replacement row is what
-    /// searches return.
+    /// Both `importance` and `status` come from `row`, never from the column
+    /// DEFAULT: `vipune add --supersedes <id> --importance critical --status
+    /// candidate` creates that row through here, and an omitted column silently
+    /// reset what the operator had just asked for — the level costs the row the
+    /// `high`/`critical` prune protection that keys off it (issue #238), the
+    /// status silently hid a `candidate` replacement under `active` (issue #258).
+    /// The caller supplies both in the canonical spelling, and the INSERT binds
+    /// them; a `candidate` replacement is deliberately hidden from default
+    /// search/list until `promote` makes it active.
     pub(crate) fn supersede_with_importance(
         &self,
         row: &NewRow<'_>,

@@ -3,7 +3,7 @@
 use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
-use crate::memory::{MemoryStore, NewMemory, UpdateParams};
+use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 use crate::memory_types::{AddResult, IngestPolicy};
 use crate::output::*;
 use crate::{config, embedding::EmbeddingEngine, temporal};
@@ -82,15 +82,18 @@ pub(crate) fn handle_add(
 
     if let Some(old_id) = supersedes {
         // This branch creates its own row inside the store's supersede
-        // transaction, so the validated level has to travel with it (issue #238).
-        let new_id = store.supersede_with_importance(
+        // transaction, so the validated level AND the validated status have to
+        // travel with it (issues #238, #258): handing over only the level left
+        // `--status candidate` silently stored as `active`.
+        let new_id = store.supersede_with_lifecycle(&NewSupersedingMemory {
             project_id,
-            text,
+            content: text,
             metadata,
-            memory_type_val,
+            memory_type: memory_type_val,
             old_id,
-            importance_val,
-        )?;
+            importance: importance_val,
+            status: status_val,
+        })?;
 
         if json {
             print_json(&AddResponse {

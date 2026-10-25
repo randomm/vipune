@@ -89,14 +89,17 @@ impl ToolHandler {
             None => "null".to_string(),
         };
 
-        // Handle supersedes path
+        // Handle supersedes path — the validated status has to travel with the
+        // new row or `status: "candidate"` is silently stored as `active`
+        // (issue #258, the MCP twin of the CLI defect).
         if let Some(supersedes_id) = &params.supersedes {
-            let value = self.store.supersede(
+            let value = self.store.supersede_with_status(
                 &self.project_id,
                 &params.text,
                 &metadata_str,
                 memory_type_val,
                 supersedes_id,
+                status_val,
             )?;
             return Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string(&value).map_err(McpError::from_serde_error)?,

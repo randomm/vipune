@@ -40,6 +40,7 @@ vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status
 - If `--force` used: skips conflict check and adds memory
 - If `--supersedes` used: atomically adds new memory and marks target as `superseded`
 - `--importance` is stored on the new row (also on the row created by `--supersedes`), and `export` writes that value so `import` restores it
+- `--status` is stored on the new row too, including the row created by `--supersedes`: `vipune add "new" --supersedes <id> --status candidate` inserts the replacement as `candidate` and marks the old row `superseded`. Because both rows then sit outside `active`, **neither appears in default `search`/`list`** (which filter to `status = 'active'`) — the replacement stays hidden until it is promoted, either by `vipune promote` (which promotes candidates that reach the retrieval threshold) or directly with `vipune update <id> --status active`. Fetch it by id with `vipune get <id>` in the meantime. Only `active` and `candidate` are valid here: `--status superseded`/`deprecated` is rejected with or without `--supersedes`, since the old row's `superseded` is set by the supersede transaction itself
 
 **Exit codes:**
 - `0` - Successfully added
@@ -90,6 +91,16 @@ Use --force to add anyway
 vipune add "Alice now works at Google" --supersedes abc123-old-memory-id
 ```
 This inserts the new memory and marks the old one as `superseded` in a single transaction.
+
+`--status` applies to the row this creates, so a replacement can be staged as a candidate first:
+
+```bash
+# Insert the replacement as a candidate (hidden from default search/list)
+vipune add "Alice now works at Google" --supersedes abc123-old-memory-id --status candidate
+```
+
+Until it is promoted, that replacement is reachable only by id (`vipune get <id>`) or an explicit
+candidate filter (`vipune search "alice" --status candidate` / `--include-candidates`).
 
 ---
 
@@ -332,6 +343,7 @@ vipune update <id> [text] [--metadata <json>]
 
 **Flags:**
 - `-m, --metadata <json>` - Replace metadata (must be valid JSON)
+- `--status <status>` - Set lifecycle status (`active`, `candidate`, `deprecated`, `superseded`); `superseded` is rejected with an error — that status is written only by `add --supersedes`
 
 **Behavior:**
 - If only `text` provided: generates new embedding, preserves metadata
@@ -453,7 +465,7 @@ vipune mcp
 - `text` — the information to remember (required)
 - `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
 - `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
-- `status` — initial status: `active` (default) or `candidate`
+- `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes`, so `status: "candidate"` together with `supersedes` leaves the replacement hidden from default `search_memories`/`list_memories` (both filter to `active`) until it is promoted
 - `supersedes` — ID of memory to supersede (atomically replaces old memory)
 - `force` — force store even if conflicts detected (default: `false`)
 
@@ -462,6 +474,8 @@ vipune mcp
 - `old_memory_id` — ID of the memory to supersede (required)
 - `memory_type` — optional type for the new memory (default: `fact`)
 - `metadata` — optional structured labels as JSON
+
+It has no `status` parameter, so the row it creates is always `active`. Stage a `candidate` replacement through `store_memory` with `supersedes` + `status` instead.
 
 `get_memory` accepts:
 - `id` — ID of the memory to retrieve (required)

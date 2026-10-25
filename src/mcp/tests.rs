@@ -524,4 +524,114 @@ mod tool_handler_tests {
         assert_eq!(memory_final.memory_type, MemoryType::Preference.as_str());
         assert_eq!(memory_final.status, MemoryStatus::Candidate.as_str());
     }
+
+    /// Issue #258: `store_memory`'s `supersedes` arm parsed and validated
+    /// `status` and then called the status-less `StoreWrapper::supersede`, so an
+    /// agent passing `status: "candidate"` together with `supersedes` got an
+    /// `active` replacement row with no warning — the MCP twin of the CLI drop.
+    ///
+    /// Drives `StoreWrapper` (the layer `store_memory`'s supersedes arm now
+    /// calls, per `test_update_memory_integration`) and reads the stored column
+    /// back via `StoreWrapper::get`, the read path that applies no status filter.
+    #[tokio::test]
+    async fn test_supersede_honours_the_requested_status() {
+        use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+
+        let store = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = StoreWrapper::new(store.clone());
+        let project_id = "status-proj";
+
+        let seeded = wrapper
+            .ingest_with_type_status(
+                project_id,
+                "original content",
+                "null",
+                true,
+                MemoryType::Fact,
+                MemoryStatus::Active,
+            )
+            .expect("seed add")
+            .to_string();
+        let old_id = serde_json::from_str::<serde_json::Value>(&seeded).unwrap()["id"]
+            .as_str()
+            .expect("seed id")
+            .to_string();
+
+        // The MCP equivalent of `add --supersedes <id> --status candidate`.
+        let replaced = wrapper
+            .supersede_with_status(
+                project_id,
+                "replacement content",
+                "null",
+                MemoryType::Fact,
+                &old_id,
+                MemoryStatus::Candidate,
+            )
+            .expect("supersede with status")
+            .to_string();
+        assert!(
+            replaced.contains("superseded"),
+            "the response labels the action, not the new row's lifecycle: {replaced}"
+        );
+        let new_id = serde_json::from_str::<serde_json::Value>(&replaced).unwrap()["id"]
+            .as_str()
+            .expect("new id")
+            .to_string();
+
+        let replacement = wrapper
+            .get(&new_id, project_id)
+            .expect("get")
+            .expect("replacement row stored");
+        assert_eq!(
+            replacement.status,
+            MemoryStatus::Candidate.as_str(),
+            "store_memory's supersedes arm must store the status it validated"
+        );
+
+        // The old row keeps the lifecycle the supersede transaction owns.
+        let replaced_row = wrapper
+            .get(&old_id, project_id)
+            .expect("get")
+            .expect("superseded row still readable");
+        assert_eq!(replaced_row.status, "superseded");
+        assert_eq!(replaced_row.superseded_by.as_deref(), Some(new_id.as_str()));
+
+        // Identical outcome to the CLI: a candidate replacement is invisible to
+        // the active-only default list on this surface too.
+        let listed = wrapper
+            .list(project_id, 20, None, None)
+            .expect("list")
+            .to_string();
+        assert!(
+            !listed.contains(&new_id),
+            "a candidate replacement must stay out of the default list: {listed}"
+        );
+
+        // And the status-less entry point (`supersede_memory`, which has no
+        // `status` parameter at all) still writes `active` by name.
+        let plain = wrapper
+            .supersede(
+                project_id,
+                "plain replacement",
+                "null",
+                MemoryType::Fact,
+                &new_id,
+            )
+            .expect("level-less supersede")
+            .to_string();
+        let plain_id = serde_json::from_str::<serde_json::Value>(&plain).unwrap()["id"]
+            .as_str()
+            .expect("plain id")
+            .to_string();
+        assert_eq!(
+            wrapper
+                .get(&plain_id, project_id)
+                .expect("get")
+                .expect("plain row stored")
+                .status,
+            MemoryStatus::Active.as_str(),
+            "the status-less wrapper keeps writing active explicitly"
+        );
+    }
 }
