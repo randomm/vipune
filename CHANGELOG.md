@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ## [0.17.0] - 2026-10-25
 
+### ⚠ Breaking Changes
+
+- `vipune::Error` no longer exposes third-party error types and is now `#[non_exhaustive]` — add a wildcard arm when matching on it. The `SQLite`, `SqliteModule`, `Json` and `Chrono` variants are removed: database failures surface as `Error::Database { message }` and `Error::DatabaseLocked` (call `Error::is_locked()` instead of matching the "database is locked" Display text), and JSON/date parse failures as `Error::InvalidInput`. `Tokenization`, `Onnx` and `HfHub` now carry a `message` field instead of the third-party error ([#273](https://github.com/randomm/vipune/pull/273))
+- `Database::count_rows_for_project` is removed; drive `Database::row_counts_by_project` — one `GROUP BY` pass returning `Vec<(String, usize)>`, which omits projects with zero rows ([#273](https://github.com/randomm/vipune/pull/273))
+- The minimum supported Rust version is now 1.88, declared as `rust-version` in `Cargo.toml` and gated in CI ([#277](https://github.com/randomm/vipune/pull/277))
+
 ### Bug Fixes
 
 - Honour --status on the superseding row of vipune add --supersedes ([#264](https://github.com/randomm/vipune/pull/264))
