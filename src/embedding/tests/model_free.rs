@@ -198,6 +198,11 @@ fn prefix_input_applies_e5_prefixes_exactly() {
 /// path is wired for the role-aware entry points without a model download
 /// (the recording embedder stands in for the engine, exactly as the
 /// `#[cfg(test)]` dispatch stands in for the production engine).
+///
+/// `use super::*` re-exports this file's top-level imports into the module and
+/// the module itself uses none of them, so the lint is silenced at the module —
+/// a per-item `#[allow]` would not cover the re-export.
+#[allow(unused_imports)]
 pub(crate) mod store_prefix_path {
     use super::*;
 

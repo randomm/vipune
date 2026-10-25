@@ -159,11 +159,13 @@ pub(crate) fn merge_vipune_groups(
                 result.insert(key, serde_json::json!([vipune_group(vipune_bin, event)]));
             }
             Some(val) => {
-                if let Some(arr) = val.as_array()
+                // One mutable borrow: the presence check takes a shared slice,
+                // so `arr` reborrows `val` once and the push needs no second
+                // `as_array_mut()` lookup.
+                if let Some(arr) = val.as_array_mut()
                     && !vipune_group_present(arr, &vipune_command)
-                    && let Some(arr_mut) = val.as_array_mut()
                 {
-                    arr_mut.push(vipune_group(vipune_bin, event));
+                    arr.push(vipune_group(vipune_bin, event));
                 }
             }
         }

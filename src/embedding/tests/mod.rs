@@ -5,4 +5,5 @@
 //! stays under the project 500-line cap.
 
 mod model_free;
+mod msrv_drift;
 mod real_model;
