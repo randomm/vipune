@@ -8,7 +8,7 @@ reciprocal-rank fusion), and expose the same store through an MCP server.
 The human-facing workflow (setup, testing, release process, debugging tips)
 lives in `CONTRIBUTING.md` — this file is agent-only doctrine.
 
-Last updated: 2026-09-23
+Last updated: 2026-10-24
 
 ## Context7 Protocol
 
@@ -26,7 +26,9 @@ This repo's real external surface (from `Cargo.toml`):
 - `hf-hub` — model download from the HuggingFace Hub (`ureq` feature)
 - `rusqlite` — bundled + `backup` features; SQLite is the only storage
 - `clap` — CLI argument parsing (derive)
-- `rmcp` / `tokio` / `schemars` — MCP server, feature-gated (`mcp`)
+- `rmcp` / `tokio` / `schemars` — MCP server, behind the `mcp` feature, which is
+  a **default** feature (`Cargo.toml`: `default = ["mcp"]`) — the default build
+  compiles them; use `--no-default-features` for a sync-only build
 - `thiserror` — error types; `serde`/`serde_json`, `chrono`, `uuid`,
   `base64`, `dirs`, `toml` — utilities
 
@@ -60,9 +62,17 @@ Before creating ANY code, ask:
 **CI is for VERIFICATION, not DISCOVERY.** All gates pass locally before
 `git push`. Never push to "see if CI catches anything."
 
+The per-gate commands are below; `CONTRIBUTING.md` (Quality Gates) documents
+the same chain for humans.
+
 ```bash
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
+
+Keep the `--all-targets` flag: `CONTRIBUTING.md`'s copy of the chain omits it,
+but CI runs clippy with it, and without it benches and integration-test targets
+are never linted. Also run the CI-only no-default-features pair (see Commands
+Reference) before pushing anything that touches `mcp` feature gates.
 
 Do NOT:
 
@@ -94,15 +104,21 @@ Do NOT:
 
 - **500-line hard cap per source file** — refactor into submodules past the
   limit (the `memory/`, `sqlite/`, `config/`, `hook/` splits exist because of
-  this)
+  this). Several tracked files are already over it (`src/main.rs`,
+  `src/sqlite/migrations.rs`, `src/commands/prune.rs`,
+  `src/commands/hook_install.rs`) — the cap is the target for new and touched
+  code, not a claim about the current tree.
 - **Synchronous library core** — `src/lib.rs` is fully synchronous,
-  stdlib-first; the async runtime (`tokio`) exists only inside the feature-gated
-  MCP server
+  stdlib-first; the async runtime (`tokio`) exists only inside the MCP server,
+  which is a **default** Cargo feature (`default = ["mcp"]`) — build with
+  `--no-default-features` for a sync-only, tokio-free tree
 - **Stdlib-first** — do not add a dependency without a concrete, vetted reason
 - No `TODO` / `FIXME` / `HACK` comments — the GitHub issue is the TODO; file
   an issue instead
 - Comments explain **WHY**, not WHAT
-- Errors via `thiserror`; no `unwrap()` in library code outside tests
+- Errors via `thiserror` for new error types; no `unwrap()` or `expect()` on
+  fallible results in library code outside tests. `Mutex::lock()` poisoning is
+  the one accepted exception
 
 ---
 
@@ -125,6 +141,9 @@ Do NOT:
   `chore/issue-N-short-slug` (issue numbers in branch names are fine — the
   rule is about commit subjects and PR titles only).
 - Squash-merge by default. No force-push to `main`.
+- **After a PR lands**: delete its branch (remote and local) and remove its
+  worktree. Close superseded release-plz PRs and delete their branches. Never
+  leave stale branches or worktrees behind.
 - **Release PRs**: release-plz opens `chore: release vX.Y.Z` PRs via
   `.github/workflows/release-plz.yml`; a release PR is armed — merging it
   publishes to crates.io irreversibly. If one must be abandoned, close it via
@@ -174,36 +193,70 @@ Orientation for agents new to the codebase (verify against the tree — the
 
 | Module | Responsibility |
 |--------|---------------|
-| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` **totally** onto the library `vipune::Config` — a test asserts every field maps, keep it exhaustive |
+| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` onto the library `vipune::Config`. Guarded by `test_to_lib_config_maps_all_fields_non_default` (asserts every current field maps with a non-default value) — but the asserts are hand-written, so a NEW field on either struct compiles without failing it: add it to the test by hand |
 | `src/lib.rs` | Synchronous library core; public API surface (`MemoryStore`, `MemoryType`, `MemoryStatus`, `Config`) |
-| `src/memory/` | Domain layer: `MemoryStore`, `crud`, `search`, `batch`, `lifecycle` (types/status) |
-| `src/sqlite/` | Storage: `Database`, `Memory` struct, `search`, `fts` (FTS5), `migrations`, `supersede`, `import`/`export_scan` |
+| `src/memory/` | Domain layer: `store` (`MemoryStore`), `add` (`NewMemory`, `MemoryStore::add_impl`/`insert_row` — every row the add path creates funnels through these), `crud`, `search`, `batch`, `lifecycle` (types/status) |
+| `src/memory_types.rs` | Store data types: `AddResult`, `ConflictMemory`, `IngestPolicy`, `BatchIngestItemResult`/`BatchIngestResult` (library-only public API) |
+| `src/sqlite/` | Storage: `Database`, `Memory` struct, `search`, `fts` (FTS5), `list`, `query_mod` (`map_row_to_memory`), `migrations`, `identity`, `supersede`, `import`/`export_scan` |
+| `src/sqlite/identity.rs` | `ModelIdentity` + migration marker read side (`read_identity`, `current_identity`, `assert_identity_ok`) |
+| `src/migration.rs` | Library-level model-switch migration: `migrate_model` (pre-flight token count → `write_migration_marker` → re-embed → record identity + clear marker in one transaction) |
 | `src/embedding/` | ONNX pipeline; `EMBED_MODEL_ID` / `EMBED_MODEL_REVISION` pin the model |
+| `src/embedding_profiles.rs` | `BUILTIN_PROFILES` / `profile_for` — per-model id + revision, token limit and query/passage prefixes (bge, `intfloat/multilingual-e5-small`) |
 | `src/config/` | Env + TOML loading, validation, paths |
 | `src/project.rs` | Git-root project detection/scoping |
 | `src/rrf.rs` | Reciprocal-rank fusion of dense + FTS results |
 | `src/temporal.rs` | Recency/decay scoring |
-| `src/hook/` | Hook install/run (embedding hook payloads) |
-| `src/commands/` | Subcommand handlers: add/search/get/delete/promote/prune/merge/reindex/import/export/backup/doctor |
-| `src/mcp/` | Feature-gated MCP server (`rmcp` + `tokio`) |
-| `src/errors.rs`, `src/output.rs` | `thiserror` errors; JSON/text output shaping |
+| `src/hook/` | Claude Code lifecycle event handling: `payload` (`HookEvent`), `run`, `extract`, `embedding` (placeholder vectors) |
+| `src/commands/` | clap subcommand enums in `mod.rs` (`Commands`, `ProjectCommands`, `HookCommands`) + handlers, incl. `hook_install.rs` (install/uninstall into `~/.claude/settings.json`) and `hook_run.rs` |
+| `src/mcp/` | MCP server (`rmcp` + `tokio`) behind the **default** `mcp` feature |
+| `src/errors.rs`, `src/output.rs` | `thiserror` errors; JSON/text response DTOs (`SearchResultItem`, `GetResponse`, …) |
 
 **Key invariants:**
 
-- **`Memory` read fan-in** — the `Memory` struct in `src/sqlite/` is the
-  single row-level type every command, store, and output path shares;
-  changes to its fields ripple across `memory/`, `commands/`, `output.rs`,
-  and `mcp/`.
+- **`Memory` read fan-in** — the `Memory` struct (`src/sqlite/mod.rs`) is the
+  single row-level type the read paths share. Its real consumers are
+  `src/sqlite/query_mod.rs` (`map_row_to_memory` — decodes columns **by
+  position**, so a column reorder silently mis-maps fields; `EMBEDDING_COLUMN`
+  in `src/sqlite/mod.rs` is the load-bearing index), `src/sqlite/list.rs`,
+  `src/sqlite/search.rs`, `src/sqlite/fts.rs`, `src/commands/prune.rs`,
+  `src/memory/crud.rs`, `src/memory/search.rs`, `src/rrf.rs`
+  and `src/mcp/helpers.rs` (`format_memory_json`).
+  `src/output.rs` does **not** import `Memory` — it declares its own response
+  DTOs, which `src/commands/handlers.rs` fills by projecting `Memory` fields.
+  So a field rename/retype does break those projections, but the compiler
+  catches it in `handlers.rs`, not in `output.rs`.
+- **`Memory` stores `memory_type`/`status`/`importance` as `String`**, not as
+  enums (`src/sqlite/mod.rs`). They are validated only at input boundaries, by
+  `MemoryType`/`MemoryStatus`/`MemoryImportance::from_str`
+  (`src/memory/lifecycle.rs`) called from `src/commands/handlers.rs`,
+  `src/commands/mod.rs`, `src/commands/import.rs` and `src/mcp/tools.rs`. A new
+  entry point that skips that validation writes unvalidated strings straight
+  into the row.
+- **`Database::conn()` is a leaky storage boundary** (`src/sqlite/mod.rs`) — it
+  hands out the raw `rusqlite::Connection`, and `src/commands/import.rs`,
+  `src/commands/export.rs`, `src/commands/backup.rs`, `src/commands/promote.rs`,
+  `src/commands/reindex.rs`, `src/commands/prune.rs` and `src/migration.rs`
+  bypass `Database` to issue raw SQL against it. New queries belong on `Database`
+  unless they need a handle only it can give (e.g. the Online Backup API in
+  `backup.rs`).
 - **Migrations use `PRAGMA user_version`** — version is bumped only after a
   successful migration (the pragma is not transactional); tests assert
   `user_version == total_migrations()` and that a failing migration leaves the
-  version unchanged. Never edit an applied migration — append a new one.
+  version unchanged. Each migration runs inside a manual `BEGIN EXCLUSIVE` …
+  `COMMIT` (with `ROLLBACK` on error) and `user_version` is written afterwards
+  via `pragma_update`. `migrations()` is a positional `Vec`, so **version ==
+  index + 1**: never renumber, insert before, or remove an applied migration —
+  append a new one.
 - **Embedding pinned revision** — the default model downloads at the exact
   `EMBED_MODEL_REVISION` commit for reproducibility. The test
   `test_air_gapped_docs_and_ci_cache_match_embed_revision` pins that the
   README's air-gapped instructions **and** the CI `HF_CACHE_KEY`
   (`hf-hub-bge-small-en-v1.5-<sha-prefix>` in `ci.yml`) reference the same
   revision — if you bump the revision, update both or the drift test fails.
+  The same test also pins the **e5 profile**: `HF_CACHE_KEY_E5`
+  (`hf-hub-multilingual-e5-small-<sha-prefix>`) and the README `--revision` line
+  for `intfloat/multilingual-e5-small`, so bumping either profile's revision
+  means updating both cache keys plus the README.
 - **Release config**: `release-plz.toml` sets `features_always_increment_minor
   = true` (0.x crate, Conventional-Commits reading: `feat` → minor) and
   publishes to crates.io using the `CARGO_REGISTRY_TOKEN` repository secret
@@ -224,6 +277,10 @@ vipune add 'query semantics work best with [domain] [component] patterns'
 # Search by meaning
 vipune search "query patterns effective"
 ```
+
+`vipune` is a **bash binary on `$PATH`**, not a Pi tool or MCP server — invoke
+it via bash (`vipune search "…"`, `vipune add "…"`); a structured tool call
+named `vipune` has no handler and fails.
 
 Store conventions, gotchas, and decisions as you work so the next session
 starts smarter. One claim per memory. Never store secrets (tokens,
@@ -267,6 +324,8 @@ Before creating documentation, ask: "Will this be true in 200 PRs?"
 | All tests | `cargo test` |
 | A single test | `cargo test <name>` |
 | Ignored real-model tests | `cargo test -- --ignored` |
+| No-default-features lint + tests (CI runs both) | `cargo clippy --no-default-features --all-targets -- -D warnings` then `cargo test --no-default-features` |
+| Benchmarks (criterion target `db_search`, `benches/db_search.rs`) | `cargo bench` |
 | Release build | `cargo build --release` |
 | Run the CLI locally | `cargo run -- add "test memory"` |
 | Query semantics docs | see `docs/search.md`, `docs/vipune-query-guide.md` |
