@@ -62,17 +62,18 @@ Before creating ANY code, ask:
 **CI is for VERIFICATION, not DISCOVERY.** All gates pass locally before
 `git push`. Never push to "see if CI catches anything."
 
-The per-gate commands are below; `CONTRIBUTING.md` (Quality Gates) documents
-the same chain for humans.
+The per-gate commands are below — use them, not `CONTRIBUTING.md`'s shorter
+copy, which omits `--all-targets`.
 
 ```bash
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cargo clippy --no-default-features --all-targets -- -D warnings
+cargo test --no-default-features
 ```
 
-Keep the `--all-targets` flag: `CONTRIBUTING.md`'s copy of the chain omits it,
-but CI runs clippy with it, and without it benches and integration-test targets
-are never linted. Also run the CI-only no-default-features pair (see Commands
-Reference) before pushing anything that touches `mcp` feature gates.
+`--all-targets` is what CI runs; without it benches and integration-test
+targets are never linted. Run both pairs — `default = ["mcp"]`, so the
+`--no-default-features` tree is a real second build, not an edge case.
 
 Do NOT:
 
@@ -104,10 +105,9 @@ Do NOT:
 
 - **500-line hard cap per source file** — refactor into submodules past the
   limit (the `memory/`, `sqlite/`, `config/`, `hook/` splits exist because of
-  this). Several tracked files are already over it (`src/main.rs`,
-  `src/sqlite/migrations.rs`, `src/commands/prune.rs`,
-  `src/commands/hook_install.rs`) — the cap is the target for new and touched
-  code, not a claim about the current tree.
+  this). Several tracked files are already over it (`wc -l src/**/*.rs` to
+  check) — the cap is the target for new and touched code, not a claim about
+  the current tree.
 - **Synchronous library core** — `src/lib.rs` is fully synchronous,
   stdlib-first; the async runtime (`tokio`) exists only inside the MCP server,
   which is a **default** Cargo feature (`default = ["mcp"]`) — build with
@@ -142,8 +142,8 @@ Do NOT:
   rule is about commit subjects and PR titles only).
 - Squash-merge by default. No force-push to `main`.
 - **After a PR lands**: delete its branch (remote and local) and remove its
-  worktree. Close superseded release-plz PRs and delete their branches. Never
-  leave stale branches or worktrees behind.
+  worktree. Never leave stale branches or worktrees behind. For release-plz
+  PRs see `CONTRIBUTING.md` (Release Process hard rules).
 - **Release PRs**: release-plz opens `chore: release vX.Y.Z` PRs via
   `.github/workflows/release-plz.yml`; a release PR is armed — merging it
   publishes to crates.io irreversibly. If one must be abandoned, close it via
@@ -188,13 +188,14 @@ label, and notify the operator.
 
 ## Architecture Notes
 
-Orientation for agents new to the codebase (verify against the tree — the
-`Memory` struct and these paths are load-bearing):
+The authoritative module map is `docs/architecture.md` (Module Map). This
+section carries only the invariants an agent cannot recover from the compiler —
+verify against the tree; the `Memory` struct and these paths are load-bearing:
 
 | Module | Responsibility |
 |--------|---------------|
-| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` onto the library `vipune::Config`. Guarded by `test_to_lib_config_maps_all_fields_non_default` (asserts every current field maps with a non-default value) — but the asserts are hand-written, so a NEW field on either struct compiles without failing it: add it to the test by hand |
-| `src/lib.rs` | Synchronous library core; public API surface (`MemoryStore`, `MemoryType`, `MemoryStatus`, `Config`) |
+| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` onto the library `vipune::Config`. Guarded by `test_to_lib_config_maps_all_fields_non_default` (asserts every current field maps with a non-default value) — but the asserts are hand-written, so a NEW field on either struct compiles without failing it: add it to the test by hand. The consequence is not a stale test — `to_lib_config()` feeds only `run_mcp`, so an unmapped field silently takes its `Default` in MCP sessions while the CLI honours the configured value. The guard is `#[cfg(feature = "mcp")]`, so it does not run under `--no-default-features` |
+| `src/lib.rs` | Synchronous library core; public API surface (`MemoryStore`, `MemoryType`, `MemoryStatus`, `Config`). Also re-exports `sqlite::Memory` |
 | `src/memory/` | Domain layer: `store` (`MemoryStore`), `add` (`NewMemory`, `MemoryStore::add_impl`/`insert_row` — every row the add path creates funnels through these), `crud`, `search`, `batch`, `lifecycle` (types/status) |
 | `src/memory_types.rs` | Store data types: `AddResult`, `ConflictMemory`, `IngestPolicy`, `BatchIngestItemResult`/`BatchIngestResult` (library-only public API) |
 | `src/sqlite/` | Storage: `Database`, `Memory` struct, `search`, `fts` (FTS5), `list`, `query_mod` (`map_row_to_memory`), `migrations`, `identity`, `supersede`, `import`/`export_scan` |
@@ -214,24 +215,45 @@ Orientation for agents new to the codebase (verify against the tree — the
 **Key invariants:**
 
 - **`Memory` read fan-in** — the `Memory` struct (`src/sqlite/mod.rs`) is the
-  single row-level type the read paths share. Its real consumers are
-  `src/sqlite/query_mod.rs` (`map_row_to_memory` — decodes columns **by
-  position**, so a column reorder silently mis-maps fields; `EMBEDDING_COLUMN`
-  in `src/sqlite/mod.rs` is the load-bearing index), `src/sqlite/list.rs`,
-  `src/sqlite/search.rs`, `src/sqlite/fts.rs`, `src/commands/prune.rs`,
-  `src/memory/crud.rs`, `src/memory/search.rs`, `src/rrf.rs`
-  and `src/mcp/helpers.rs` (`format_memory_json`).
+  single row-level type the read paths share — e.g. `src/sqlite/query_mod.rs`,
+  `src/sqlite/list.rs`, `src/sqlite/fts.rs`, `src/sqlite/export_scan.rs`,
+  `src/commands/prune.rs`, `src/memory/crud.rs`, `src/rrf.rs`,
+  `src/mcp/helpers.rs` (not exhaustive; `rg 'sqlite::Memory'` is).
+  `map_row_to_memory` (`src/sqlite/query_mod.rs`) is the single source of truth
+  for the row shape: it decodes columns **by position** against a 13-column
+  SELECT duplicated verbatim across `query_mod.rs`, `list.rs`, `search.rs`,
+  `fts.rs`, `export_scan.rs` and `prune.rs`, so a column reorder silently
+  mis-maps fields. `EMBEDDING_COLUMN` in `src/sqlite/mod.rs` is the load-bearing
+  index — its value, not a name, is what binds the decoder to the projection.
   `src/output.rs` does **not** import `Memory` — it declares its own response
   DTOs, which `src/commands/handlers.rs` fills by projecting `Memory` fields.
   So a field rename/retype does break those projections, but the compiler
   catches it in `handlers.rs`, not in `output.rs`.
 - **`Memory` stores `memory_type`/`status`/`importance` as `String`**, not as
-  enums (`src/sqlite/mod.rs`). They are validated only at input boundaries, by
-  `MemoryType`/`MemoryStatus`/`MemoryImportance::from_str`
-  (`src/memory/lifecycle.rs`) called from `src/commands/handlers.rs`,
-  `src/commands/mod.rs`, `src/commands/import.rs` and `src/mcp/tools.rs`. A new
-  entry point that skips that validation writes unvalidated strings straight
-  into the row.
+  enums (`src/sqlite/mod.rs`) — no type and no CHECK constraint backs any of
+  them. Validation happens only at the **add** entry points, via
+  `MemoryType`/`MemoryStatus::from_str` and `MemoryImportance::from_str`
+  (`src/memory/lifecycle.rs`) in `src/commands/handlers.rs`,
+  `src/commands/mod.rs` and `src/commands/import.rs`; `src/mcp/tools.rs`
+  validates type and status only. Writers that bypass it: `src/hook/run.rs`
+  binds `"observation"`/`"candidate"` literals through
+  `Database::insert_with_hash` (`&str` params, `src/sqlite/mod.rs`);
+  `run_import` binds `ImportRow.memory_type`/`status` verbatim from JSON and
+  round-trips only `importance` through `from_str`; the update path takes
+  `Option<&str>` (`UpdateOptions`, `src/sqlite/update.rs`) and
+  `src/commands/promote.rs` writes `status: Some("active")` unvalidated, as
+  does the `"active"` literal in `build_filters` (`src/sqlite/query_mod.rs`).
+  The sinks (`src/sqlite/insert.rs`, `supersede.rs`) take `&str` for all three
+  columns, so a new entry point writes unvalidated strings unless it validates
+  itself — and those same input boundaries are the only place a secret can be
+  refused, since `content`/`metadata` land unredacted in a plain SQLite file
+  (see *Never store secrets* below).
+- **`importance` has a second, independent vocabulary on the read side** —
+  `temporal::ImportanceLevel::parse` plus the raw `'high'`/`'critical'` SQL
+  literals in `src/commands/prune.rs`. Nothing structural links the two enums:
+  only `test_importance_vocabularies_agree_with_the_read_side`
+  (`src/memory/lifecycle.rs`). A new level must be added to both, or the decay
+  and prune read paths silently reject rows the write side accepted.
 - **`Database::conn()` is a leaky storage boundary** (`src/sqlite/mod.rs`) — it
   hands out the raw `rusqlite::Connection`, and `src/commands/import.rs`,
   `src/commands/export.rs`, `src/commands/backup.rs`, `src/commands/promote.rs`,
@@ -278,9 +300,10 @@ vipune add 'query semantics work best with [domain] [component] patterns'
 vipune search "query patterns effective"
 ```
 
-`vipune` is a **bash binary on `$PATH`**, not a Pi tool or MCP server — invoke
-it via bash (`vipune search "…"`, `vipune add "…"`); a structured tool call
-named `vipune` has no handler and fails.
+`vipune` is a **bash binary on `$PATH`** — invoke it via bash
+(`vipune search "…"`, `vipune add "…"`). Tool-integration mechanics (MCP
+config, Claude Desktop, absolute binary paths) live in
+[`docs/agent-integration.md`](docs/agent-integration.md).
 
 Store conventions, gotchas, and decisions as you work so the next session
 starts smarter. One claim per memory. Never store secrets (tokens,
@@ -324,7 +347,7 @@ Before creating documentation, ask: "Will this be true in 200 PRs?"
 | All tests | `cargo test` |
 | A single test | `cargo test <name>` |
 | Ignored real-model tests | `cargo test -- --ignored` |
-| No-default-features lint + tests (CI runs both) | `cargo clippy --no-default-features --all-targets -- -D warnings` then `cargo test --no-default-features` |
+| No-default-features lint + tests (CI runs both; see Pre-Push Quality Gates) | `cargo clippy --no-default-features --all-targets -- -D warnings` then `cargo test --no-default-features` |
 | Benchmarks (criterion target `db_search`, `benches/db_search.rs`) | `cargo bench` |
 | Release build | `cargo build --release` |
 | Run the CLI locally | `cargo run -- add "test memory"` |

@@ -37,7 +37,7 @@ pub(crate) fn corrupt_embedding_error(id: String, reason: Error) -> rusqlite::Er
 /// memory id, surfaced via the domain error carried as the source of the row-
 /// level `FromSqlConversionFailure` (issue #186).
 pub fn map_row_to_memory(row: &Row) -> SqliteResult<Memory> {
-    // Positions match the canonical 12-column SELECT (see EMBEDDING_COLUMN).
+    // Positions match the canonical 13-column SELECT (see EMBEDDING_COLUMN).
     let id: String = row.get(0)?;
     let blob: Vec<u8> = row.get(EMBEDDING_COLUMN)?;
     let embedding =

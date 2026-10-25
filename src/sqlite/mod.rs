@@ -172,8 +172,9 @@ impl From<rusqlite::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// 0-indexed column position of `embedding` in the canonical 12-column memory row shape
-/// (see issue #186). NOT applicable to projections that omit leading columns.
+/// 0-indexed column position of `embedding` in the canonical 13-column memory
+/// row shape (see issue #186). NOT applicable to projections that omit leading
+/// columns.
 pub(crate) const EMBEDDING_COLUMN: usize = 4;
 
 /// SQLite database backend for vipune.

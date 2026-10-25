@@ -15,24 +15,32 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 
 | Module | Purpose |
 |--------|---------|
-| `src/main.rs` | CLI entry point, argument parsing with clap, command dispatch (add, search, get, list, delete, update, version) |
-| `src/commands.rs` | Command dispatch logic, CLI argument handling |
-| `src/memory/` | Memory store CRUD operations and search (replaces old `src/memory.rs`) |
+| `src/main.rs` | CLI entry point, argument parsing with clap, command dispatch (add, search, get, list, delete, update, version); `to_lib_config()` maps the CLI config onto `vipune::Config` |
+| `src/commands/` | Command handlers and the clap subcommand enums in `mod.rs` (`Commands`, `ProjectCommands`, `HookCommands`), incl. `hook_install.rs` and `hook_run.rs` |
+| `src/memory/` | Domain layer: store, add, CRUD, search, batch, lifecycle |
 | `src/memory/mod.rs` | Module re-exports |
 | `src/memory/store.rs` | Core MemoryStore struct, `&mut self` embedding requirements |
+| `src/memory/add.rs` | `NewMemory`, `MemoryStore::add_impl`/`insert_row` — every row the add path creates funnels through these |
 | `src/memory/crud.rs` | Add, get, list, update, delete operations with conflict detection |
 | `src/memory/search.rs` | Search orchestration, hybrid search coordination |
-| `src/memory/tests.rs` | Memory module unit tests |
-| `src/sqlite/` | SQLite persistence layer (replaces old `src/sqlite.rs`) |
-| `src/sqlite/mod.rs` | Module re-exports |
+| `src/memory/lifecycle.rs` | `MemoryType`/`MemoryStatus`/`MemoryImportance` parsing — the validation at the add entry points |
+| `src/sqlite/` | SQLite persistence layer |
+| `src/sqlite/mod.rs` | `Database`, the `Memory` row type, and `EMBEDDING_COLUMN` |
 | `src/sqlite/embedding.rs` | BLOB I/O, cosine similarity computation |
 | `src/sqlite/fts.rs` | FTS5 full-text search, BM25, triggers, auto-migration |
 | `src/sqlite/search.rs` | Hybrid search coordination, semantic + BM25 |
-| `src/embedding.rs` | ONNX model loading and text-to-vector conversion using bge-small-en-v1.5 and HuggingFace tokenizer |
+| `src/sqlite/query_mod.rs` | `map_row_to_memory` — the single source of truth for the positional row shape |
+| `src/sqlite/migrations.rs` | `PRAGMA user_version` migrations (positional `Vec`; version == index + 1) |
+| `src/embedding/` | ONNX model loading and text-to-vector conversion using bge-small-en-v1.5 and HuggingFace tokenizer |
 | `src/project.rs` | Project auto-detection from git remote, environment variable, or working directory |
 | `src/config/` | Configuration loading from TOML files, environment variables, and validation |
 | `src/errors.rs` | Unified error types wrapping rusqlite, ONNX, tokenizer, and HuggingFace Hub errors |
-| `src/memory_types.rs` | Shared type definitions (AddResult, ConflictMemory) |
+| `src/memory_types.rs` | Shared type definitions (AddResult, ConflictMemory, IngestPolicy, BatchIngestItemResult, BatchIngestResult) — library-only public API |
+| `src/migration.rs` | Library-level model-switch migration: `migrate_model` (pre-flight token count → `write_migration_marker` → re-embed → record identity + clear marker in one transaction) |
+| `src/embedding_profiles.rs` | `BUILTIN_PROFILES` / `profile_for` — per-model id + revision, token limit and query/passage prefixes (bge, `intfloat/multilingual-e5-small`) |
+| `src/sqlite/identity.rs` | `ModelIdentity` + migration marker read side (`read_identity`, `current_identity`, `assert_identity_ok`) |
+| `src/hook/` | Claude Code lifecycle event handling: `payload` (`HookEvent`), `run`, `extract`, `embedding` (placeholder vectors). Install/uninstall live in `src/commands/hook_install.rs` |
+| `src/mcp/` | MCP server (`rmcp` + `tokio`) behind the **default** `mcp` feature |
 | `src/output.rs` | JSON response formatting for CLI output |
 | `src/temporal.rs` | Recency decay scoring with exponential/linear decay functions for search result weighting |
 | `src/rrf.rs` | Reciprocal Rank Fusion (RRF) algorithm for merging semantic and BM25 search rankings |
@@ -172,7 +180,7 @@ Model files are cached in the standard HuggingFace Hub cache at `~/.cache/huggin
 
 **No daemon** — with one exception: `vipune mcp` runs as a persistent JSON-RPC server until stdin closes. All other commands exit after operation. State lives only in SQLite; no in-memory caches survive between invocations.
 
-**File size limits**: Source files capped at 500 lines (exceptions justified). Keeps modules focused, testable, and maintainable.
+**File size limits**: Source files capped at 500 lines (exceptions justified — several tracked files are already over; check with `wc -l src/**/*.rs`). Keeps modules focused, testable, and maintainable. The 500-line cap and the pre-push gate chain are authoritative in `AGENTS.md` (Code Style & Conventions / Pre-Push Quality Gates).
 
 **Zero technical debt**: No TODO/FIXME/HACK comments in src/. Incomplete work tracked in GitHub issues, not left in code.
 

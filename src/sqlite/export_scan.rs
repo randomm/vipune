@@ -260,7 +260,7 @@ mod tests {
         )
         .unwrap();
 
-        // Verify every column via the canonical 12-column mapper (which decodes
+        // Verify every column via the canonical 13-column mapper (which decodes
         // the blob and would fail on any shape mismatch) plus a raw BLOB check.
         let conn = db.conn();
         let memory: crate::sqlite::Memory = conn

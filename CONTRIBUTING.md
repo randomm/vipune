@@ -61,17 +61,25 @@ For writing tests, see the [Testing Guide](docs/testing.md) for:
 
 ## Quality Gates
 
-All code changes must pass these checks before PR submission:
+All code changes must pass these checks before PR submission (this is the
+chain CI runs — `--all-targets` lints benches and integration-test targets too):
 
 ```bash
-cargo fmt --check     # Code formatting
-cargo clippy -- -D warnings  # Linting (all warnings are errors)
-cargo test            # All tests pass
+cargo fmt --check                    # Code formatting
+cargo clippy --all-targets -- -D warnings  # Linting (all warnings are errors)
+cargo test                           # All tests pass
 ```
 
 Run all checks together:
 ```bash
-cargo fmt --check && cargo clippy -- -D warnings && cargo test
+cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+```
+
+`mcp` is a **default** feature, so CI also builds the sync-only tree — run the
+second pair before pushing:
+```bash
+cargo clippy --no-default-features --all-targets -- -D warnings
+cargo test --no-default-features
 ```
 
 **These checks must pass locally before pushing.** CI verifies, but does not discover — fix issues locally first.
