@@ -1,13 +1,11 @@
 # Dependency-advisory and feature gate (issue #253).
 #
-# Run locally before pushing — the check names are part of the command, not
-# optional. Bare `cargo deny check` also runs `licenses`, which is deliberately
-# unconfigured below and would reject every license in the graph:
+# The check names are part of the command: bare `cargo deny check` also runs
+# `licenses`, which is unconfigured here and would reject every license.
 #   cargo deny --locked check advisories bans
-# The --locked flag makes the check resolve against the committed Cargo.lock,
-# so the gate cannot pass on a graph nobody ships.
+# --locked resolves against the committed Cargo.lock, so the gate cannot pass on
+# a graph nobody ships.
 #
-# Only [advisories] and the base64 feature ban are configured on purpose.
 # [licenses] and [sources] are deliberately absent: unconfigured they reject
 # every license in the graph, so adding them is a separate decision.
 
@@ -15,49 +13,25 @@
 db-urls = ["https://github.com/RustSec/advisory-db.git"]
 # A yanked release that a release build still compiles is a real problem.
 yanked = "deny"
-# Fail closed rather than audit against an advisory database cargo-deny cannot
-# refresh: with a value set, a database whose last fetch is older than this
-# aborts the check instead of silently reporting nothing. Keeps a network
-# outage or a stale CI cache from turning the gate green by checking nothing.
+# Only read under --offline/--frozen (Fetch::Disallow, check.rs:313); the online
+# run re-fetches every time and a failed fetch is itself the error.
 maximum-db-staleness = "P2D"
-# Unmaintained/unsound advisories are only acted on for crates vipune depends
-# on directly; transitive ones (paste via tokenizers, rand via hf-hub) would
-# redden PRs for upstream churn nothing in this repo can fix. No direct
-# dependency currently carries an unmaintained or unsound advisory: dirs'
-# RUSTSEC-2020-0053 was withdrawn in 2021 (cargo-deny skips withdrawn rows)
-# and every tokio unsound advisory is patched at the version Cargo.lock
-# resolves, so "workspace" and "all" differ only on those transitive crates.
+# Transitive unmaintained/unsound advisories (paste via tokenizers, rand via
+# hf-hub) are upstream churn this repo cannot fix; direct deps stay covered.
 unmaintained = "workspace"
 unsound = "workspace"
-# An ignore row whose advisory stops firing is reported as
-# `advisory-not-detected`, which cargo-deny raises as an error by default: a
-# lockfile fix and the row it supersedes must therefore land in the same
-# commit, and a row cannot rot silently. cargo-deny 0.20.2 has no key to
-# change that level (`unused-ignored-advisory` is rejected as an unexpected
-# key), so this file is coupled to Cargo.lock by the default lint, not by a
-# setting here.
-# Nothing ignored: rmcp is at 1.8.0, past the 1.4.0 fix for RUSTSEC-2026-0189
-# (Host-header validation in the Streamable HTTP server transport). vipune's
-# MCP server speaks stdio (`transport-io`), which the advisory says is
-# unaffected, but the patched version is used regardless.
+# 0.20.2 defaults this to warn (advisories/cfg.rs:266), so an ignore row that
+# stops matching would rot silently; deny makes a stale row fail the gate.
+unused-ignored-advisory = "deny"
+# Nothing ignored: rmcp 1.8.0 is past the 1.4.0 fix for RUSTSEC-2026-0189
+# (Host-header validation, Streamable HTTP transport); vipune's MCP server is
+# stdio-only (transport-io), which the advisory says is unaffected.
 ignore = []
 
 [bans]
-# Cargo.lock resolves several copies of the same crate (base64, webpki-roots)
-# through independent upstream constraints; deduplicating them needs upstream
-# changes, not a vipune change, so this is not a gate here.
+# Cargo.lock resolves several copies of base64 and webpki-roots through
+# independent upstream constraints; deduplicating needs upstream changes.
 multiple-versions = "allow"
-# Skip the two base64 copies that are *not* the one vipune decodes with, so the
-# bans report stays about 0.23: their inclusion graphs (0.13.1 under
-# tokenizers/spm_precompiled, 0.22.1 under rmcp/ureq/ureq-proto) are printed as
-# `skipped-by-root` notes instead of being evaluated against the ban below.
-# Verified against cargo-deny 0.20.2: with these rows deleted the gate stays
-# green and `cargo deny check bans` prints no notes at all, so they suppress
-# noise, not failures — the ban below is what protects the decode path.
-skip-tree = [
-    { crate = "base64@0.13.1", reason = "transitive of tokenizers/spm_precompiled; not the crate src/commands/import.rs decodes with" },
-    { crate = "base64@0.22.1", reason = "transitive of rmcp/ureq/ureq-proto; not the crate src/commands/import.rs decodes with" },
-]
 features = [
     # vipune decodes the `embedding` field of untrusted import files
     # (src/commands/import.rs) via base64 0.23, which Cargo.toml opts out of

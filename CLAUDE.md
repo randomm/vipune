@@ -69,7 +69,6 @@ This creates persistent memory across tasks — store patterns, conventions, got
 | Format check | `cargo fmt --check` |
 | Format code | `cargo fmt` |
 | All gates | `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny --locked check advisories bans` |
-| Dependency advisories | `cargo deny --locked check advisories bans` |
 | Build release | `cargo build --release` |
 
 ## Key Constraints

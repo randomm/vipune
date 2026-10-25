@@ -41,6 +41,18 @@ impl ToolHandler {
     pub(crate) fn config(&self) -> &crate::config::Config {
         &self.config
     }
+
+    /// `#[tool_router]` generates a **private** `tool_router()` constructor
+    /// (rmcp-macros 1.8.0 src/tool_router.rs:63-67 emits `#vis fn tool_router()`
+    /// and `#vis` is filled only from the macro's own `vis = "..."` attribute),
+    /// so the generated item is not reachable from `mcp::tests`. This thin
+    /// wrapper gives the tests a crate-visible path to the router the server
+    /// actually serves; rename the generated one and this line, not the tests,
+    /// is what breaks.
+    #[cfg(test)]
+    pub(crate) fn test_tool_router() -> rmcp::handler::server::router::tool::ToolRouter<Self> {
+        Self::tool_router()
+    }
 }
 
 #[tool_router]

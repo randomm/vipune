@@ -272,7 +272,6 @@ Before creating documentation, ask: "Will this be true in 200 PRs?"
 | Lint | `cargo clippy --all-targets -- -D warnings` |
 | All tests | `cargo test` |
 | A single test | `cargo test <name>` |
-| Dependency advisories + denied features | `cargo deny --locked check advisories bans` |
 | Ignored real-model tests | `cargo test -- --ignored` |
 | Release build | `cargo build --release` |
 | Run the CLI locally | `cargo run -- add "test memory"` |

@@ -335,9 +335,13 @@ What it covers, and what it deliberately does not:
   (criterion, tempfile, tokio) are included by default.
 - **Yanked releases** — `yanked = "deny"` fails the build for a dependency release that has been
   withdrawn from crates.io.
-- **Stale advisory database** — `maximum-db-staleness = "P2D"` aborts the check when the local
-  RustSec clone is more than two days old, so a network outage or a frozen CI cache cannot turn the
-  gate green by checking nothing. The default is to fetch and carry on; this makes it fail closed.
+- **Advisory database freshness** — CI runs online, so cargo-deny re-fetches the RustSec
+  database on every run and a fetch that fails is reported as an error (`git.rs:126` returns
+  `Err` on a failed clone/fetch, and `check.rs:346` propagates it). `maximum-db-staleness = "P2D"`
+  is a *different* mechanism: cargo-deny only consults it when fetching is disabled — the
+  `Fetch::Disallow` branch selected by `--offline`/`--frozen` (`check.rs:313`, `db.rs:62`) — where
+  it aborts if the local clone's last fetch is older than two days. It does not affect the online
+  CI run.
 - **Unmaintained / unsound** — reported for direct dependencies only (`"workspace"`). Transitive
   ones (paste via tokenizers, rand via hf-hub) would redden PRs for upstream churn this repo cannot
   fix. No current direct dependency carries either kind of advisory: dirs' RUSTSEC-2020-0053 was
@@ -345,9 +349,10 @@ What it covers, and what it deliberately does not:
   resolved version.
 - **Triage rows** — each ignored advisory carries an `id`, a `reason` and the upstream blocker. An
   `ignore` row whose advisory stops firing is reported by cargo-deny's `advisory-not-detected`
-  lint, an error by default, so a lockfile fix and the row it supersedes must be committed
-  together. cargo-deny 0.20.2 has no key to change that lint's level; the behaviour is the default,
-  not a setting in `deny.toml`.
+  lint. In 0.20.2 that lint defaults to **warn**, which would let a stale row rot silently, so
+  `deny.toml` sets `unused-ignored-advisory = "deny"` explicitly and a fabricated ignore id fails
+  the gate. (A row naming an id that is absent from the database *itself* is `unknown-advisory`,
+  which is a warning and does not fail the run.)
 - **Denied features** — `base64` 0.23 may not resolve with `simd-unsafe`, because that crate
   decodes untrusted import files and feature unification would otherwise re-enable it.
 - **Not configured** — `[licenses]` and `[sources]` are intentionally absent; enabling them is a
@@ -366,9 +371,10 @@ it — then:
 3. If it does not (an upstream breaking change, or the advisory does not apply to how vipune uses
    the crate), add an `ignore` row to `deny.toml` with the ID, the reason, and the upstream
    blocker, and file an issue for the migration.
-4. If the failure says the advisory database is stale, delete the clone under
-   `~/.cargo/advisory-dbs/` and rerun: a fetch that cannot complete is the point of
-   `maximum-db-staleness`, not a bug to work around.
+4. If the failure says the advisory database is stale, it came from an `--offline`/`--frozen` run
+   (the only mode that reads `maximum-db-staleness`): delete the clone under
+   `~/.cargo/advisory-dbs/`, rerun online, and let the fetch refresh it. An online run that cannot
+   reach the database fails with a fetch error instead.
 
 ## See Also
 

@@ -92,13 +92,15 @@ cargo deny --locked check advisories bans
 A new advisory is triaged in its own PR, either by a compatible update
 (`cargo update -p <crate>`) or by an `ignore` entry in `deny.toml` that records the advisory ID,
 the reason and the upstream blocker. An `ignore` row whose advisory has since stopped firing is
-reported by cargo-deny's `advisory-not-detected` lint, which is an error by default, so an update
-and the row it supersedes must land in the same commit — a row cannot rot silently.
+reported by cargo-deny's `advisory-not-detected` lint, which `deny.toml` sets to `deny` (the
+0.20.2 default is `warn`), so an update and the row it supersedes must land in the same commit — a
+row cannot rot silently.
 
-The gate also refuses to audit against an advisory database it cannot refresh: `deny.toml` sets
-`maximum-db-staleness = "P2D"`, so a database whose last fetch is more than two days old aborts
-the check instead of passing quietly. See [docs/testing.md](docs/testing.md#dependency-advisory-gate)
-for how to triage that.
+In CI the gate fetches the RustSec advisory database on every run, and a fetch that fails is an
+error — the check does not pass on a database it could not update. `maximum-db-staleness = "P2D"`
+is a separate bound: cargo-deny only reads it when fetching is disabled, i.e. under
+`--offline`/`--frozen`, where it aborts if the local clone's last fetch is older than two days.
+See [docs/testing.md](docs/testing.md#dependency-advisory-gate) for how to triage that.
 
 The `bans` check also fails if `base64` 0.23 ever resolves with the `simd-unsafe` feature, which
 Cargo feature unification could otherwise re-enable silently — see the comment in
