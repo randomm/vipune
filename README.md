@@ -87,7 +87,7 @@ sudo mkdir -p /usr/local/bin && sudo mv vipune /usr/local/bin/
 
 ### Build from source
 
-Requires the [Rust toolchain](https://rustup.rs) (1.85+). On Linux, you may also need `libgomp1` and `libc6`.
+Requires the [Rust toolchain](https://rustup.rs) (1.88+). On Linux, you may also need `libgomp1` and `libc6`.
 
 **Latest release (recommended)**
 ```bash

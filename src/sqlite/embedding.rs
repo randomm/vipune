@@ -72,8 +72,8 @@ pub fn blob_to_vec(blob: &[u8]) -> Result<Vec<f32>> {
         });
     }
     let mut vec = Vec::with_capacity(EMBEDDING_DIMS);
-    for chunk in blob.chunks_exact(4) {
-        let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for chunk in blob.as_chunks::<4>().0 {
+        let val = f32::from_le_bytes(*chunk);
         vec.push(val);
     }
     Ok(vec)

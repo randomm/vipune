@@ -64,10 +64,10 @@ pub(crate) fn detect_project_at_internal(
     env_project: Option<String>,
 ) -> String {
     // 1. Explicit override takes priority (must be non-empty)
-    if let Some(project) = explicit {
-        if !project.trim().is_empty() {
-            return project.trim().to_string();
-        }
+    if let Some(project) = explicit
+        && !project.trim().is_empty()
+    {
+        return project.trim().to_string();
     }
 
     // 2. Check environment variable (or test override)
@@ -97,11 +97,11 @@ pub(crate) fn detect_project_at_internal(
     // 4. Try git root directory name
     match find_git_root_at(root) {
         Ok(git_root) => {
-            if let Some(name) = git_root.file_name() {
-                if let Some(s) = name.to_str() {
-                    emit_fallback_warning(s);
-                    return s.to_string();
-                }
+            if let Some(name) = git_root.file_name()
+                && let Some(s) = name.to_str()
+            {
+                emit_fallback_warning(s);
+                return s.to_string();
             }
         }
         Err(e) => {
@@ -315,21 +315,21 @@ fn parse_git_remote(url: &str) -> String {
     let url = url.trim().trim_end_matches(".git");
 
     // SSH format: git@github.com:owner/repo
-    if let Some(rest) = url.strip_prefix("git@") {
-        if let Some(colon_pos) = rest.find(':') {
-            let path = &rest[colon_pos + 1..];
-            let segments: Vec<&str> = path.split('/').collect();
-            // Canonical rule: last two path segments (matches the :// branch
-            // so SSH and HTTPS forms of the same repo yield the same id).
-            if segments.len() >= 2 {
-                return format!(
-                    "{}/{}",
-                    segments[segments.len() - 2],
-                    segments[segments.len() - 1]
-                );
-            }
-            return path.to_string();
+    if let Some(rest) = url.strip_prefix("git@")
+        && let Some(colon_pos) = rest.find(':')
+    {
+        let path = &rest[colon_pos + 1..];
+        let segments: Vec<&str> = path.split('/').collect();
+        // Canonical rule: last two path segments (matches the :// branch
+        // so SSH and HTTPS forms of the same repo yield the same id).
+        if segments.len() >= 2 {
+            return format!(
+                "{}/{}",
+                segments[segments.len() - 2],
+                segments[segments.len() - 1]
+            );
         }
+        return path.to_string();
     }
 
     // HTTPS / SSH URL / generic :// format

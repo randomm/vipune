@@ -47,12 +47,12 @@ pub fn handle_doctor(
 
     // When scoped to a single project, warn about other projects in the
     // database so the report is not misread as covering the whole store.
-    if let Some(filter) = project_filter {
-        if !json {
-            let other_count = all_project_ids.iter().filter(|pid| *pid != filter).count();
-            if let Some(hint) = scoped_project_hint(other_count) {
-                println!("{}", hint);
-            }
+    if let Some(filter) = project_filter
+        && !json
+    {
+        let other_count = all_project_ids.iter().filter(|pid| *pid != filter).count();
+        if let Some(hint) = scoped_project_hint(other_count) {
+            println!("{}", hint);
         }
     }
 

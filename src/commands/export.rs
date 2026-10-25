@@ -100,7 +100,7 @@ pub(crate) fn base64_decode(input: &str) -> Result<Vec<u8>, Error> {
     }
 
     let bytes: Vec<u8> = input.bytes().collect();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(Error::InvalidInput(format!(
             "base64 input length {} is not a multiple of 4",
             bytes.len()

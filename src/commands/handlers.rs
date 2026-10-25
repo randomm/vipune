@@ -220,10 +220,10 @@ pub(crate) fn handle_search(
 
     if !opts.no_touch {
         let ids: Vec<&str> = memories.iter().map(|m| m.id.as_str()).collect();
-        if !ids.is_empty() {
-            if let Err(e) = store.db.touch_memories(&ids) {
-                eprintln!("warning: failed to update retrieval stats: {}", e);
-            }
+        if !ids.is_empty()
+            && let Err(e) = store.db.touch_memories(&ids)
+        {
+            eprintln!("warning: failed to update retrieval stats: {}", e);
         }
     }
 
@@ -266,10 +266,8 @@ pub(crate) fn handle_get(
         .get(id, project_id)?
         .ok_or_else(|| Error::NotFound("memory not found".to_string()))?;
 
-    if !no_touch {
-        if let Err(e) = store.db.touch_memories(&[id]) {
-            eprintln!("warning: failed to update retrieval stats: {}", e);
-        }
+    if !no_touch && let Err(e) = store.db.touch_memories(&[id]) {
+        eprintln!("warning: failed to update retrieval stats: {}", e);
     }
 
     if json {

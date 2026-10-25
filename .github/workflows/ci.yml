@@ -54,14 +54,14 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test
+        run: cargo test --locked
 
       - name: Test (ignored — requires model)
         if: github.event_name == 'schedule'
-        run: cargo test -- --ignored
+        run: cargo test --locked -- --ignored
 
       # Note: ONNX Runtime shared library is auto-downloaded during build
       # CI may need extra time on first run due to download
@@ -101,10 +101,53 @@ jobs:
           key: ${{ runner.os }}-${{ env.HF_CACHE_KEY }}
 
       - name: Clippy (no default features)
-        run: cargo clippy --no-default-features --all-targets -- -D warnings
+        run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
 
       - name: Test (no default features)
-        run: cargo test --no-default-features
+        run: cargo test --locked --no-default-features
+
+  # MSRV gate (issue #257). The declared `rust-version` in Cargo.toml is a
+  # promise to users, and the default `mcp` feature pulls a dependency graph
+  # (rmcp -> rmcp-macros -> darling 0.23) whose floor is far above that field
+  # used to claim. Nothing here checked the declared version, so it rotted.
+  # This job installs *exactly* the declared toolchain and checks BOTH feature
+  # sets with --locked — the default set and `--no-default-features` — so a
+  # dependency raising its own rust-version above the declaration reddens CI
+  # instead of breaking user builds, whichever feature set they build.
+  #
+  # Both feature sets must build on 1.88. Keep the toolchain pin in sync with
+  # `rust-version` in Cargo.toml, the minimum stated in README.md and the floor
+  # in CONTRIBUTING.md — `test_msrv_version_pins_agree` locks all four together.
+  msrv:
+    name: MSRV
+    runs-on: ubicloud-standard-4
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-msrv-1.88.0-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v6
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-msrv-1.88.0-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check (default features)
+        run: cargo check --locked --all-targets
+
+      - name: Check (no default features)
+        run: cargo check --locked --no-default-features --all-targets
 
   # Dependency-advisory gate (issue #253). Runs on pull_request (and every push
   # to main) plus the nightly schedule above, so a newly published RustSec
