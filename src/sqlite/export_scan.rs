@@ -240,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_with_id_restores_all_12_columns_verbatim() {
+    fn test_insert_with_id_restores_the_bound_columns_verbatim() {
         let (_dir, db) = create_test_db();
         let blob = vec_to_blob(&vec![0.25f32; 384]).unwrap();
 
@@ -262,6 +262,8 @@ mod tests {
 
         // Verify every column via the canonical 13-column mapper (which decodes
         // the blob and would fail on any shape mismatch) plus a raw BLOB check.
+        // `importance` is asserted here because `insert_with_id` leaves it to
+        // the column DEFAULT — this is the only place that drift would show.
         let conn = db.conn();
         let memory: crate::sqlite::Memory = conn
             .query_row(

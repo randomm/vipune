@@ -281,8 +281,9 @@ mod crud_tests {
         }
     }
 
-    /// `insert_with_id` must restore all 12 columns verbatim under the
-    /// caller-supplied id, including the three columns the regular `insert()`
+    /// `insert_with_id` must restore the 12 bound columns verbatim under the
+    /// caller-supplied id (`importance` takes its column DEFAULT), including
+    /// the three columns the regular `insert()`
     /// does not accept (`superseded_by`, `retrieval_count`, `last_retrieved_at`),
     /// and must return `true` on a fresh insert.
     #[test]

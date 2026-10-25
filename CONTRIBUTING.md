@@ -61,8 +61,11 @@ For writing tests, see the [Testing Guide](docs/testing.md) for:
 
 ## Quality Gates
 
-All code changes must pass these checks before PR submission (this is the
-chain CI runs — `--all-targets` lints benches and integration-test targets too):
+All code changes must pass these checks before PR submission (these are the
+checks CI runs on every push — `--all-targets` is what makes clippy compile
+`benches/db_search.rs`, a `test = false` bench target, along with the
+integration-test targets; the `#[ignore]`d real-model lane runs only on the
+nightly schedule):
 
 ```bash
 cargo fmt --check                    # Code formatting
@@ -135,7 +138,7 @@ Releases are automated via release-plz. When your PR is merged to `main`, the re
 **Hard rules — do not violate:**
 
 - **NEVER leave a release PR open across subsequent merges to main.** release-plz may not recompute its version or changelog, so the PR can silently go stale. Close and regenerate instead (see issue [#155](https://github.com/randomm/vipune/issues/155)).
-- **A release PR is armed — merging it publishes to crates.io irreversibly.** It must never be merged to "close" it. If a release PR needs to be abandoned, close it via the GitHub UI.
+- **A release PR is armed — merging it publishes to crates.io irreversibly.** It must never be merged to "close" it. If a release PR needs to be abandoned, close it via the GitHub UI and delete its branch (remote and local), so the stale branch cannot be merged later.
 
 **Important:**
 - Do NOT manually edit `CHANGELOG.md` — it's auto-generated

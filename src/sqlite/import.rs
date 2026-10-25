@@ -1,20 +1,22 @@
 //! Restore support for the import command (issue #195).
 //!
-//! `Database::insert_with_id` is the all-columns, caller-supplied-id insert
-//! used by the import path. Unlike `insert()` (which mints a fresh UUID and
-//! leaves `superseded_by`/`retrieval_count`/`last_retrieved_at` at schema
-//! defaults), it restores all 12 columns verbatim from an export so an
-//! export → import round-trip is byte-identical. Embedding blobs arrive
-//! as raw bytes; they are written as-is with no dimension validation at
-//! this layer (dimension checks happen in the import handler so a whole
-//! import can abort all-or-nothing).
+//! `Database::insert_with_id` is the caller-supplied-id insert used by the
+//! import path. Unlike `insert()` (which mints a fresh UUID and leaves
+//! `superseded_by`/`retrieval_count`/`last_retrieved_at` at schema defaults),
+//! it restores 12 of the 13 columns verbatim from an export so an
+//! export → import round-trip is byte-identical — `importance` is the
+//! exception: it is not in this INSERT and takes its column DEFAULT. Embedding
+//! blobs arrive as raw bytes; they are written as-is with no dimension
+//! validation at this layer (dimension checks happen in the import handler so
+//! a whole import can abort all-or-nothing).
 
 use super::Database;
 use crate::sqlite::Result;
 use rusqlite::params;
 
 impl Database {
-    /// Insert a memory row under an explicit id, restoring all 12 columns.
+    /// Insert a memory row under an explicit id, restoring 12 of the 13
+    /// columns (`importance` is left to the column DEFAULT).
     ///
     /// `embedding_blob` is the raw BLOB (already base64-decoded by the
     /// caller) and is written byte-for-byte. Returns `true` if the row was
@@ -28,7 +30,7 @@ impl Database {
     /// Returns error if the database write fails, including a primary-key
     /// constraint violation when the id already exists.
     #[allow(dead_code)] // used by bin target (import); exercised by lib tests
-    #[allow(clippy::too_many_arguments)] // signature mirrors all 12 table columns
+    #[allow(clippy::too_many_arguments)] // signature mirrors the 12 bound columns
     pub fn insert_with_id(
         &self,
         id: &str,

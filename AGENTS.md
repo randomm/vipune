@@ -62,8 +62,8 @@ Before creating ANY code, ask:
 **CI is for VERIFICATION, not DISCOVERY.** All gates pass locally before
 `git push`. Never push to "see if CI catches anything."
 
-The per-gate commands are below — use them, not `CONTRIBUTING.md`'s shorter
-copy, which omits `--all-targets`.
+The per-gate commands are below. The same chain is documented for humans in
+`CONTRIBUTING.md` (Quality Gates).
 
 ```bash
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
@@ -71,9 +71,12 @@ cargo clippy --no-default-features --all-targets -- -D warnings
 cargo test --no-default-features
 ```
 
-`--all-targets` is what CI runs; without it benches and integration-test
-targets are never linted. Run both pairs — `default = ["mcp"]`, so the
-`--no-default-features` tree is a real second build, not an edge case.
+`--all-targets` is what CI runs, and it is what makes clippy compile
+`benches/db_search.rs` (a `test = false` bench target) — without it that target
+can rot with a green build. Run both pairs — `default = ["mcp"]`, so the
+`--no-default-features` tree is a real second build, not an edge case. CI's
+per-push job is this chain; the `#[ignore]`d real-model lane
+(`cargo test -- --ignored`) runs only on the nightly schedule.
 
 Do NOT:
 
@@ -105,9 +108,10 @@ Do NOT:
 
 - **500-line hard cap per source file** — refactor into submodules past the
   limit (the `memory/`, `sqlite/`, `config/`, `hook/` splits exist because of
-  this). Several tracked files are already over it (`wc -l src/**/*.rs` to
-  check) — the cap is the target for new and touched code, not a claim about
-  the current tree.
+  this). Several tracked files are already over it — check with
+  `find src -name '*.rs' | xargs wc -l | sort -n` (`src/**/*.rs` under default
+  bash silently drops top-level `src/*.rs`, including `src/main.rs`) — the cap
+  is the target for new and touched code, not a claim about the current tree.
 - **Synchronous library core** — `src/lib.rs` is fully synchronous,
   stdlib-first; the async runtime (`tokio`) exists only inside the MCP server,
   which is a **default** Cargo feature (`default = ["mcp"]`) — build with
@@ -118,7 +122,13 @@ Do NOT:
 - Comments explain **WHY**, not WHAT
 - Errors via `thiserror` for new error types; no `unwrap()` or `expect()` on
   fallible results in library code outside tests. `Mutex::lock()` poisoning is
-  the one accepted exception
+  exempt from the rule, but it is handled three ways in this tree, not one:
+  recover with `into_inner()` where a panic would take down sibling work (see
+  `lock_env_mutex`, `src/config/tests_utils.rs`); map the poison to a typed
+  `rmcp::ErrorData::INTERNAL_ERROR` at a request boundary (see `StoreWrapper`,
+  `src/mcp/store_wrapper.rs`); `unwrap()` is also present at eight acquisitions
+  in `src/mcp/store_wrapper.rs` — in a long-lived process that turns one poison
+  into every later request, so prefer the first two forms for new code.
 
 ---
 
@@ -143,7 +153,9 @@ Do NOT:
 - Squash-merge by default. No force-push to `main`.
 - **After a PR lands**: delete its branch (remote and local) and remove its
   worktree. Never leave stale branches or worktrees behind. For release-plz
-  PRs see `CONTRIBUTING.md` (Release Process hard rules).
+  PRs see `CONTRIBUTING.md` (Release Process hard rules) — including deleting
+  the branch of a superseded release PR, remote and local, so it cannot be
+  merged after later merges to main.
 - **Release PRs**: release-plz opens `chore: release vX.Y.Z` PRs via
   `.github/workflows/release-plz.yml`; a release PR is armed — merging it
   publishes to crates.io irreversibly. If one must be abandoned, close it via
@@ -194,22 +206,10 @@ verify against the tree; the `Memory` struct and these paths are load-bearing:
 
 | Module | Responsibility |
 |--------|---------------|
-| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` onto the library `vipune::Config`. Guarded by `test_to_lib_config_maps_all_fields_non_default` (asserts every current field maps with a non-default value) — but the asserts are hand-written, so a NEW field on either struct compiles without failing it: add it to the test by hand. The consequence is not a stale test — `to_lib_config()` feeds only `run_mcp`, so an unmapped field silently takes its `Default` in MCP sessions while the CLI honours the configured value. The guard is `#[cfg(feature = "mcp")]`, so it does not run under `--no-default-features` |
-| `src/lib.rs` | Synchronous library core; public API surface (`MemoryStore`, `MemoryType`, `MemoryStatus`, `Config`). Also re-exports `sqlite::Memory` |
-| `src/memory/` | Domain layer: `store` (`MemoryStore`), `add` (`NewMemory`, `MemoryStore::add_impl`/`insert_row` — every row the add path creates funnels through these), `crud`, `search`, `batch`, `lifecycle` (types/status) |
-| `src/memory_types.rs` | Store data types: `AddResult`, `ConflictMemory`, `IngestPolicy`, `BatchIngestItemResult`/`BatchIngestResult` (library-only public API) |
-| `src/sqlite/` | Storage: `Database`, `Memory` struct, `search`, `fts` (FTS5), `list`, `query_mod` (`map_row_to_memory`), `migrations`, `identity`, `supersede`, `import`/`export_scan` |
-| `src/sqlite/identity.rs` | `ModelIdentity` + migration marker read side (`read_identity`, `current_identity`, `assert_identity_ok`) |
-| `src/migration.rs` | Library-level model-switch migration: `migrate_model` (pre-flight token count → `write_migration_marker` → re-embed → record identity + clear marker in one transaction) |
-| `src/embedding/` | ONNX pipeline; `EMBED_MODEL_ID` / `EMBED_MODEL_REVISION` pin the model |
-| `src/embedding_profiles.rs` | `BUILTIN_PROFILES` / `profile_for` — per-model id + revision, token limit and query/passage prefixes (bge, `intfloat/multilingual-e5-small`) |
-| `src/config/` | Env + TOML loading, validation, paths |
-| `src/project.rs` | Git-root project detection/scoping |
-| `src/rrf.rs` | Reciprocal-rank fusion of dense + FTS results |
-| `src/temporal.rs` | Recency/decay scoring |
-| `src/hook/` | Claude Code lifecycle event handling: `payload` (`HookEvent`), `run`, `extract`, `embedding` (placeholder vectors) |
-| `src/commands/` | clap subcommand enums in `mod.rs` (`Commands`, `ProjectCommands`, `HookCommands`) + handlers, incl. `hook_install.rs` (install/uninstall into `~/.claude/settings.json`) and `hook_run.rs` |
-| `src/mcp/` | MCP server (`rmcp` + `tokio`) behind the **default** `mcp` feature |
+| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` onto the library `vipune::Config` and feeds **only** `run_mcp`, so an unmapped field silently takes its `Default` in MCP sessions while the CLI honours the configured value — `vipune::Config` derives `Default`, so there is no compile or runtime signal. The guard test is `#[cfg(feature = "mcp")]` and its asserts are hand-written (verify both against the tree before trusting them) |
+| `src/lib.rs` | Synchronous library core; public API surface (`MemoryStore`, `MemoryType`, `MemoryStatus`, `Config`). `mod sqlite` is **private** — `Memory` escapes only through the `pub use sqlite::Memory` re-export, so the type's public name is `vipune::Memory` |
+| `src/memory/` | Domain layer: `store` (`MemoryStore`), `add` (`NewMemory`, `MemoryStore::add_impl`/`insert_row` — the *validating* write edge; `hook/run.rs` reaches the insert sinks directly and bypasses it), `crud` (`UpdateParams`, the enum-typed update boundary), `search`, `batch`, `lifecycle` (types/status) |
+| `src/mcp/` | MCP server (`rmcp` + `tokio`) behind the **default** `mcp` feature. Long-lived process over a `Mutex<MemoryStore>`: a poisoned lock must surface as a per-request `INTERNAL_ERROR`, never abort the server (precedent: the four `map_err` sites in `store_wrapper.rs`) |
 | `src/errors.rs`, `src/output.rs` | `thiserror` errors; JSON/text response DTOs (`SearchResultItem`, `GetResponse`, …) |
 
 **Key invariants:**
@@ -218,47 +218,82 @@ verify against the tree; the `Memory` struct and these paths are load-bearing:
   single row-level type the read paths share — e.g. `src/sqlite/query_mod.rs`,
   `src/sqlite/list.rs`, `src/sqlite/fts.rs`, `src/sqlite/export_scan.rs`,
   `src/commands/prune.rs`, `src/memory/crud.rs`, `src/rrf.rs`,
-  `src/mcp/helpers.rs` (not exhaustive; `rg 'sqlite::Memory'` is).
-  `map_row_to_memory` (`src/sqlite/query_mod.rs`) is the single source of truth
-  for the row shape: it decodes columns **by position** against a 13-column
-  SELECT duplicated verbatim across `query_mod.rs`, `list.rs`, `search.rs`,
-  `fts.rs`, `export_scan.rs` and `prune.rs`, so a column reorder silently
-  mis-maps fields. `EMBEDDING_COLUMN` in `src/sqlite/mod.rs` is the load-bearing
-  index — its value, not a name, is what binds the decoder to the projection.
+  `src/mcp/helpers.rs`, `src/mcp/store_wrapper.rs` (not exhaustive;
+  `rg 'sqlite::Memory|crate::Memory|vipune::Memory'` is — `sqlite` is a private
+  module, so the public name is `vipune::Memory`).
+  `map_row_to_memory` (`src/sqlite/query_mod.rs`) is the **canonical** decoder —
+  used by `query_mod.rs`, `sqlite/mod.rs` (`Database::get`), `sqlite/list.rs`
+  and `commands/prune.rs`. Three further readers bypass the mapper and decode
+  by literal position in their own closure, so they must be edited in lockstep
+  with the projection: `sqlite/search.rs`, `sqlite/fts.rs` and
+  `sqlite/export_scan.rs` (`scan_all_rows`). The 13-column projection is
+  duplicated verbatim in `query_mod.rs`, `list.rs`, `search.rs`,
+  `export_scan.rs`, `prune.rs` and `mod.rs` (`Database::get`) — find them with
+  `rg 'SELECT id, project_id, content, metadata, embedding' src/`; `fts.rs`
+  carries the same 13 columns `m.`-qualified plus a trailing `bm25_score`, so
+  it is positional-compatible but not verbatim. A column reorder therefore has
+  to be fixed in four decoders and silently mis-maps fields if it is not. The
+  row shape is enforced only by those hard-coded 0–12 offsets; the
+  `EMBEDDING_COLUMN` constant in `src/sqlite/mod.rs` covers column 4 alone and
+  shares no guard with the rest. The projection is also **unbounded** —
+  `sqlite/search.rs` fetches every row of a project and applies `limit` after
+  fetch (capped only by `MAX_SEARCH_LIMIT = 10_000`, `src/memory/store.rs`),
+  so every added column is paid per row on the search hot path.
   `src/output.rs` does **not** import `Memory` — it declares its own response
   DTOs, which `src/commands/handlers.rs` fills by projecting `Memory` fields.
   So a field rename/retype does break those projections, but the compiler
   catches it in `handlers.rs`, not in `output.rs`.
 - **`Memory` stores `memory_type`/`status`/`importance` as `String`**, not as
   enums (`src/sqlite/mod.rs`) — no type and no CHECK constraint backs any of
-  them. Validation happens only at the **add** entry points, via
+  them. Validation happens at the write boundaries only — `add`
+  (`src/commands/handlers.rs`, `src/commands/mod.rs`) via
   `MemoryType`/`MemoryStatus::from_str` and `MemoryImportance::from_str`
-  (`src/memory/lifecycle.rs`) in `src/commands/handlers.rs`,
-  `src/commands/mod.rs` and `src/commands/import.rs`; `src/mcp/tools.rs`
-  validates type and status only. Writers that bypass it: `src/hook/run.rs`
-  binds `"observation"`/`"candidate"` literals through
-  `Database::insert_with_hash` (`&str` params, `src/sqlite/mod.rs`);
-  `run_import` binds `ImportRow.memory_type`/`status` verbatim from JSON and
-  round-trips only `importance` through `from_str`; the update path takes
-  `Option<&str>` (`UpdateOptions`, `src/sqlite/update.rs`) and
-  `src/commands/promote.rs` writes `status: Some("active")` unvalidated, as
+  (`src/memory/lifecycle.rs`), plus `run_import`'s `parse_row`
+  (`src/commands/import.rs`), which validates `importance` only; `src/mcp/tools.rs`
+  validates type and status only. No read path validates: the same `String`s
+  are projected straight into `output.rs` DTOs by `src/commands/handlers.rs`
+  (three sites) and `src/main.rs`, so a bad value is both persisted and
+  echoed. Writers that bypass it: `src/hook/run.rs` binds
+  `"observation"`/`"candidate"` literals through `Database::insert_with_hash`
+  (`&str` params, `src/sqlite/mod.rs`, which also binds `"medium"` for
+  `importance`); `run_import` binds `ImportRow.memory_type`/`status` verbatim
+  from JSON, and its `content`/`metadata` are written with no content-level
+  check — importing an untrusted JSONL file is the one unvalidated secret sink;
+  `parse_row` canonicalises `importance` before the INSERT binds it blind; the
+  update path takes `Option<&str>` (`UpdateOptions`, `src/sqlite/update.rs`)
+  and `src/commands/promote.rs` writes `status: Some("active")` unvalidated, as
   does the `"active"` literal in `build_filters` (`src/sqlite/query_mod.rs`).
-  The sinks (`src/sqlite/insert.rs`, `supersede.rs`) take `&str` for all three
-  columns, so a new entry point writes unvalidated strings unless it validates
-  itself — and those same input boundaries are the only place a secret can be
-  refused, since `content`/`metadata` land unredacted in a plain SQLite file
-  (see *Never store secrets* below).
+  `UpdateOptions` is the `&str`-typed twin of the enum-typed `UpdateParams`
+  (`src/memory/crud.rs`) — reaching for the storage-layer struct compiles with
+  any string, so prefer the `MemoryStore`/`UpdateParams` path.
+  The sinks (`src/sqlite/insert.rs`, `supersede.rs`, and `sqlite/import.rs`'
+  `insert_with_id`, which binds only **12** columns and leaves `importance` to
+  the column DEFAULT) take `&str` for the columns they accept, so a new entry
+  point writes unvalidated strings unless it validates itself — and those same
+  input boundaries are the only place a secret can be refused, since
+  `content`/`metadata` land unredacted in a plain SQLite file that any local
+  process can read. (`src/hook/extract.rs`'s `CREDENTIAL_PATTERNS` is a
+  hook-path-only screen; `add`/`update`/MCP `store_memory` enforce nothing.)
 - **`importance` has a second, independent vocabulary on the read side** —
   `temporal::ImportanceLevel::parse` plus the raw `'high'`/`'critical'` SQL
   literals in `src/commands/prune.rs`. Nothing structural links the two enums:
   only `test_importance_vocabularies_agree_with_the_read_side`
-  (`src/memory/lifecycle.rs`). A new level must be added to both, or the decay
-  and prune read paths silently reject rows the write side accepted.
+  (`src/memory/lifecycle.rs`), which pins *rejection* agreement over 11 words
+  (case and whitespace variants included) and asserts every `MemoryImportance`
+  variant parses on the read side — so an added level is caught by the pre-push
+  chain. The silent path is a value that reaches the column through one of the
+  non-validating writers above, and the two read sides fail in opposite
+  directions: `ImportanceLevel::parse` at `src/memory/search.rs:95`/`:204`
+  returns `Error::InvalidInput`, so one bad row aborts every recency-weighted
+  search, while prune's raw literals fail soft, protecting nothing and demoting
+  rows that should have been kept.
 - **`Database::conn()` is a leaky storage boundary** (`src/sqlite/mod.rs`) — it
   hands out the raw `rusqlite::Connection`, and `src/commands/import.rs`,
   `src/commands/export.rs`, `src/commands/backup.rs`, `src/commands/promote.rs`,
   `src/commands/reindex.rs`, `src/commands/prune.rs` and `src/migration.rs`
-  bypass `Database` to issue raw SQL against it. New queries belong on `Database`
+  bypass `Database` to issue raw SQL against it, as do the identity gates in
+  `src/memory/store.rs:138` and `src/hook/` (not exhaustive; `rg 'db\.conn\(\)'`
+  is). New queries belong on `Database`
   unless they need a handle only it can give (e.g. the Online Backup API in
   `backup.rs`).
 - **Migrations use `PRAGMA user_version`** — version is bumped only after a
@@ -268,7 +303,13 @@ verify against the tree; the `Memory` struct and these paths are load-bearing:
   `COMMIT` (with `ROLLBACK` on error) and `user_version` is written afterwards
   via `pragma_update`. `migrations()` is a positional `Vec`, so **version ==
   index + 1**: never renumber, insert before, or remove an applied migration —
-  append a new one.
+  append a new one. Two branches are untested and are where a version/file
+  mismatch would appear: a failing `ROLLBACK` replaces the migration's error
+  with the rollback's, and a failing `COMMIT` (e.g. `SQLITE_BUSY`) propagates
+  with no rollback. `run_migrations` runs on every `Database::open`, so a
+  migration that scans or rewrites rows (v4's backfill + windowed `DELETE`)
+  holds `BEGIN EXCLUSIVE` and stalls every concurrent vipune/mcp process — keep
+  new migrations DDL-only or bound the work.
 - **Embedding pinned revision** — the default model downloads at the exact
   `EMBED_MODEL_REVISION` commit for reproducibility. The test
   `test_air_gapped_docs_and_ci_cache_match_embed_revision` pins that the
@@ -301,13 +342,21 @@ vipune search "query patterns effective"
 ```
 
 `vipune` is a **bash binary on `$PATH`** — invoke it via bash
-(`vipune search "…"`, `vipune add "…"`). Tool-integration mechanics (MCP
-config, Claude Desktop, absolute binary paths) live in
+(`vipune search "…"`, `vipune add "…"`); a structured tool call named `vipune`
+has no handler and fails. Tool-integration mechanics (MCP config, Claude
+Desktop, absolute binary paths) live in
 [`docs/agent-integration.md`](docs/agent-integration.md).
 
 Store conventions, gotchas, and decisions as you work so the next session
-starts smarter. One claim per memory. Never store secrets (tokens,
-passwords) — the store is plain SQLite.
+starts smarter. One claim per memory.
+
+### Never store secrets
+
+Never store secrets (tokens, passwords) — the store is plain SQLite, and
+nothing enforces it: the only credential screen is the hook path's
+`CREDENTIAL_PATTERNS` (`src/hook/extract.rs`), so `add`, `update` and the MCP
+`store_memory` tool write whatever they are given, and a secret that lands is
+readable by any local process.
 
 ---
 
@@ -333,7 +382,7 @@ Before creating documentation, ask: "Will this be true in 200 PRs?"
 
 - Root: `README.md` (user-facing), `AGENTS.md` (agent doctrine)
 - `docs/` with lowercase-hyphenated filenames (`architecture.md`,
-  `testing.md`, `search.md`, …)
+  `testing.md`, `search.md`, `agent-integration.md`, …)
 
 ---
 
@@ -348,7 +397,7 @@ Before creating documentation, ask: "Will this be true in 200 PRs?"
 | A single test | `cargo test <name>` |
 | Ignored real-model tests | `cargo test -- --ignored` |
 | No-default-features lint + tests (CI runs both; see Pre-Push Quality Gates) | `cargo clippy --no-default-features --all-targets -- -D warnings` then `cargo test --no-default-features` |
-| Benchmarks (criterion target `db_search`, `benches/db_search.rs`) | `cargo bench` |
+| Benchmarks (criterion target `db_search`, `benches/db_search.rs`) | see README (Benchmarks) — `cargo bench -- --save-baseline main` records the baseline; the corpus re-seeds on every run |
 | Release build | `cargo build --release` |
 | Run the CLI locally | `cargo run -- add "test memory"` |
 | Query semantics docs | see `docs/search.md`, `docs/vipune-query-guide.md` |

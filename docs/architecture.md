@@ -29,7 +29,7 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 | `src/sqlite/embedding.rs` | BLOB I/O, cosine similarity computation |
 | `src/sqlite/fts.rs` | FTS5 full-text search, BM25, triggers, auto-migration |
 | `src/sqlite/search.rs` | Hybrid search coordination, semantic + BM25 |
-| `src/sqlite/query_mod.rs` | `map_row_to_memory` — the single source of truth for the positional row shape |
+| `src/sqlite/query_mod.rs` | `map_row_to_memory` — the canonical positional decoder for `get`/`list`/`list_since`/`get_many`/`prune`; `fts.rs`, `search.rs` and `export_scan.rs` keep their own positional decoders of the same columns and must move with it |
 | `src/sqlite/migrations.rs` | `PRAGMA user_version` migrations (positional `Vec`; version == index + 1) |
 | `src/embedding/` | ONNX model loading and text-to-vector conversion using bge-small-en-v1.5 and HuggingFace tokenizer |
 | `src/project.rs` | Project auto-detection from git remote, environment variable, or working directory |
@@ -180,7 +180,7 @@ Model files are cached in the standard HuggingFace Hub cache at `~/.cache/huggin
 
 **No daemon** — with one exception: `vipune mcp` runs as a persistent JSON-RPC server until stdin closes. All other commands exit after operation. State lives only in SQLite; no in-memory caches survive between invocations.
 
-**File size limits**: Source files capped at 500 lines (exceptions justified — several tracked files are already over; check with `wc -l src/**/*.rs`). Keeps modules focused, testable, and maintainable. The 500-line cap and the pre-push gate chain are authoritative in `AGENTS.md` (Code Style & Conventions / Pre-Push Quality Gates).
+**File size limits**: Source files capped at 500 lines (exceptions justified — several tracked files are already over; check with `find src -name '*.rs' | xargs wc -l | sort -n` — `src/**/*.rs` under default bash silently omits top-level `src/*.rs`). Keeps modules focused, testable, and maintainable. The 500-line cap and the pre-push gate chain are authoritative in `AGENTS.md` (Code Style & Conventions / Pre-Push Quality Gates).
 
 **Zero technical debt**: No TODO/FIXME/HACK comments in src/. Incomplete work tracked in GitHub issues, not left in code.
 

@@ -254,4 +254,99 @@ mod tests {
         assert_eq!(memory.id, "test-id");
         assert_eq!(memory.content, "test");
     }
+
+    /// `AGENTS.md` (Architecture Notes) is the authority an agent uses to
+    /// decide which files a column reorder must touch, and it claims
+    /// `map_row_to_memory` is not the only positional decoder. A drifted list
+    /// sends the next debugger to the wrong files — the class of failure
+    /// #261 exists to eliminate — so the mechanically checkable claims are
+    /// pinned here (precedent:
+    /// `test_air_gapped_docs_and_ci_cache_match_embed_revision`).
+    #[test]
+    fn test_agents_md_row_shape_claims_match_the_tree() {
+        const CANONICAL_PROJECTION: &str = "SELECT id, project_id, content, metadata, embedding, created_at, updated_at, type, status, superseded_by, retrieval_count, last_retrieved_at, importance";
+
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let read = |rel: &str| {
+            std::fs::read_to_string(repo.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
+        };
+        let agents = read("AGENTS.md");
+
+        assert!(
+            agents.contains("duplicated verbatim in"),
+            "AGENTS.md must keep naming the verbatim-projection sites"
+        );
+        // The sentence naming them is wrapped across lines, so gather the
+        // window after the marker and check each site is named there.
+        let list_window = agents
+            .split_once("duplicated verbatim in")
+            .expect("AGENTS.md verbatim list")
+            .1
+            .chars()
+            .take(260)
+            .collect::<String>();
+        for site in [
+            "query_mod.rs",
+            "list.rs",
+            "search.rs",
+            "export_scan.rs",
+            "prune.rs",
+            "mod.rs",
+        ] {
+            assert!(
+                list_window.contains(site),
+                "AGENTS.md's verbatim list must name {site}: {list_window}"
+            );
+        }
+        // The verbatim copies named by the doc. query_mod.rs repeats the
+        // projection for each of its three queries plus this test's fixture.
+        for (rel, at_least) in [
+            ("src/sqlite/query_mod.rs", 3),
+            ("src/sqlite/list.rs", 1),
+            ("src/sqlite/search.rs", 1),
+            ("src/sqlite/mod.rs", 1),
+            ("src/commands/prune.rs", 1),
+            ("src/sqlite/export_scan.rs", 2),
+        ] {
+            let found = read(rel).matches(CANONICAL_PROJECTION).count();
+            assert!(
+                found >= at_least,
+                "{rel} must carry the canonical projection at least {at_least} time(s) as AGENTS.md claims, found {found}"
+            );
+        }
+        // fts.rs is deliberately excluded from the verbatim list: its own
+        // projection is `m.`-qualified with a trailing bm25 column.
+        assert!(
+            !read("src/sqlite/fts.rs").contains(CANONICAL_PROJECTION),
+            "fts.rs must stay a non-verbatim variant, as AGENTS.md states"
+        );
+
+        // The three readers the doc names as independent positional decoders
+        // must still decode by literal position and still not use the mapper.
+        for rel in [
+            "src/sqlite/search.rs",
+            "src/sqlite/fts.rs",
+            "src/sqlite/export_scan.rs",
+        ] {
+            let src = read(rel);
+            assert!(
+                src.contains("row.get(0)?") || src.contains("row.get::<_, String>(0)?"),
+                "{rel} must still be a positional decoder named by AGENTS.md"
+            );
+            assert!(
+                !src.contains("map_row_to_memory("),
+                "{rel} must not start using map_row_to_memory — AGENTS.md lists it as an independent decoder"
+            );
+        }
+
+        // The docs call the projection 13 columns and EMBEDDING_COLUMN column 4.
+        assert_eq!(4, super::super::EMBEDDING_COLUMN);
+        assert_eq!(
+            13,
+            CANONICAL_PROJECTION
+                .trim_start_matches("SELECT ")
+                .split(", ")
+                .count()
+        );
+    }
 }
