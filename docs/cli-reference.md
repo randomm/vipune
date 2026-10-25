@@ -486,6 +486,7 @@ vipune mcp
 - `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
 - `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
 - `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes` (see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for what a hidden `candidate` replacement means and how to activate it)
+- `importance` — initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive). Stored on the new row, including the row created by `supersedes`; `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row
 - `supersedes` — ID of memory to supersede (atomically replaces old memory)
 - `force` — force store even if conflicts detected (default: `false`)
 
@@ -495,7 +496,7 @@ vipune mcp
 - `memory_type` — optional type for the new memory (default: `fact`)
 - `metadata` — optional structured labels as JSON
 
-It has no `status` parameter, so the row it creates is always `active`. Stage a `candidate` replacement through `store_memory` with `supersedes` + `status` instead.
+It has no `status` parameter, so the row it creates is always `active`, and no `importance` parameter, so that row is always `medium` (and therefore eligible for `prune`). Stage a `candidate` or a prune-exempt replacement through `store_memory` with `supersedes` + `status`/`importance` instead.
 
 `get_memory` accepts:
 - `id` — ID of the memory to retrieve (required)

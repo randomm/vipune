@@ -8,6 +8,34 @@ use std::sync::{Arc, Mutex};
 
 use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 
+/// The caller-supplied columns of a row an MCP write tool is about to create:
+/// the row itself plus, for the supersede arm, the id it replaces.
+///
+/// Grouping them keeps the two write wrappers under clippy's argument ceiling
+/// without an `allow` — the same reason `NewMemory` exists one layer down
+/// (`src/memory/add.rs`) — and keeps every level, type and status a named field
+/// at the call site rather than a positional tail an extra argument can slip
+/// past (#238, #256, #258).
+pub(crate) struct McpWrite<'a> {
+    /// Project the row belongs to.
+    pub project_id: &'a str,
+    /// Text content to store.
+    pub text: &'a str,
+    /// Serialised metadata, or the literal `"null"` for none.
+    pub metadata: &'a str,
+    /// Memory type of the new row.
+    pub memory_type: MemoryType,
+    /// Lifecycle status of the new row.
+    pub status: MemoryStatus,
+    /// Importance of the new row — what decides the `high`/`critical` prune
+    /// exemption.
+    pub importance: MemoryImportance,
+    /// Set on the supersede arm: the id the new row replaces.
+    pub supersedes: Option<&'a str>,
+    /// Set on the ingest arm: bypass the conflict gate.
+    pub force: bool,
+}
+
 /// Wrapper for MemoryStore to allow async-sound use.
 ///
 /// Since MCP stdio handles requests sequentially, the Mutex will never contend.
@@ -20,76 +48,33 @@ impl StoreWrapper {
         Self(store)
     }
 
-    /// Store a memory with conflict detection.
-    #[allow(dead_code)] // Used for backward compatibility
-    pub(crate) fn ingest(
-        &self,
-        project_id: &str,
-        text: &str,
-        metadata: &str,
-        force: bool,
-    ) -> Result<serde_json::Value, rmcp::ErrorData> {
-        let mut store = self.0.lock().unwrap();
-        let policy = if force {
-            IngestPolicy::Force
-        } else {
-            IngestPolicy::ConflictAware
-        };
-
-        match store
-            .ingest(project_id, text, Some(metadata), policy)
-            .map_err(|e| -> rmcp::ErrorData { e.into() })?
-        {
-            crate::memory_types::AddResult::Added { id } => {
-                Ok(serde_json::to_value(SuccessResponse {
-                    id,
-                    status: "added".to_string(),
-                })
-                .map_err(McpError::from_serde_error)?)
-            }
-            crate::memory_types::AddResult::Conflicts {
-                proposed,
-                conflicts,
-            } => Err(McpError::conflict(
-                &proposed,
-                conflicts
-                    .into_iter()
-                    .map(|c: InternalConflictMemory| ConflictMemory {
-                        id: c.id,
-                        content: c.content,
-                        similarity: c.similarity,
-                    })
-                    .collect(),
-            )),
-        }
-    }
-
-    /// Store a memory with explicit type and status.
-    #[allow(dead_code)] // Used by store_memory with type/status
+    /// Store a memory with explicit type, status and importance — the one
+    /// ingest path `store_memory` drives. The level is a parsed
+    /// [`MemoryImportance`], so the column gets the canonical `as_str` spelling
+    /// rather than the argument string, and `medium` is bound by name (the
+    /// store's own default) rather than by the INSERT omitting the column.
     pub(crate) fn ingest_with_type_status(
         &self,
-        project_id: &str,
-        text: &str,
-        metadata: &str,
-        force: bool,
-        memory_type: MemoryType,
-        status: MemoryStatus,
+        row: &McpWrite<'_>,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let mut store = self.0.lock().unwrap();
-        let policy = if force {
+        let policy = if row.force {
             IngestPolicy::Force
         } else {
             IngestPolicy::ConflictAware
         };
 
         match store
-            .ingest_with_type_status(
-                project_id,
-                text,
-                Some(metadata),
+            .ingest_with_importance(
+                &NewMemory {
+                    project_id: row.project_id,
+                    content: row.text,
+                    metadata: Some(row.metadata),
+                    memory_type: row.memory_type,
+                    status: row.status,
+                },
                 policy,
-                memory_type,
-                status,
+                row.importance,
             )
             .map_err(|e| -> rmcp::ErrorData { e.into() })?
         {
@@ -117,9 +102,10 @@ impl StoreWrapper {
         }
     }
 
-    /// Supersede an existing memory with new content, at the `active` status —
-    /// what the `supersede_memory` tool drives (it has no `status` parameter).
-    #[allow(dead_code)] // Used by supersede_memory tool
+    /// Supersede an existing memory with new content, at the `active` status and
+    /// default `medium` importance — what the `supersede_memory` tool drives (it
+    /// has neither a `status` nor an `importance` parameter). The level is bound
+    /// by name here rather than left to the INSERT's column DEFAULT (#238).
     pub(crate) fn supersede(
         &self,
         project_id: &str,
@@ -128,61 +114,69 @@ impl StoreWrapper {
         memory_type: MemoryType,
         old_memory_id: &str,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
-        self.supersede_with_status(
+        self.supersede_with_status(&McpWrite {
             project_id,
-            new_text,
+            text: new_text,
             metadata,
             memory_type,
-            old_memory_id,
-            MemoryStatus::Active,
-        )
+            status: MemoryStatus::Active,
+            importance: MemoryImportance::default(),
+            supersedes: Some(old_memory_id),
+            force: false,
+        })
     }
 
     /// Supersede an existing memory with new content and an explicit lifecycle
-    /// status on the replacement row — what `store_memory`'s `supersedes` path
-    /// drives. `supersede_memory` reaches the same store call through
-    /// [`Self::supersede`], which passes `active`; the two tools differ only in
-    /// their schemas, not in a second write path.
+    /// status and importance on the replacement row — what `store_memory`'s
+    /// `supersedes` path drives. `supersede_memory` reaches the same store call
+    /// through [`Self::supersede`], which passes `active`/`medium`; the two tools
+    /// differ only in their schemas, not in a second write path.
     ///
     /// The `supersedes` arm of `store_memory` used to call [`Self::supersede`]
     /// with the status it had just parsed and validated still in a local, so a
     /// caller passing `status: "candidate"` together with `supersedes` got an
     /// `active` row and no warning (issue #258). The status is threaded to the
-    /// store here so the MCP surface matches the CLI. This frame adds nothing to
-    /// the insert-status rule: it takes `MemoryStatus`, the same type the store
-    /// takes, so no string can become an unvalidated status one frame lower, and
+    /// store here so the MCP surface matches the CLI, and from #256 the level
+    /// travels the same frame for the same reason: `vipune add --importance`
+    /// sets it on the row `--supersedes` creates.
+    ///
+    /// This frame adds nothing to the insert-status rule: it takes
+    /// `MemoryStatus`, the same type the store takes, so no string can become an
+    /// unvalidated status one frame lower, and
     /// [`MemoryStore::supersede_with`] is the one place that rejects
     /// `superseded`/`deprecated` — the error arrives back as `invalid_input`
     /// through `From<Error> for rmcp::ErrorData`.
     pub(crate) fn supersede_with_status(
         &self,
-        project_id: &str,
-        new_text: &str,
-        metadata: &str,
-        memory_type: MemoryType,
-        old_memory_id: &str,
-        status: MemoryStatus,
+        row: &McpWrite<'_>,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let mut store = self.0.lock().unwrap();
 
-        let metadata_str = if metadata == "null" {
+        let metadata_str = if row.metadata == "null" {
             None
         } else {
-            Some(metadata)
+            Some(row.metadata)
+        };
+
+        // The supersede arm is the only caller, so the replaced id is always
+        // there; a missing one is a wiring bug, not user input, and is answered
+        // as an internal error rather than by replacing nothing.
+        let old_memory_id = match row.supersedes {
+            Some(id) => id,
+            None => return Err(McpError::internal_error("supersede requires an id")),
         };
 
         let new_id = match store.supersede_with(&NewSupersedingMemory {
             row: NewMemory {
-                project_id,
-                content: new_text,
+                project_id: row.project_id,
+                content: row.text,
                 metadata: metadata_str,
-                memory_type,
-                status,
+                memory_type: row.memory_type,
+                status: row.status,
             },
             old_id: old_memory_id,
-            // No MCP tool takes an importance today, so the level is the store
-            // default bound by name — never the column DEFAULT (#238).
-            importance: MemoryImportance::default(),
+            // The level is the caller's, never the column DEFAULT (#238, #256).
+            importance: row.importance,
         }) {
             Ok(id) => id,
             Err(err) => {

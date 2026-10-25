@@ -1,11 +1,11 @@
 //! MCP tool implementations.
 
 use crate::mcp::helpers::format_memory_json;
-use crate::mcp::store_wrapper::{McpError, StoreWrapper};
+use crate::mcp::store_wrapper::{McpError, McpWrite, StoreWrapper};
 
 use crate::errors::Error;
 use crate::mcp::params::*;
-use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
@@ -91,10 +91,11 @@ impl ToolHandler {
     ///
     /// Use this when you learn something worth remembering — facts, decisions,
     /// preferences, or context about a project. Memories are searchable by meaning,
-    /// not just keywords.
+    /// not just keywords. Pass `importance: "high"` or `"critical"` for a
+    /// memory that lifecycle pruning must never demote.
     #[tool(
         name = "store_memory",
-        description = "Store information for later recall. Use this when you learn something worth remembering — facts, decisions, preferences, or context about a project. Memories are searchable by meaning, not just keywords."
+        description = "Store information for later recall. Use this when you learn something worth remembering — facts, decisions, preferences, or context about a project. Memories are searchable by meaning, not just keywords. Set importance to high or critical to protect a memory from prune."
     )]
     async fn store_memory(
         &self,
@@ -119,6 +120,14 @@ impl ToolHandler {
             .map_err(|e| McpError::invalid_input(&format!("Invalid status: {}", e)))?;
         status_val.ensure_valid_for_insert()?;
 
+        // Parse importance (default: "medium"). Parsed before either write
+        // branch below, so an invalid level is answered with a tool error and
+        // no row is written (#256). The typed level is what travels onward, so
+        // the column gets the canonical spelling rather than the raw argument.
+        let importance_str = params.importance.as_deref().unwrap_or("medium");
+        let importance_val = MemoryImportance::from_str(importance_str)
+            .map_err(|e| McpError::invalid_input(&format!("Invalid importance: {}", e)))?;
+
         // Serialize metadata
         let metadata_str = match &params.metadata {
             Some(meta) => serde_json::to_string(meta)
@@ -128,31 +137,36 @@ impl ToolHandler {
 
         // Handle supersedes path — the validated status has to travel with the
         // new row or `status: "candidate"` is silently stored as `active`
-        // (issue #258, the MCP twin of the CLI defect).
+        // (issue #258, the MCP twin of the CLI defect). The level travels with
+        // it for the same reason (#256): `vipune add --importance` is honoured
+        // on the row `--supersedes` creates, and this is that path's twin.
         if let Some(supersedes_id) = &params.supersedes {
-            let value = self.store.supersede_with_status(
-                &self.project_id,
-                &params.text,
-                &metadata_str,
-                memory_type_val,
-                supersedes_id,
-                status_val,
-            )?;
+            let value = self.store.supersede_with_status(&McpWrite {
+                project_id: &self.project_id,
+                text: &params.text,
+                metadata: &metadata_str,
+                memory_type: memory_type_val,
+                status: status_val,
+                importance: importance_val,
+                supersedes: Some(supersedes_id),
+                force: false,
+            })?;
             return Ok(CallToolResult::success(vec![Content::text(
                 serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
             )]));
         }
 
-        // Normal ingest path with type and status
-        let force = params.force.unwrap_or(false);
-        let value = self.store.ingest_with_type_status(
-            &self.project_id,
-            &params.text,
-            &metadata_str,
-            force,
-            memory_type_val,
-            status_val,
-        )?;
+        // Normal ingest path with type, status and level
+        let value = self.store.ingest_with_type_status(&McpWrite {
+            project_id: &self.project_id,
+            text: &params.text,
+            metadata: &metadata_str,
+            memory_type: memory_type_val,
+            status: status_val,
+            importance: importance_val,
+            supersedes: None,
+            force: params.force.unwrap_or(false),
+        })?;
 
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string(&value).map_err(McpError::from_serde_error)?,

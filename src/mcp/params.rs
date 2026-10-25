@@ -30,6 +30,16 @@ pub struct StoreMemoryParams {
     #[schemars(description = "Memory status: active, candidate (default: active).")]
     pub status: Option<String>,
 
+    /// Importance: `low`, `medium` (default), `high`, `critical` (case-insensitive).
+    /// `high` and `critical` rows are exempt from `prune`. Accepted on the
+    /// `supersedes` path too, where it is the level of the *new* row — exactly
+    /// like `vipune add --importance --supersedes` (issue #256).
+    #[serde(default)]
+    #[schemars(
+        description = "Importance: low, medium (default), high, critical (case-insensitive). high and critical rows are exempt from prune. On the supersedes path this is the level of the new row."
+    )]
+    pub importance: Option<String>,
+
     /// ID of memory to supersede (creates new memory, marks old as superseded).
     #[serde(default)]
     #[schemars(

@@ -24,6 +24,8 @@
 mod helpers;
 mod params;
 pub mod server;
+#[cfg(test)]
+mod store_memory_docs_tests;
 pub mod store_wrapper;
 #[cfg(test)]
 mod test_transport;
