@@ -184,7 +184,11 @@ pub fn handle_promote(
     project_id: &str,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    let db = Database::open(db_path).map_err(super::db_busy::open_db_error)?;
+    let db = super::db_busy::wrap_busy(Database::open(db_path))?;
+    // Same fast-fail contract as backup/merge/prune/reindex: a contended
+    // promote must emit the actionable locked message, not block on SQLite's
+    // default busy behaviour while it writes status updates per row.
+    super::db_busy::wrap_busy(db.set_busy_timeout(std::time::Duration::ZERO))?;
 
     let threshold = resolve_promotion_threshold()?;
     let promoted = run_promotion(&db, project_id)?;

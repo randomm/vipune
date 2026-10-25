@@ -143,12 +143,13 @@ pub fn handle_reindex(
                 .embed_passage(content)
                 .map_err(|e| Error::Inference(e.to_string()))
         };
-        let (reindexed, skipped, failed) = super::db_busy::wrap_busy_error(reindex_project(
-            &db,
-            &mut embed_callback,
-            project_id,
-            json,
-        ))?;
+        // A lock surfacing mid-loop stays a structured `DatabaseLocked` rather
+        // than the "just retry" hint: earlier projects have already been
+        // re-embedded, so the operator needs the real diagnosis, not a message
+        // that reads as a transient failure. Setup paths above fast-fail through
+        // `open_fast_fail`.
+        let (reindexed, skipped, failed) =
+            reindex_project(&db, &mut embed_callback, project_id, json)?;
         let failed_count = failed.len();
         total_failed += failed_count;
         responses.push(ReindexResponse {

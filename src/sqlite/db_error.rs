@@ -1,27 +1,53 @@
 //! Classification of raw `rusqlite::Error` at the storage boundary (issue #255).
 //!
-//! Lives in its own module because it is the single place that decides what a
-//! database failure *means* to the rest of the program. The public
-//! `vipune::Error` deliberately carries no rusqlite type, so the question
-//! "is this a locked/busy database?" has to be answered here, once, while the
-//! SQLite result code is still in hand — not by the eight command handlers
-//! matching the Display text, which is what they used to do and which breaks
-//! silently the moment a dependency rewords its message.
+//! The one place that decides what a database failure *means*, from the SQLite
+//! result code while it is still in hand. The verdict travels as a typed
+//! variant (`sqlite::Error::Locked` / `vipune::Error::DatabaseLocked`), never
+//! as message text.
 
 use rusqlite::ffi;
 
 use super::Error;
 
+/// The public rendering of a locked store: the storage-layer Display text for
+/// [`DbErrorKind::Locked`]. Kept next to the classifier that produces it so the
+/// text and the verdict stay one decision (issue #255).
+pub(crate) const LOCKED_DISPLAY: &str = "Database error: database is locked";
+
 /// How a raw `rusqlite::Error` should be presented to callers.
 #[derive(Debug)]
 pub(crate) enum DbErrorKind<'a> {
     /// `SQLITE_BUSY` / `SQLITE_LOCKED` — another process holds a lock.
+    ///
+    /// The canonical busy text the storage layer renders for this verdict.
+    /// `hook/run.rs` and the pi-rukas `ctx7` wrapper both match it, so
+    /// `sqlite::Error::Locked`'s Display and the tests below are pinned to it.
     Locked,
     /// A vipune domain error surfaced through a row-conversion failure
     /// (`query_mod::corrupt_embedding_error`); carries the structured variant.
+    ///
+    /// Only the structured embedding-decoding variants qualify — see
+    /// [`is_trusted_domain_error`] — so an unrelated error that happens to
+    /// expose a `crate::sqlite::Error` on its source chain is never echoed
+    /// verbatim to the CLI or to MCP clients.
     Domain(&'a Error),
     /// Any other database failure.
     Other,
+}
+
+/// The domain errors a row-conversion failure is allowed to carry.
+///
+/// `query_mod::corrupt_embedding_error` is the only producer, and it wraps
+/// exactly these three decoding failures. Anything else on the source chain is
+/// not ours to trust, so the classifier falls through to `Other` rather than
+/// promoting its payload into the public error.
+fn is_trusted_domain_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::CorruptEmbedding { .. }
+            | Error::InvalidBlobSize { .. }
+            | Error::MismatchedDimensions { .. }
+    )
 }
 
 /// Classify a raw rusqlite error at the storage boundary.
@@ -46,6 +72,7 @@ pub(crate) fn classify_db_error(err: &rusqlite::Error) -> DbErrorKind<'_> {
     if let rusqlite::Error::FromSqlConversionFailure(_, _, boxed) = err
         && let Some(source) = (**boxed).source()
         && let Some(domain) = source.downcast_ref::<Error>()
+        && is_trusted_domain_error(domain)
     {
         return DbErrorKind::Domain(domain);
     }
@@ -90,5 +117,34 @@ mod tests {
             DbErrorKind::Domain(Error::CorruptEmbedding { id, .. }) => assert_eq!(id, "mem-1"),
             other => panic!("expected the CorruptEmbedding domain error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_untrusted_domain_error_on_the_source_chain_is_other() {
+        // Only the three decoding variants are trusted. A `NotFound` (whose
+        // payload is sanitised on the way out) smuggled in the same shape must
+        // not be promoted to a public domain error.
+        let smuggled = rusqlite::Error::FromSqlConversionFailure(
+            crate::sqlite::EMBEDDING_COLUMN,
+            rusqlite::types::Type::Blob,
+            Box::new(rusqlite::types::FromSqlError::other(Error::NotFound(
+                "secret-uuid".to_string(),
+            ))),
+        );
+        assert!(matches!(classify_db_error(&smuggled), DbErrorKind::Other));
+    }
+
+    #[test]
+    fn locked_storage_error_renders_the_canonical_busy_text() {
+        // The storage boundary's rendering is what `hook/run.rs` and the
+        // pi-rukas `ctx7` wrapper match. Pinning it here turns a Display
+        // change from silent mis-classification into a failing test.
+        let busy = rusqlite::Error::SqliteFailure(
+            ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("database is locked".to_string()),
+        );
+        let storage: Error = busy.into();
+        assert!(matches!(storage, Error::Locked));
+        assert_eq!(storage.to_string(), LOCKED_DISPLAY);
     }
 }

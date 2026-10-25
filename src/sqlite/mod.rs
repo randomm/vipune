@@ -2,7 +2,7 @@
 //!
 //! Provides: `Database`, `Memory`, `embedding`, `search`, `fts`, `hash` modules.
 
-pub mod db_error;
+pub(crate) mod db_error;
 pub mod embedding;
 pub mod export_scan;
 pub mod fts;
@@ -13,7 +13,7 @@ pub mod insert;
 pub mod list;
 pub mod migration_types;
 pub mod migrations;
-pub mod project_queries;
+pub(crate) mod project_queries;
 pub mod query_mod;
 pub mod search;
 pub mod supersede;
@@ -80,6 +80,12 @@ pub struct Memory {
 pub enum Error {
     /// SQLite database error with message.
     Sqlite(String),
+    /// The database is locked or busy (`SQLITE_BUSY` / `SQLITE_LOCKED`).
+    ///
+    /// The verdict is decided once from the SQLite result code by
+    /// [`db_error::classify_db_error`] and carried as this variant, so no
+    /// layer above has to re-derive it from message text (issue #255).
+    Locked,
     /// Embedding BLOB for a specific memory failed to decode.
     ///
     /// Carries the affected memory `id` so the corrupt row can be located and
@@ -114,6 +120,11 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Sqlite(msg) => write!(f, "Database error: {}", msg),
+            // Byte-compatible with the old `Sqlite("database is locked")`
+            // rendering: the pi-rukas `ctx7` shell wrapper (outside this repo)
+            // matches this text in the CLI's stderr, and `hook/run.rs` matches
+            // it to classify a busy insert.
+            Error::Locked => write!(f, "{}", crate::sqlite::db_error::LOCKED_DISPLAY),
             Error::CorruptEmbedding { id, reason } => {
                 write!(f, "Corrupt embedding for memory id: {} ({})", id, reason)
             }
@@ -158,9 +169,9 @@ impl std::error::Error for Error {}
 impl From<rusqlite::Error> for Error {
     fn from(err: rusqlite::Error) -> Self {
         match db_error::classify_db_error(&err) {
-            // Canonical rusqlite busy text, so `Error::is_locked` still
-            // recognises it on the other side of the public boundary.
-            db_error::DbErrorKind::Locked => Error::Sqlite("database is locked".to_string()),
+            // The typed verdict survives the boundary: the classifier read the
+            // SQLite result code, so nothing above has to match the busy text.
+            db_error::DbErrorKind::Locked => Error::Locked,
             db_error::DbErrorKind::Domain(domain) => domain.clone(),
             db_error::DbErrorKind::Other => Error::Sqlite(err.to_string()),
         }

@@ -14,12 +14,10 @@ use std::process::ExitCode;
 
 /// Wrap a `rusqlite::Error` from a read-only diagnostic open, converting a
 /// locked database into the actionable MCP-server message. The public enum
-/// carries no rusqlite type, so the conversion happens here.
+/// carries no rusqlite type, so the conversion happens at the storage
+/// boundary — `super::db_busy` is the single place that renders the hint.
 fn wrap_rusqlite_busy<T>(result: Result<T, rusqlite::Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(e) => super::db_busy::wrap_busy_error(Err(Error::from(e))),
-    }
+    super::db_busy::wrap_rusqlite_busy(result)
 }
 
 /// Run the embedding doctor check on the database.

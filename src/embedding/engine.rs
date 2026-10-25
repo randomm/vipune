@@ -24,7 +24,7 @@ use tokenizers::Tokenizer;
 
 use super::inference;
 use crate::embedding_profiles::{EmbeddingRole, ModelProfile};
-use crate::errors::Error;
+use crate::errors::{Error, with_prefix};
 use tokenizers::TruncationParams;
 
 /// Embedding dimensions for bge-small-en-v1.5 model.
@@ -261,12 +261,13 @@ impl EmbeddingEngine {
     }
 
     fn count_tokens(&self, input: &str) -> Result<usize, Error> {
-        let encoding =
-            self.count_tokenizer
-                .encode(input, true)
-                .map_err(|e| Error::Tokenization {
-                    message: format!("count tokenizer: {e}"),
-                })?;
+        // `Error::from` is the single boundary a `tokenizers::Error` crosses;
+        // the call-site context is prefixed afterwards, so the underlying
+        // Display text is carried through that one conversion.
+        let encoding = self
+            .count_tokenizer
+            .encode(input, true)
+            .map_err(|e| with_prefix("count tokenizer:")(Error::from(e)))?;
         Ok(encoding.get_ids().len())
     }
 }

@@ -310,20 +310,25 @@ fn test_locked_database_fast_fails() {
         Ok(_) => panic!("Expected error when database is locked, got Ok"),
     }
 
-    // The fast-fail is driven by the structured classification, not the
-    // message: the same lock, read straight off the storage boundary, must
-    // surface as the dedicated locked variant (issue #255).
-    let locked = crate::sqlite::Database::open(&db_path)
-        .err()
-        .expect("opening a locked database must fail");
-    let public: Error = locked.into();
+    // Release lock
+    lock_conn.execute("ROLLBACK", []).unwrap();
+}
+
+#[test]
+fn locked_storage_error_surfaces_as_the_structured_public_variant() {
+    // The CLI assertion in `test_locked_database_fast_fails` proves the
+    // user-visible text; this proves the classification underneath it without
+    // depending on a second `Database::open` (which also runs schema creation
+    // and migrations) happening to fail while the lock is held.
+    let busy = rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+        Some("database is locked".to_string()),
+    );
+    let public: Error = crate::sqlite::Error::from(busy).into();
     assert!(
         matches!(public, Error::DatabaseLocked) && public.is_locked(),
         "a locked database must surface as Error::DatabaseLocked, got {public:?}"
     );
-
-    // Release lock
-    lock_conn.execute("ROLLBACK", []).unwrap();
 }
 
 // ── Hint text: pure function tests ──

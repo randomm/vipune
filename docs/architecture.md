@@ -17,6 +17,7 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 |--------|---------|
 | `src/main.rs` | CLI entry point, argument parsing with clap, command dispatch (add, search, get, list, delete, update, version) |
 | `src/commands.rs` | Command dispatch logic, CLI argument handling |
+| `src/commands/db_busy.rs` | Shared locked-database fast-fail presentation for the command handlers |
 | `src/memory/` | Memory store CRUD operations and search (replaces old `src/memory.rs`) |
 | `src/memory/mod.rs` | Module re-exports |
 | `src/memory/store.rs` | Core MemoryStore struct, `&mut self` embedding requirements |
@@ -31,7 +32,8 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 | `src/embedding.rs` | ONNX model loading and text-to-vector conversion using bge-small-en-v1.5 and HuggingFace tokenizer |
 | `src/project.rs` | Project auto-detection from git remote, environment variable, or working directory |
 | `src/config/` | Configuration loading from TOML files, environment variables, and validation |
-| `src/errors.rs` | Unified, vipune-owned error types. No variant stores a third-party error type: rusqlite, ONNX, tokenizer and HuggingFace Hub failures are flattened into a message at the boundary, so upgrading those crates is not a breaking change to the public API. A locked database is the dedicated `Error::DatabaseLocked` variant, testable with `Error::is_locked()`. |
+| `src/errors.rs` | Unified, vipune-owned error types; no variant stores a third-party error type. Locked database is `Error::DatabaseLocked` (`Error::is_locked()`). |
+| `src/sqlite/db_error.rs` | Classifies raw `rusqlite::Error` from the SQLite result code at the storage boundary — the one place a lock is recognised |
 | `src/memory_types.rs` | Shared type definitions (AddResult, ConflictMemory) |
 | `src/output.rs` | JSON response formatting for CLI output |
 | `src/temporal.rs` | Recency decay scoring with exponential/linear decay functions for search result weighting |

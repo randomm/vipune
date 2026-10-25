@@ -29,30 +29,27 @@ use thiserror::Error;
 pub const LOCKED_DB_HINT: &str =
     "Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.";
 
-/// Canonical SQLite text for a busy database, as surfaced by the storage
-/// layer's classification (`sqlite::classify_db_error`). A `Database` variant
-/// that carries it is still a locked database — see [`Error::is_locked`].
-const BUSY_MESSAGE: &str = "database is locked";
-
 /// The full user-facing text command handlers use for a locked database.
 ///
 /// The CLI prints `Error: {}`, so this string is the user-visible contract for
-/// every busy-database path; it is also what [`Error::DatabaseLocked`]'s
-/// Display renders. Kept as a constant so the eight command handlers and the
-/// predicate share one definition.
+/// every busy-database path. `concat!` cannot splice a `&str` const, so the
+/// composition is spelled out and pinned to the [`Error::DatabaseLocked`]
+/// Display by `errors_public_api_tests` — the one place the two are kept
+/// equal, so the CLI text cannot drift from the variant text unnoticed.
 pub const LOCKED_DB_MESSAGE: &str = "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.";
 
-/// Map a third-party error into a vipune-owned message.
+/// Prefix the message of a [`Error::Tokenization`] with call-site context.
 ///
-/// The third-party type stops here: it appears in no variant and no public
-/// signature, so its library can be upgraded without breaking `vipune::Error`.
-/// Its `Display` text is preserved in the message, which is the documented
-/// trade-off against a `source()` chain for these variants.
-fn third_party_message<E>(err: &E) -> String
-where
-    E: std::fmt::Display,
-{
-    err.to_string()
+/// For call sites that already converted a third-party error through
+/// [`From<tokenizers::Error>`] and want to say *which* tokenizer failed,
+/// without reaching around that conversion to build the variant by hand.
+pub fn with_prefix(prefix: &str) -> impl Fn(Error) -> Error + '_ {
+    move |err| match err {
+        Error::Tokenization { message } => Error::Tokenization {
+            message: format!("{prefix} {message}"),
+        },
+        other => other,
+    }
 }
 
 /// Main error type for vipune operations.
@@ -89,25 +86,19 @@ pub enum Error {
     #[error("Tokenization error: {message}")]
     Tokenization { message: String },
 
-    /// ONNX session error.
-    #[error("ONNX session error: {message}")]
-    Onnx { message: String },
-
-    /// HuggingFace Hub error.
+    /// HuggingFace Hub failure. Kept because the download paths in
+    /// `embedding/engine.rs` convert `ApiError` through it.
     #[error("HuggingFace Hub error: {message}")]
     HfHub { message: String },
 
-    /// JSON error.
-    #[error("JSON error: {message}")]
-    Json { message: String },
+    /// ONNX session failure. Kept because the inference path converts
+    /// `ort::error::Error` through it.
+    #[error("ONNX session error: {message}")]
+    Onnx { message: String },
 
     /// Configuration error.
     #[error("Configuration error: {0}")]
     Config(String),
-
-    /// Invalid date/time.
-    #[error("Invalid date/time: {message}")]
-    Chrono { message: String },
 
     /// Invalid input.
     #[error("Invalid input: {0}")]
@@ -148,6 +139,12 @@ pub enum Error {
     /// Carries the affected memory `id` so library consumers can locate the
     /// corrupt row instead of parsing a message (issue #186; carried through
     /// the public boundary instead of flattening, issue #255).
+    ///
+    /// Unlike [`Error::NotFound`] — whose id is deliberately stripped by the
+    /// storage conversion — this id *is* rendered into CLI and MCP output: a
+    /// corrupt row is unlocatable without it, which is the point of #186. The
+    /// ids are the same UUIDs `list`/`search` already return, so naming one
+    /// discloses nothing the caller cannot already enumerate.
     #[error("Corrupt embedding for memory id: {id} ({reason})")]
     CorruptEmbedding { id: String, reason: String },
 
@@ -189,24 +186,15 @@ impl Error {
     /// True when this error means the database was locked or busy, i.e.
     /// another process holds a lock.
     ///
-    /// True for [`Error::DatabaseLocked`] and for a [`Error::Database`] whose
-    /// message carries rusqlite's canonical busy text — a message is the only
-    /// carrier available to the producers that flatten an arbitrary database
-    /// failure (the identity reads in `sqlite/identity.rs` and
-    /// `commands/import.rs`), so the predicate covers both shapes and those
-    /// paths stay classified (issue #255).
-    ///
-    /// This is the programmatic replacement for matching the Display text
-    /// "database is locked". The classification itself happens once, at the
-    /// storage boundary (`sqlite::classify_db_error`), from the SQLite result
-    /// code — not by message matching here.
+    /// Pure variant test — the programmatic replacement for matching the
+    /// Display text "database is locked". The classification happens once, at
+    /// the storage boundary (`sqlite::classify_db_error`), from the SQLite
+    /// result code, and travels as the [`Error::DatabaseLocked`] variant: no
+    /// arm here inspects a message, so store- or dependency-controlled text
+    /// can never steer this decision (issue #255).
     #[must_use]
     pub fn is_locked(&self) -> bool {
-        match self {
-            Self::DatabaseLocked => true,
-            Self::Database { message } => message.contains(BUSY_MESSAGE),
-            _ => false,
-        }
+        matches!(self, Self::DatabaseLocked)
     }
 }
 
@@ -256,15 +244,14 @@ impl From<crate::sqlite::Error> for Error {
                 Error::MigrationIncomplete { report }
             }
             // A locked/busy database is its own variant so callers never have
-            // to match the message (issue #255). The sqlite-level Display form
-            // starts with the canonical busy text only for such errors.
-            crate::sqlite::Error::Sqlite(msg) if msg.contains(BUSY_MESSAGE) => {
-                Error::DatabaseLocked
-            }
+            // to match the message (issue #255).
+            crate::sqlite::Error::Locked => Error::DatabaseLocked,
             crate::sqlite::Error::Sqlite(msg) => Error::Database { message: msg },
-            _ => Error::Database {
+            crate::sqlite::Error::EmptyVector => Error::Database {
                 message: err.to_string(),
             },
+            crate::sqlite::Error::InvalidEmbedding(msg) => Error::Database { message: msg },
+            crate::sqlite::Error::InvalidLimit(msg) => Error::Database { message: msg },
         }
     }
 }
@@ -272,7 +259,7 @@ impl From<crate::sqlite::Error> for Error {
 impl From<tokenizers::Error> for Error {
     fn from(err: tokenizers::Error) -> Self {
         Self::Tokenization {
-            message: third_party_message(&err),
+            message: err.to_string(),
         }
     }
 }
@@ -280,7 +267,7 @@ impl From<tokenizers::Error> for Error {
 impl From<ort::error::Error> for Error {
     fn from(err: ort::error::Error) -> Self {
         Self::Onnx {
-            message: third_party_message(&err),
+            message: err.to_string(),
         }
     }
 }
@@ -288,24 +275,27 @@ impl From<ort::error::Error> for Error {
 impl From<hf_hub::api::sync::ApiError> for Error {
     fn from(err: hf_hub::api::sync::ApiError) -> Self {
         Self::HfHub {
-            message: third_party_message(&err),
+            message: err.to_string(),
         }
     }
 }
 
 impl From<serde_json::Error> for Error {
+    /// Flattened onto `InvalidInput`: a serde failure is always a bad payload
+    /// the caller controls (an invalid `--metadata` document, an unserialisable
+    /// response), which is what that variant means. A dedicated `Json` variant
+    /// had no construction site, so it would have been public surface for a
+    /// shape nothing produces.
     fn from(err: serde_json::Error) -> Self {
-        Self::Json {
-            message: third_party_message(&err),
-        }
+        Self::InvalidInput(err.to_string())
     }
 }
 
 impl From<chrono::ParseError> for Error {
+    /// Flattened onto `InvalidInput` for the same reason as the serde
+    /// conversion: a timestamp that will not parse is bad input.
     fn from(err: chrono::ParseError) -> Self {
-        Self::Chrono {
-            message: third_party_message(&err),
-        }
+        Self::InvalidInput(err.to_string())
     }
 }
 
@@ -439,15 +429,14 @@ mod error_conversion_tests {
 
     #[test]
     fn locked_errors_convert_to_the_dedicated_locked_variant() {
-        // Both producers of locked-database errors — the sqlite `Sqlite`
-        // variant (which renders rusqlite's canonical text) and the direct
-        // rusqlite path — must land on `DatabaseLocked`, never on a message a
-        // caller would have to substring-match.
-        let from_sqlite: Error =
-            crate::sqlite::Error::Sqlite("database is locked".to_string()).into();
+        // Both producers of locked-database errors — the storage layer's
+        // dedicated `Locked` variant and the direct rusqlite path — must land
+        // on `DatabaseLocked`, never on a message a caller would have to
+        // substring-match.
+        let from_sqlite: Error = crate::sqlite::Error::Locked.into();
         assert!(
             matches!(from_sqlite, Error::DatabaseLocked),
-            "sqlite::Error::Sqlite('database is locked') must be classified locked, got {from_sqlite:?}"
+            "sqlite::Error::Locked must be classified locked, got {from_sqlite:?}"
         );
         assert!(from_sqlite.is_locked());
 

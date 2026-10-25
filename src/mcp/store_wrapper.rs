@@ -504,7 +504,13 @@ impl From<Error> for rmcp::ErrorData {
             // Database errors keep the INTERNAL_ERROR code and the rendered
             // message (issue #255 changed only the message body: the underlying
             // SQLite text is now included instead of the bare "Database
-            // error"). A locked database is reported as such so an MCP client
+            // error"). That text is returned verbatim to the client by design:
+            // the MCP server is a stdio transport the client itself started,
+            // and the same client can run the CLI and read the identical string
+            // on stderr, so nothing is disclosed here that the CLI withholds.
+            // Downstream log-shipping therefore sees raw SQLite text
+            // (`no such table: …`, `UNIQUE constraint failed: memories.id`).
+            // A locked database is reported as such so an MCP client
             // can retry rather than treat it as a server defect.
             Error::DatabaseLocked => rmcp::ErrorData::new(
                 rmcp::model::ErrorCode::INTERNAL_ERROR,

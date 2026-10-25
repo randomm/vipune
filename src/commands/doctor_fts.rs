@@ -25,24 +25,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-/// Wrap a `rusqlite::Error` from a read-only diagnostic open, converting a
-/// locked database into the actionable MCP-server message. Duplicated from
-/// `doctor.rs` (its copy is not `pub`); the public enum carries no rusqlite
-/// type, so the conversion happens at this boundary.
-fn wrap_rusqlite_busy<T>(result: Result<T, rusqlite::Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(e) => super::db_busy::wrap_busy_error(Err(Error::from(e))),
-    }
-}
-
-/// Wrap a `Result<T, crate::sqlite::Error>`, converting a locked-DB error into
-/// the actionable `Error::Config` message and mapping everything else through
-/// the public conversion.
-fn wrap_sqlite_busy<T>(result: Result<T, crate::sqlite::Error>) -> Result<T, Error> {
-    super::db_busy::wrap_busy(result)
-}
-
 /// A database-wide view of `memories` counts, keyed by project.
 #[derive(Default)]
 struct MemoryCounts {
@@ -88,12 +70,11 @@ fn handle_doctor_fts_detect(
 ) -> Result<ExitCode, Error> {
     // Open READ-ONLY — this diagnostic must not modify the DB. Any accidental write
     // fails with SQLITE_READONLY instead of silently corrupting data.
-    let db = Database::from_conn(wrap_rusqlite_busy(Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ))?);
+    let db = Database::from_conn(super::db_busy::wrap_rusqlite_busy(
+        Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY),
+    )?);
 
-    let report: FtsDesyncReport = wrap_sqlite_busy(db.detect_fts_desync())?;
+    let report: FtsDesyncReport = super::db_busy::wrap_busy(db.detect_fts_desync())?;
     let counts = super::db_busy::wrap_busy_error(memory_counts(&db))?;
 
     let response = build_response(&report, &counts, project_filter, false, 0);
@@ -115,11 +96,10 @@ fn handle_doctor_fts_repair(
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Pre-check: open READ-ONLY and run the rowid join.
-    let pre = Database::from_conn(wrap_rusqlite_busy(Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ))?);
-    let pre_report: FtsDesyncReport = wrap_sqlite_busy(pre.detect_fts_desync())?;
+    let pre = Database::from_conn(super::db_busy::wrap_rusqlite_busy(
+        Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY),
+    )?);
+    let pre_report: FtsDesyncReport = super::db_busy::wrap_busy(pre.detect_fts_desync())?;
 
     // No desync → skip the rebuild entirely, report zero actions, data_version untouched.
     if !pre_report.is_desynced() {
@@ -129,16 +109,32 @@ fn handle_doctor_fts_repair(
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Desynced → open read-write with ZERO busy timeout (reindex fast-fail pattern)
-    // so a locked DB errors immediately with the actionable message instead of hanging.
+    // Desynced → open read-write with ZERO busy timeout (reindex fast-fail
+    // pattern) so a locked DB errors immediately with the actionable message
+    // instead of hanging.
+    //
+    // `Database::open` runs `create_schema`, so on a `BEGIN EXCLUSIVE` store
+    // the lock is hit at the open itself — the point *before* any rebuild has
+    // run — and that failure must keep the plain transient framing. Only a lock
+    // hit by the rebuild statement itself means the index may be half-rebuilt,
+    // which is why the recovery note is appended below and not here.
     let db = open_read_write(db_path)?;
     // Rebuild the FTS index in place. This is the FTS5 special command — it
     // re-reads every `memories` row into `memories_fts` and is the only rebuild the
-    // repo uses. It does not touch `memories` data. Fast-fail on a lock.
-    super::db_busy::wrap_busy(db.rebuild_fts())?;
+    // repo uses. It does not touch `memories` data. Fast-fail on a lock: a
+    // SQLITE_BUSY here aborts the statement, so the caller is told to re-run
+    // the repair (the rebuild is idempotent) rather than left guessing.
+    if let Err(e) = super::db_busy::wrap_busy(db.rebuild_fts()) {
+        return Err(match e {
+            Error::Config(_) => Error::Config(format!(
+                "{e} The FTS index may be half-rebuilt; re-run `vipune doctor --fts --repair` to complete it."
+            )),
+            other => other,
+        });
+    }
 
     // Post-rebuild: detect again on the same (still-open, read-write) connection.
-    let post_report: FtsDesyncReport = wrap_sqlite_busy(db.detect_fts_desync())?;
+    let post_report: FtsDesyncReport = super::db_busy::wrap_busy(db.detect_fts_desync())?;
     let counts = super::db_busy::wrap_busy_error(memory_counts(&db))?;
     let actions = post_report.total_desynced() + pre_report.total_desynced();
     let response = build_response(&post_report, &counts, project_filter, true, actions);
@@ -150,7 +146,7 @@ fn handle_doctor_fts_repair(
 /// Open the database read-write (schema creation is a no-op on an existing DB), then
 /// set a ZERO busy timeout so a locked DB fast-fails with the actionable message.
 fn open_read_write(db_path: &Path) -> Result<Database, Error> {
-    let db = Database::open(db_path).map_err(super::db_busy::open_db_error)?;
+    let db = super::db_busy::wrap_busy(Database::open(db_path))?;
     db.set_busy_timeout(std::time::Duration::ZERO)?;
     Ok(db)
 }

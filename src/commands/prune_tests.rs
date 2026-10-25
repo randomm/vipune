@@ -359,3 +359,43 @@ fn test_add_time_importance_protects_from_prune() {
     assert_eq!(status_of(&db, &critical), "candidate");
     assert_eq!(status_of(&db, &low), "deprecated");
 }
+
+#[test]
+#[ignore = "documents the partial-failure contract gap left by #255; run with `cargo test -- --ignored`"]
+fn a_lock_mid_prune_discards_the_rows_already_demoted() {
+    // `wrap_busy_error` around `PruneEvaluator::run_for_project` collapses a
+    // lock hit partway through the per-row demotion loop into the locked
+    // message, so the ids demoted before the lock never reach the operator.
+    // Pinned as an ignored test so a fix (detect the lock inside the loop and
+    // return the partial counts) has a failing test to start from.
+    use crate::commands::prune::handle_prune;
+
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
+    let old = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+    for i in 0..3 {
+        db.insert_with_time(
+            "proj-a",
+            &format!("stale {i}"),
+            &[0.1f32; crate::embedding::EMBEDDING_DIMS],
+            None,
+            &old,
+            &old,
+            "fact",
+            "candidate",
+        )
+        .unwrap();
+    }
+    drop(db);
+
+    let lock_conn = rusqlite::Connection::open(&db_path).unwrap();
+    lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+    match handle_prune(&db_path, 3, 14, true) {
+        Err(crate::errors::Error::Config(msg)) => {
+            assert!(msg.contains("MCP server"), "got: {msg}");
+        }
+        other => panic!("expected the locked Config error, got {other:?}"),
+    }
+    lock_conn.execute("ROLLBACK", []).unwrap();
+}

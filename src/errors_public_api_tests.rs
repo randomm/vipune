@@ -9,28 +9,23 @@
 use super::*;
 
 #[test]
-fn public_error_exposes_no_third_party_types() {
-    // No third-party error type may appear in the public API, so upgrading
-    // rusqlite / tokenizers / ort / hf_hub / serde_json / chrono cannot break
-    // a library consumer.
+fn public_variants_are_constructible_from_owned_payloads() {
+    // Every variant this test names is built from vipune-owned payloads only
+    // (`String`, `usize`) — so upgrading rusqlite / tokenizers / ort / hf_hub
+    // / serde_json / chrono cannot change the public API.
     //
-    // The check is a type-level one, which is the only form that actually
-    // fails: each `fn` below names a public constructor's exact shape. If a
-    // variant ever stores a third-party type again — the old
-    // `SQLite(#[from] rusqlite::Error)`, for instance — the vipune-owned
-    // message payload it replaces is gone and the assignment stops compiling
-    // with a mismatched-function-pointer error. The shape stays pinned the
-    // other way too: renaming `Database { message }` fails here as well.
+    // What this does NOT prove: that no variant anywhere stores a third-party
+    // type. A closure that constructs the vipune-owned payload type-checks
+    // whatever the removed payload used to be, and a variant absent from this
+    // list is simply unchecked. A regression of that shape has to be caught by
+    // reviewing the variant, not here.
     //
-    // `Error::Io(std::io::Error)` is retained deliberately: std is not a
-    // third-party dependency.
+    // `Error::Io(std::io::Error)` is pinned too: std is not a third-party
+    // dependency, but it is still part of the public shape.
     let _: fn(String) -> Error = |message| Error::Database { message };
     let _: fn() -> Error = || Error::DatabaseLocked;
     let _: fn(String) -> Error = |message| Error::Tokenization { message };
-    let _: fn(String) -> Error = |message| Error::Onnx { message };
-    let _: fn(String) -> Error = |message| Error::HfHub { message };
-    let _: fn(String) -> Error = |message| Error::Json { message };
-    let _: fn(String) -> Error = |message| Error::Chrono { message };
+    let _: fn(std::io::Error) -> Error = Error::Io;
     let _: fn(String, String) -> Error = |id, reason| Error::CorruptEmbedding { id, reason };
     let _: fn(usize, usize) -> Error =
         |expected, actual| Error::InvalidBlobSize { expected, actual };
@@ -68,11 +63,16 @@ fn third_party_conversions_carry_the_message() {
         other => panic!("Expected Database, got {other:?}"),
     }
 
-    let json = serde_json::from_str::<serde_json::Value>("{oops").unwrap_err();
-    let err: Error = json.into();
+    let tokenizer = tokenizers::Error::from(std::io::Error::other("vocab missing"));
+    let err: Error = tokenizer.into();
     match err {
-        Error::Json { message } => assert!(!message.is_empty(), "message must not be empty"),
-        other => panic!("Expected Json, got {other:?}"),
+        Error::Tokenization { message } => {
+            assert!(
+                message.contains("vocab missing"),
+                "underlying message must survive, got: {message}"
+            );
+        }
+        other => panic!("Expected Tokenization, got {other:?}"),
     }
 }
 
@@ -91,20 +91,50 @@ fn locked_database_message_stays_byte_identical_to_the_cli_text() {
 }
 
 #[test]
-fn plain_database_error_with_busy_message_is_still_reported_locked() {
-    // The producers that flatten a database failure into a message (the
-    // identity reads in `sqlite/identity.rs` and `commands/import.rs`) must
-    // not regress to an unclassified error.
-    let err = Error::Database {
-        message: "Database error: database is locked".to_string(),
-    };
-    assert!(err.is_locked(), "got: {err:?}");
+fn with_prefix_only_rewrites_the_tokenization_message() {
+    // The engine's two tokenizer call sites prefix through this helper instead
+    // of building the variant by hand, so the prefix must carry the converted
+    // message and leave every other variant untouched.
+    let tokenized: Error = tokenizers::Error::from(std::io::Error::other("vocab missing")).into();
+    match with_prefix("count tokenizer:")(tokenized) {
+        Error::Tokenization { message } => {
+            assert_eq!(message, "count tokenizer: vocab missing");
+        }
+        other => panic!("expected Tokenization, got {other:?}"),
+    }
 
-    // …and a genuine non-busy failure is not.
     let other = Error::Database {
-        message: "disk I/O error".to_string(),
+        message: "no such table".to_string(),
     };
-    assert!(!other.is_locked());
+    assert!(matches!(
+        with_prefix("count tokenizer:")(other),
+        Error::Database { .. }
+    ));
+}
+
+#[test]
+fn database_display_prefix_is_pinned_because_classification_depends_on_it() {
+    // `hook/run.rs` and the pi-rukas `ctx7` wrapper both key on text that sits
+    // *inside* this framing. Pinning the prefix turns a Display change from a
+    // silent mis-classification into a failing test.
+    let err = Error::Database {
+        message: "database is locked".to_string(),
+    };
+    assert_eq!(
+        err.to_string(),
+        "Database error: database is locked",
+        "the Database Display prefix is a match target outside this crate"
+    );
+    // The framing alone is not a lock: classification is the variant, so a
+    // message that merely mentions the busy text stays a plain Database error.
+    assert!(
+        !err.is_locked(),
+        "a Database message must never classify as locked"
+    );
+
+    // And the storage boundary's own rendering keeps the same text.
+    let storage = crate::sqlite::Error::Sqlite("database is locked".to_string());
+    assert_eq!(storage.to_string(), "Database error: database is locked");
 }
 
 #[test]

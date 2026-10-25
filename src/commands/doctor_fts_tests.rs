@@ -289,6 +289,43 @@ fn repair_is_idempotent_second_run_skips() {
 // ── F9: locked DB fast-fails (both detect and repair) ──
 
 #[test]
+fn a_lock_before_the_rebuild_keeps_the_plain_transient_framing() {
+    // The repair path has two lock sites: the read-write open (nothing has
+    // been touched yet → plain "stop the MCP server and retry") and the rebuild
+    // statement itself (index possibly half-built → recovery note).
+    //
+    // An external-content FTS5 table is trigger-synced and rejects direct writes
+    // to `memories_fts`, so a fixture cannot both be desynced and survive
+    // `Database::open` under an existing writer — the mid-rebuild branch is only
+    // reachable with a real concurrent writer. This asserts the reachable half:
+    // a lock at the open must NOT claim a half-rebuilt index.
+    let (_dir, db_path) = create_test_db();
+    let db = Database::open(&db_path).unwrap();
+    let emb = test_fake_embedder("row").unwrap();
+    db.insert("proj-a", "row", &emb, None, "fact", "active")
+        .unwrap();
+    drop(db);
+
+    let lock_conn = Connection::open(&db_path).unwrap();
+    lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+    // Drop the pre-check's read-only connection first so the failure lands on
+    // the read-write open rather than the open_with_flags that precedes it.
+    match handle_doctor_fts(&db_path, None, true, false) {
+        Err(Error::Config(msg)) => {
+            assert!(msg.contains("MCP server"), "got: {msg}");
+            assert!(
+                !msg.contains("--repair"),
+                "a lock hit before the rebuild must not claim a half-rebuilt index: {msg}"
+            );
+        }
+        other => panic!("expected the locked Config error, got {other:?}"),
+    }
+
+    lock_conn.execute("ROLLBACK", []).unwrap();
+}
+
+#[test]
 fn f9_locked_db_fast_fails_on_detect_and_repair() {
     let (_dir, db_path) = create_test_db();
 
@@ -296,25 +333,23 @@ fn f9_locked_db_fast_fails_on_detect_and_repair() {
     let lock_conn = Connection::open(&db_path).unwrap();
     lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
 
-    // Detect (read-only open) must fast-fail with the actionable message.
-    // The classification is structured: `wrap_rusqlite_busy` decides via
-    // `Error::is_locked`, which is backed by the SQLite result code at the
-    // storage boundary — not by matching the rusqlite Display text (issue #255).
-    match handle_doctor_fts(&db_path, None, false, false) {
-        Err(Error::Config(msg)) => {
-            assert!(msg.contains("locked"), "got: {msg}");
-            assert!(msg.contains("MCP server"), "got: {msg}");
+    // Both modes hit the lock at their first statement (the read-only open for
+    // detect, the read-write `Database::open` for repair), so both render the
+    // transient framing: no rebuild has run yet, so there is nothing to re-run.
+    // The mid-rebuild framing is covered by
+    // `f9b_locked_during_rebuild_names_the_recovery_command`.
+    for repair in [false, true] {
+        match handle_doctor_fts(&db_path, None, repair, false) {
+            Err(Error::Config(msg)) => {
+                assert!(msg.contains("locked"), "got: {msg}");
+                assert!(msg.contains("MCP server"), "got: {msg}");
+                assert!(
+                    !msg.contains("--repair"),
+                    "a lock hit before the rebuild must not claim a half-rebuilt index (repair={repair}): {msg}"
+                );
+            }
+            other => panic!("expected Config locked error, got {other:?}"),
         }
-        other => panic!("expected Config locked error, got {other:?}"),
-    }
-
-    // Repair (pre-check read-only open) must also fast-fail.
-    match handle_doctor_fts(&db_path, None, true, false) {
-        Err(Error::Config(msg)) => {
-            assert!(msg.contains("locked"), "got: {msg}");
-            assert!(msg.contains("MCP server"), "got: {msg}");
-        }
-        other => panic!("expected Config locked error, got {other:?}"),
     }
 
     lock_conn.execute("ROLLBACK", []).unwrap();
