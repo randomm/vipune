@@ -75,7 +75,7 @@ After completing work, store important findings:
 - `vipune --help` displays all available commands
 
 **MCP tools** are also available (via `vipune mcp`):
-- `store_memory(text, metadata?, memory_type?, status?, importance?, supersedes?, force?)` — store with optional type/status/importance/supersede; `status` is honoured on the row `supersedes` creates, so `status: "candidate"` + `supersedes` stages a hidden replacement (see `cli-reference.md` → "Supersede with a candidate replacement" for what that means and how to activate it); `importance` (`low`/`medium`/`high`/`critical`, default `medium`) is stored on the new row, and `high`/`critical` exempt it from `prune` — pass `importance: "high"` for a memory that must survive lifecycle pruning
+- `store_memory(text, metadata?, memory_type?, status?, importance?, supersedes?, force?)` — store with optional type/status/importance/supersede; `status` is honoured on the row `supersedes` creates, so `status: "candidate"` + `supersedes` stages a hidden replacement (see `cli-reference.md` → "Supersede with a candidate replacement" for what that means and how to activate it); `importance` (`low`/`medium`/`high`/`critical`, default `medium`) is stored on whichever row the call creates — the ingested row or the one `supersedes` creates — and `high`/`critical` exempt it from `prune`; reserve those two levels for the few memories the operator has designated durable, since mass use defeats the pruning lifecycle
 - `search_memories(query, limit?, memory_types?, statuses?, recency_weight?, hybrid?, no_touch?)` — find by meaning
 - `list_memories(limit?, memory_types?, statuses?)` — list recent
 - `supersede_memory(new_text, old_memory_id, memory_type?, metadata?)` — replace existing memory

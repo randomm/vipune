@@ -486,9 +486,9 @@ vipune mcp
 - `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
 - `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
 - `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes` (see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for what a hidden `candidate` replacement means and how to activate it)
-- `importance` — initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive). Stored on the new row, including the row created by `supersedes`; `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row
+- `importance` — initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive). Stored on whichever row the call creates — the ingested row or the one `supersedes` creates; `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row (the count/age thresholds `prune` applies are operator-configurable, so the exemption is only worth reserving for genuinely durable memories)
 - `supersedes` — ID of memory to supersede (atomically replaces old memory)
-- `force` — force store even if conflicts detected (default: `false`)
+- `force` — force store even if conflicts detected (default: `false`); ignored when `supersedes` is set, which skips the conflict gate entirely
 
 `supersede_memory` accepts:
 - `new_text` — the new content that replaces the old memory (required)

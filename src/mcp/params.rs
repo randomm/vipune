@@ -47,9 +47,13 @@ pub struct StoreMemoryParams {
     )]
     pub supersedes: Option<String>,
 
-    /// Force store even if conflicts detected (default: false).
+    /// Force store even if conflicts detected (default: false). Only honoured on
+    /// the ingest path: a call that also sets `supersedes` writes the new row
+    /// without the conflict gate, so `force` has no effect there.
     #[serde(default)]
-    #[schemars(description = "Force store even if conflicts detected (default: false).")]
+    #[schemars(
+        description = "Force store even if conflicts detected (default: false). Ignored when supersedes is set."
+    )]
     pub force: Option<bool>,
 }
 

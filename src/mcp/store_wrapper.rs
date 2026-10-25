@@ -8,20 +8,26 @@ use std::sync::{Arc, Mutex};
 
 use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 
-/// The caller-supplied columns of a row an MCP write tool is about to create:
-/// the row itself plus, for the supersede arm, the id it replaces.
+/// The caller-supplied columns of a row an MCP write tool is about to create.
 ///
 /// Grouping them keeps the two write wrappers under clippy's argument ceiling
 /// without an `allow` — the same reason `NewMemory` exists one layer down
 /// (`src/memory/add.rs`) — and keeps every level, type and status a named field
 /// at the call site rather than a positional tail an extra argument can slip
 /// past (#238, #256, #258).
-pub(crate) struct McpWrite<'a> {
+///
+/// The arm itself is part of the type: [`McpIngest`] carries `force` and
+/// [`McpSupersede`] carries the replaced id, so neither wrapper can be handed
+/// the other arm's value. An earlier version carried both fields on one struct
+/// and answered a mismatch at runtime — the same class of defect as #238, one
+/// frame lower.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct McpRow<'a> {
     /// Project the row belongs to.
     pub project_id: &'a str,
     /// Text content to store.
     pub text: &'a str,
-    /// Serialised metadata, or the literal `"null"` for none.
+    /// Serialised metadata, or the [`McpRow::NO_METADATA`] sentinel for none.
     pub metadata: &'a str,
     /// Memory type of the new row.
     pub memory_type: MemoryType,
@@ -30,15 +36,53 @@ pub(crate) struct McpWrite<'a> {
     /// Importance of the new row — what decides the `high`/`critical` prune
     /// exemption.
     pub importance: MemoryImportance,
-    /// Set on the supersede arm: the id the new row replaces.
-    pub supersedes: Option<&'a str>,
-    /// Set on the ingest arm: bypass the conflict gate.
+}
+
+impl<'a> McpRow<'a> {
+    /// The metadata sentinel meaning "no metadata", which the store stores as-is
+    /// and the read paths map back to `null`.
+    pub(crate) const NO_METADATA: &'static str = "null";
+
+    /// The one row an MCP test wants to seed: `fact`/`active`/`medium`, no
+    /// metadata. Tests that pin a level or a status name that field at the call
+    /// site with struct-update syntax (`..McpRow::fact(..)`).
+    #[cfg(test)]
+    pub(crate) fn fact(project_id: &'a str, text: &'a str) -> Self {
+        Self {
+            project_id,
+            text,
+            metadata: Self::NO_METADATA,
+            memory_type: MemoryType::Fact,
+            status: MemoryStatus::Active,
+            importance: MemoryImportance::default(),
+        }
+    }
+}
+
+/// The row an ingest call creates, plus the conflict-gate override.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct McpIngest<'a> {
+    /// The row to create.
+    pub row: McpRow<'a>,
+    /// Bypass the conflict gate.
     pub force: bool,
+}
+
+/// The row a supersede call creates, plus the id it replaces.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct McpSupersede<'a> {
+    /// The replacement row.
+    pub row: McpRow<'a>,
+    /// The memory the new row replaces.
+    pub old_memory_id: &'a str,
 }
 
 /// Wrapper for MemoryStore to allow async-sound use.
 ///
-/// Since MCP stdio handles requests sequentially, the Mutex will never contend.
+/// Since MCP stdio handles requests sequentially, the Mutex will never contend
+/// — and the write wrappers hold it across embedding inference, which is only
+/// free while that stays true (`run_mcp`'s single-threaded runtime,
+/// `src/mcp/server.rs`).
 pub(crate) struct StoreWrapper(pub(crate) Arc<Mutex<MemoryStore>>);
 
 impl StoreWrapper {
@@ -55,10 +99,11 @@ impl StoreWrapper {
     /// store's own default) rather than by the INSERT omitting the column.
     pub(crate) fn ingest_with_type_status(
         &self,
-        row: &McpWrite<'_>,
+        write: &McpIngest<'_>,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
-        let mut store = self.0.lock().unwrap();
-        let policy = if row.force {
+        let row = &write.row;
+        let mut store = self.lock_store()?;
+        let policy = if write.force {
             IngestPolicy::Force
         } else {
             IngestPolicy::ConflictAware
@@ -114,15 +159,16 @@ impl StoreWrapper {
         memory_type: MemoryType,
         old_memory_id: &str,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
-        self.supersede_with_status(&McpWrite {
-            project_id,
-            text: new_text,
-            metadata,
-            memory_type,
-            status: MemoryStatus::Active,
-            importance: MemoryImportance::default(),
-            supersedes: Some(old_memory_id),
-            force: false,
+        self.supersede_with_status(&McpSupersede {
+            row: McpRow {
+                project_id,
+                text: new_text,
+                metadata,
+                memory_type,
+                status: MemoryStatus::Active,
+                importance: MemoryImportance::default(),
+            },
+            old_memory_id,
         })
     }
 
@@ -148,22 +194,15 @@ impl StoreWrapper {
     /// through `From<Error> for rmcp::ErrorData`.
     pub(crate) fn supersede_with_status(
         &self,
-        row: &McpWrite<'_>,
+        write: &McpSupersede<'_>,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
-        let mut store = self.0.lock().unwrap();
+        let row = &write.row;
+        let mut store = self.lock_store()?;
 
-        let metadata_str = if row.metadata == "null" {
+        let metadata_str = if row.metadata == McpRow::NO_METADATA {
             None
         } else {
             Some(row.metadata)
-        };
-
-        // The supersede arm is the only caller, so the replaced id is always
-        // there; a missing one is a wiring bug, not user input, and is answered
-        // as an internal error rather than by replacing nothing.
-        let old_memory_id = match row.supersedes {
-            Some(id) => id,
-            None => return Err(McpError::internal_error("supersede requires an id")),
         };
 
         let new_id = match store.supersede_with(&NewSupersedingMemory {
@@ -174,7 +213,7 @@ impl StoreWrapper {
                 memory_type: row.memory_type,
                 status: row.status,
             },
-            old_id: old_memory_id,
+            old_id: write.old_memory_id,
             // The level is the caller's, never the column DEFAULT (#238, #256).
             importance: row.importance,
         }) {
@@ -350,6 +389,19 @@ impl StoreWrapper {
     #[allow(dead_code)]
     pub(crate) fn inner(&self) -> &Arc<Mutex<MemoryStore>> {
         &self.0
+    }
+
+    /// Lock the store, answering a poisoned mutex as an internal error for this
+    /// request rather than panicking the long-lived MCP server — one poison must
+    /// not make every later request fail (AGENTS.md, `src/mcp` invariants).
+    fn lock_store(&self) -> Result<std::sync::MutexGuard<'_, MemoryStore>, rmcp::ErrorData> {
+        self.0.lock().map_err(|e| {
+            rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                format!("store lock poisoned: {e}"),
+                None,
+            )
+        })
     }
 
     /// Get a specific memory by ID scoped to a project.
