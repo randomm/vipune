@@ -14,7 +14,7 @@ changelog_config = "cliff.toml"
 changelog_update = true
 # Path to changelog file
 changelog_path = "./CHANGELOG.md"
-# Publish to crates.io with trusted publishing
+# Publish to crates.io using the CARGO_REGISTRY_TOKEN repository secret
 publish = true
 # Create git tags automatically (triggers cargo-dist)
 git_tag_enable = true
