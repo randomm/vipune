@@ -107,6 +107,27 @@ impl MemoryStatus {
     pub fn is_valid_for_insert(self) -> bool {
         matches!(self, MemoryStatus::Active | MemoryStatus::Candidate)
     }
+
+    /// The one owner of the "this status cannot be inserted" verdict.
+    ///
+    /// Every layer that creates a row — the CLI handler, the MCP tool, and the
+    /// store's supersede body — calls this instead of restating the rule and
+    /// hand-writing its own message, which is how the CLI and MCP wordings
+    /// drifted apart for the same rejection (issue #258).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidInput`] if `self` is not insertable.
+    pub fn ensure_valid_for_insert(self) -> Result<(), Error> {
+        if self.is_valid_for_insert() {
+            Ok(())
+        } else {
+            Err(Error::InvalidInput(format!(
+                "Status '{}' is not valid for new memory insertion. Must be 'active' or 'candidate'.",
+                self.as_str()
+            )))
+        }
+    }
 }
 
 /// Operator-assigned importance of a memory.

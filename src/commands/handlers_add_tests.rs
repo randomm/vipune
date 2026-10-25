@@ -1,7 +1,7 @@
 //! The `vipune add` handler's importance and status plumbing (issues #238, #258).
 //!
 //! The store-level tests (`memory/tests/crud.rs`, `commands/prune_tests.rs`)
-//! call `ingest_with_importance` / `supersede_with_importance` directly, so
+//! call `ingest_with_importance` / `supersede_with_lifecycle` directly, so
 //! they pass whether or not `handle_add` ever hands the parsed level to them —
 //! exactly how #238 shipped (`let _ = importance_val;` one line above the call,
 //! with the row created by the level-less `ingest_with_type_status`). The same
@@ -89,10 +89,6 @@ fn supersede_pair(
         .get(replacement_id, project)
         .expect("get")
         .expect("replacement row readable");
-    assert_eq!(
-        replaced.content, "original fact",
-        "the row the new id points back from should be the original"
-    );
     (replacement, replaced)
 }
 
@@ -146,10 +142,9 @@ fn handle_add_superseding_writes_the_importance_on_the_new_row() {
     );
     // The row it replaced keeps its own level and its superseded lifecycle —
     // the new row's INSERT must not touch it.
-    let replaced = store
-        .get(&old.id, "sup")
-        .expect("get")
-        .expect("superseded row still readable");
+    let (replacement, replaced) = supersede_pair(&store, "sup", &old.id);
+    assert_eq!(replacement.id, fresh.id);
+    assert_eq!(replaced.content, "original fact");
     assert_eq!(replaced.status, "superseded");
     assert_eq!(replaced.importance, "medium");
     assert_eq!(replaced.superseded_by.as_deref(), Some(fresh.id.as_str()));
@@ -186,6 +181,7 @@ fn handle_add_superseding_writes_the_status_the_operator_named() {
         replacement.status, "candidate",
         "the status named on --status must reach the superseding row, not 'active'"
     );
+    assert_eq!(replacement.content, "replacement fact");
     // The old-row lifecycle is the supersede transaction's own business and the
     // new row's status must not leak into it.
     assert_eq!(replaced.status, "superseded");
@@ -210,7 +206,8 @@ fn handle_add_superseding_writes_the_status_the_operator_named() {
 fn handle_add_superseding_defaults_the_new_row_to_active() {
     // The omitted-flag case: clap's `default_value = "active"` makes this the
     // same call the CLI makes for a plain `--supersedes`, so the superseding row
-    // must still land `active` and stay visible to the default read path.
+    // must still land `active` — and, unlike the candidate case above, stay
+    // visible to the default read path.
     let mut store = MemoryStore::test_store();
     assert_eq!(
         add(&mut store, "sup-active", "original fact", "medium", None),
@@ -219,11 +216,10 @@ fn handle_add_superseding_defaults_the_new_row_to_active() {
     let old = stored(&store, "sup-active", "original fact");
 
     assert_eq!(
-        add_with_status(
+        add(
             &mut store,
             "sup-active",
             "replacement fact",
-            "active",
             "medium",
             Some(&old.id),
         ),
@@ -233,8 +229,14 @@ fn handle_add_superseding_defaults_the_new_row_to_active() {
     let (replacement, replaced) = supersede_pair(&store, "sup-active", &old.id);
     assert_eq!(replacement.status, "active");
     assert_eq!(replaced.status, "superseded");
+    // The active row is what the default list returns, so the visibility claim
+    // is pinned here rather than by a second read of the same row.
     assert!(
-        stored(&store, "sup-active", "replacement fact").status == "active",
+        store
+            .list("sup-active", 20, None, None)
+            .expect("list")
+            .iter()
+            .any(|m| m.id == replacement.id),
         "the explicit-active case must remain visible to the default list"
     );
 }

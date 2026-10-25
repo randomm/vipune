@@ -37,6 +37,36 @@ impl ToolHandler {
         }
     }
 
+    /// Drive one tool exactly as an MCP client does, through the public
+    /// `ServerHandler::call_tool` entry point the protocol server itself uses:
+    /// same `CallToolRequestParams` → `Parameters<T>` deserialization, same
+    /// result envelope.
+    ///
+    /// The `#[tool]` methods are private (rmcp routes them through the router),
+    /// so a test that wants to pin the wiring *inside* a tool handler — not just
+    /// the wrapper it calls — has to enter this way. Used by the #258 regression
+    /// test for `store_memory`'s `supersedes` arm.
+    #[cfg(test)]
+    pub(crate) async fn call_tool_for_test(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        use rmcp::ServerHandler;
+        use rmcp::model::CallToolRequestParams;
+
+        let request =
+            CallToolRequestParams::new(name.to_string()).with_arguments(match arguments {
+                serde_json::Value::Object(map) => map,
+                _ => serde_json::Map::new(),
+            });
+        // The tool handlers never touch the request context (they only take
+        // `Parameters<T>`), so the minimal no-op transport below is enough to
+        // satisfy the signature.
+        self.call_tool(request, crate::mcp::test_transport::test_request_context())
+            .await
+    }
+
     /// Test-only accessor exposing the stored config, so tests can assert
     /// that `ToolHandler::new` retains the exact config it was given rather
     /// than silently falling back to defaults for any field (see #149).
@@ -71,16 +101,14 @@ impl ToolHandler {
         let memory_type_val = MemoryType::from_str(memory_type)
             .map_err(|e| McpError::invalid_input(&format!("Invalid memory type: {}", e)))?;
 
-        // Parse and validate status (default: "active")
+        // Parse and validate status (default: "active"). The store's supersede
+        // body runs the same insertability check for library callers; this copy
+        // exists to answer with an MCP error rather than a store error, and
+        // goes through the one helper that owns the wording (issue #258).
         let status_str = params.status.as_deref().unwrap_or("active");
         let status_val = MemoryStatus::from_str(status_str)
             .map_err(|e| McpError::invalid_input(&format!("Invalid status: {}", e)))?;
-        if !status_val.is_valid_for_insert() {
-            return Err(McpError::invalid_input(&format!(
-                "Status '{}' is not valid for new memory. Must be 'active' or 'candidate'.",
-                status_str
-            )));
-        }
+        status_val.ensure_valid_for_insert()?;
 
         // Serialize metadata
         let metadata_str = match &params.metadata {

@@ -31,6 +31,39 @@ fn create_test_store() -> MemoryStore {
 mod tool_handler_tests {
     use super::*;
 
+    /// Pull the `id` out of a tool result's JSON text content.
+    ///
+    /// The tool handlers return `CallToolResult`, whose payload is a list of
+    /// text contents holding the serialised response, so a handler-driven test
+    /// has to unwrap that envelope once instead of per assertion.
+    fn tool_result_id(result: &rmcp::model::CallToolResult) -> String {
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
+            .next()
+            .expect("tool result carries text content");
+        serde_json::from_str::<serde_json::Value>(text)
+            .expect("tool result text is JSON")
+            .get("id")
+            .and_then(|v| v.as_str())
+            .expect("tool result JSON carries an id")
+            .to_string()
+    }
+
+    /// The arguments an MCP client would send for a `store_memory` call.
+    fn store_memory_args(
+        text: &str,
+        status: Option<&str>,
+        supersedes: Option<&str>,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "text": text,
+            "status": status,
+            "supersedes": supersedes,
+        })
+    }
+
     /// Test that MCP server can be initialized.
     #[test]
     fn test_mcp_server_initialization() {
@@ -530,103 +563,110 @@ mod tool_handler_tests {
     /// agent passing `status: "candidate"` together with `supersedes` got an
     /// `active` replacement row with no warning — the MCP twin of the CLI drop.
     ///
-    /// Drives `StoreWrapper` (the layer `store_memory`'s supersedes arm now
-    /// calls, per `test_update_memory_integration`) and reads the stored column
-    /// back via `StoreWrapper::get`, the read path that applies no status filter.
+    /// Drives the `store_memory` TOOL HANDLER itself (the frame where the status
+    /// was dropped, and the frame that decides which wrapper the supersedes arm
+    /// reaches), not the wrapper below it, and reads the stored column back via
+    /// `StoreWrapper::get`, the read path that applies no status filter.
     #[tokio::test]
-    async fn test_supersede_honours_the_requested_status() {
+    async fn store_memory_supersedes_honours_the_requested_status() {
         use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 
         let store = create_test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
-        let project_id = "status-proj";
+        let handler = ToolHandler::new(store, "status-proj".to_string(), Config::default());
 
         let seeded = wrapper
             .ingest_with_type_status(
-                project_id,
+                "status-proj",
                 "original content",
                 "null",
                 true,
                 MemoryType::Fact,
                 MemoryStatus::Active,
             )
-            .expect("seed add")
-            .to_string();
-        let old_id = serde_json::from_str::<serde_json::Value>(&seeded).unwrap()["id"]
-            .as_str()
-            .expect("seed id")
-            .to_string();
+            .expect("seed add");
+        let old_id = seeded["id"].as_str().expect("seed id").to_string();
 
-        // The MCP equivalent of `add --supersedes <id> --status candidate`.
-        let replaced = wrapper
-            .supersede_with_status(
-                project_id,
-                "replacement content",
-                "null",
-                MemoryType::Fact,
-                &old_id,
-                MemoryStatus::Candidate,
+        // The MCP equivalent of `add --supersedes <id> --status candidate`,
+        // called the way an agent calls it: through the tool router, so the
+        // wiring inside `store_memory` is what is under test.
+        let result = handler
+            .call_tool_for_test(
+                "store_memory",
+                store_memory_args("replacement content", Some("candidate"), Some(&old_id)),
             )
-            .expect("supersede with status")
-            .to_string();
-        assert!(
-            replaced.contains("superseded"),
-            "the response labels the action, not the new row's lifecycle: {replaced}"
-        );
-        let new_id = serde_json::from_str::<serde_json::Value>(&replaced).unwrap()["id"]
-            .as_str()
-            .expect("new id")
-            .to_string();
+            .await
+            .expect("store_memory with supersedes must succeed");
+        let new_id = tool_result_id(&result);
 
         let replacement = wrapper
-            .get(&new_id, project_id)
+            .get(&new_id, "status-proj")
             .expect("get")
             .expect("replacement row stored");
         assert_eq!(
             replacement.status,
             MemoryStatus::Candidate.as_str(),
-            "store_memory's supersedes arm must store the status it validated"
+            "the tool handler must hand its validated status to the store, not the wrapper's default"
         );
+        assert_eq!(replacement.content, "replacement content");
 
         // The old row keeps the lifecycle the supersede transaction owns.
         let replaced_row = wrapper
-            .get(&old_id, project_id)
+            .get(&old_id, "status-proj")
             .expect("get")
             .expect("superseded row still readable");
         assert_eq!(replaced_row.status, "superseded");
         assert_eq!(replaced_row.superseded_by.as_deref(), Some(new_id.as_str()));
 
         // Identical outcome to the CLI: a candidate replacement is invisible to
-        // the active-only default list on this surface too.
-        let listed = wrapper
-            .list(project_id, 20, None, None)
-            .expect("list")
-            .to_string();
+        // the active-only default list on this surface too. A second, unrelated
+        // active row is seeded as the control — the superseded original is not
+        // listed either — so the guard cannot be satisfied by a list call that
+        // returned nothing.
+        let control = wrapper
+            .ingest_with_type_status(
+                "status-proj",
+                "unrelated active control",
+                "null",
+                true,
+                MemoryType::Fact,
+                MemoryStatus::Active,
+            )
+            .expect("seed control");
+        let control_id = control["id"].as_str().expect("control id").to_string();
+
+        let listed: Vec<serde_json::Value> =
+            serde_json::from_value(wrapper.list("status-proj", 20, None, None).expect("list"))
+                .expect("list payload is an array");
+        let listed_ids: Vec<&str> = listed
+            .iter()
+            .map(|m| m["id"].as_str().expect("listed id"))
+            .collect();
         assert!(
-            !listed.contains(&new_id),
-            "a candidate replacement must stay out of the default list: {listed}"
+            listed_ids.contains(&control_id.as_str()),
+            "the default list itself works, so its silence about the candidate is meaningful: {listed_ids:?}"
+        );
+        assert!(
+            !listed_ids.contains(&new_id.as_str()),
+            "a candidate replacement must stay out of the default list: {listed_ids:?}"
         );
 
         // And the status-less entry point (`supersede_memory`, which has no
         // `status` parameter at all) still writes `active` by name.
         let plain = wrapper
             .supersede(
-                project_id,
+                "status-proj",
                 "plain replacement",
                 "null",
                 MemoryType::Fact,
                 &new_id,
             )
-            .expect("level-less supersede")
-            .to_string();
-        let plain_id = serde_json::from_str::<serde_json::Value>(&plain).unwrap()["id"]
-            .as_str()
-            .expect("plain id")
-            .to_string();
+            .expect("level-less supersede");
+        let plain_id = plain["id"].as_str().expect("plain id").to_string();
         assert_eq!(
             wrapper
-                .get(&plain_id, project_id)
+                .get(&plain_id, "status-proj")
                 .expect("get")
                 .expect("plain row stored")
                 .status,

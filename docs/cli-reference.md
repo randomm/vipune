@@ -40,7 +40,7 @@ vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status
 - If `--force` used: skips conflict check and adds memory
 - If `--supersedes` used: atomically adds new memory and marks target as `superseded`
 - `--importance` is stored on the new row (also on the row created by `--supersedes`), and `export` writes that value so `import` restores it
-- `--status` is stored on the new row too, including the row created by `--supersedes`: `vipune add "new" --supersedes <id> --status candidate` inserts the replacement as `candidate` and marks the old row `superseded`. Because both rows then sit outside `active`, **neither appears in default `search`/`list`** (which filter to `status = 'active'`) — the replacement stays hidden until it is promoted, either by `vipune promote` (which promotes candidates that reach the retrieval threshold) or directly with `vipune update <id> --status active`. Fetch it by id with `vipune get <id>` in the meantime. Only `active` and `candidate` are valid here: `--status superseded`/`deprecated` is rejected with or without `--supersedes`, since the old row's `superseded` is set by the supersede transaction itself
+- `--status` is stored on the new row too, including the row created by `--supersedes`. Only `active` and `candidate` are valid here: `--status superseded`/`deprecated` is rejected with or without `--supersedes`, since the old row's `superseded` is set by the supersede transaction itself. A `--status candidate` replacement is hidden from default `search`/`list` (which filter to `status = 'active'`) along with the `superseded` row it replaced — see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for how to read and activate it
 
 **Exit codes:**
 - `0` - Successfully added
@@ -99,8 +99,23 @@ This inserts the new memory and marks the old one as `superseded` in a single tr
 vipune add "Alice now works at Google" --supersedes abc123-old-memory-id --status candidate
 ```
 
-Until it is promoted, that replacement is reachable only by id (`vipune get <id>`) or an explicit
-candidate filter (`vipune search "alice" --status candidate` / `--include-candidates`).
+#### Supersede with a candidate replacement
+
+Until it is activated, that replacement is reachable only by id (`vipune get <id>`) or an explicit
+candidate filter (`vipune search "alice" --status candidate` / `--include-candidates`) — and the
+`superseded` original is hidden too, so neither row shows up in a default `search`/`list`.
+
+Activate it with the id `add` printed:
+
+```bash
+vipune update <new-memory-id> --status active
+```
+
+`vipune promote` is **not** the way out of this state: it promotes only candidates whose
+`retrieval_count` has reached the threshold (default 5), and a supersede does not bump that
+counter — only `search`/`get` retrievals do. A candidate that nothing has been retrieved by id
+therefore never promotes, which is deliberate (see the `promote` module doc); the explicit
+`update --status active` above is the deterministic route.
 
 ---
 
@@ -343,7 +358,7 @@ vipune update <id> [text] [--metadata <json>]
 
 **Flags:**
 - `-m, --metadata <json>` - Replace metadata (must be valid JSON)
-- `--status <status>` - Set lifecycle status (`active`, `candidate`, `deprecated`, `superseded`); `superseded` is rejected with an error — that status is written only by `add --supersedes`
+- `--status <status>` - Set lifecycle status (`active`, `candidate`, `deprecated`, `superseded`); `superseded` is rejected with an error — that status is written only by `add --supersedes`. Unlike `add --status`, which accepts only `active`/`candidate`, this path does accept `deprecated`, which is what `prune` writes
 
 **Behavior:**
 - If only `text` provided: generates new embedding, preserves metadata
@@ -465,7 +480,7 @@ vipune mcp
 - `text` — the information to remember (required)
 - `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
 - `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
-- `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes`, so `status: "candidate"` together with `supersedes` leaves the replacement hidden from default `search_memories`/`list_memories` (both filter to `active`) until it is promoted
+- `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes` (see [`add --status`](#add) for what a hidden `candidate` replacement means and how to activate it)
 - `supersedes` — ID of memory to supersede (atomically replaces old memory)
 - `force` — force store even if conflicts detected (default: `false`)
 

@@ -67,12 +67,7 @@ pub(crate) fn handle_add(
     let memory_type_val = MemoryType::from_str(memory_type)?;
     let status_val = MemoryStatus::from_str(status)?;
     let importance_val = MemoryImportance::from_str(importance)?;
-    if !status_val.is_valid_for_insert() {
-        return Err(Error::InvalidInput(format!(
-            "Status '{}' is not valid for new memory insertion. Must be 'active' or 'candidate'.",
-            status
-        )));
-    }
+    status_val.ensure_valid_for_insert()?;
 
     if supersedes.is_some() && force {
         return Err(Error::InvalidInput(
@@ -86,13 +81,15 @@ pub(crate) fn handle_add(
         // travel with it (issues #238, #258): handing over only the level left
         // `--status candidate` silently stored as `active`.
         let new_id = store.supersede_with_lifecycle(&NewSupersedingMemory {
-            project_id,
-            content: text,
-            metadata,
-            memory_type: memory_type_val,
+            row: NewMemory {
+                project_id,
+                content: text,
+                metadata,
+                memory_type: memory_type_val,
+                status: status_val,
+            },
             old_id,
             importance: importance_val,
-            status: status_val,
         })?;
 
         if json {

@@ -257,7 +257,9 @@ fn added_status(store: &MemoryStore, id: &str, project: &str) -> String {
 }
 
 /// Add a row through `vipune add --supersedes`'s own entry point — the
-/// status-carrying supersede — so a test can pin what that path writes.
+/// status- and level-carrying supersede — so a test can pin what that path
+/// writes. `vipune add` reaches the store through `handle_add`, which is
+/// covered by `commands/handlers_add_tests.rs`.
 fn supersede_with_status(
     store: &mut MemoryStore,
     project: &str,
@@ -268,13 +270,15 @@ fn supersede_with_status(
 ) -> String {
     store
         .supersede_with_lifecycle(&crate::memory::NewSupersedingMemory {
-            project_id: project,
-            content,
-            metadata: None,
-            memory_type: MemoryType::Fact,
+            row: NewMemory {
+                project_id: project,
+                content,
+                metadata: None,
+                memory_type: MemoryType::Fact,
+                status,
+            },
             old_id,
             importance,
-            status,
         })
         .expect("supersede must succeed")
 }
@@ -347,10 +351,7 @@ fn add_persists_the_importance_it_was_given() {
 fn add_superseding_persists_the_status_on_the_new_row() {
     // Issue #258: the supersede body hardcoded `status: "active"` into the row
     // it built, so a caller that named `candidate` got `active` and no warning
-    // — the same class of drop #238 fixed for `importance`. The three entry
-    // points are each pinned, because they are three separate bindings:
-    // the status-carrying one, the level-only wrapper (which must keep pinning
-    // `active` by name), and the level-less wrapper behind it.
+    // — the same class of drop #238 fixed for `importance`.
     let mut store = MemoryStore::test_store();
     let old_id = add(&mut store, "status-proj", "original fact", None);
 
@@ -362,17 +363,14 @@ fn add_superseding_persists_the_status_on_the_new_row() {
         MemoryImportance::High,
         MemoryStatus::Candidate,
     );
-    let candidate = store
-        .get(&candidate_id, "status-proj")
-        .expect("get")
-        .expect("candidate row stored");
     assert_eq!(
-        candidate.status,
+        added_status(&store, &candidate_id, "status-proj"),
         MemoryStatus::Candidate.as_str(),
         "the status the caller named must reach the superseding row"
     );
     assert_eq!(
-        candidate.importance, "high",
+        added_importance(&store, &candidate_id, "status-proj"),
+        "high",
         "the level still travels with it"
     );
     // The old row is the supersede transaction's own business: it is marked
@@ -387,64 +385,69 @@ fn add_superseding_persists_the_status_on_the_new_row() {
         replaced.superseded_by.as_deref(),
         Some(candidate_id.as_str())
     );
+}
 
-    // A candidate replacement is invisible to the active-only default reads, so
-    // the row must be found by id or an explicit candidate filter — never by
-    // accident of the default list.
-    assert!(
-        store
-            .list("status-proj", 20, None, None)
-            .expect("list")
-            .iter()
-            .all(|m| m.id != candidate_id),
-        "default list stays active-only"
-    );
-    assert!(
-        store
-            .list("status-proj", 20, None, Some(["candidate"].as_slice()))
-            .expect("list")
-            .iter()
-            .any(|m| m.id == candidate_id)
-    );
-
-    // The level-only wrapper still writes `active`: it expresses no status, so
-    // it pins the default by name rather than inheriting the new variant's.
-    let active_id = store
-        .supersede_with_importance(
-            "status-proj",
+#[test]
+fn add_superseding_wrappers_bind_the_lifecycle_defaults_by_name() {
+    // The one level-less public wrapper must keep pinning both defaults by
+    // name rather than inheriting the column DEFAULT or the new variant's value
+    // (the #238/#258 class of silent drop).
+    let mut store = MemoryStore::test_store();
+    let old_id = add(&mut store, "sup-defaults", "original fact", None);
+    let plain_id = store
+        .supersede(
+            "sup-defaults",
             "active replacement",
             None,
             MemoryType::Fact,
-            &candidate_id,
-            MemoryImportance::Critical,
+            &old_id,
         )
         .unwrap();
+    assert_eq!(added_status(&store, &plain_id, "sup-defaults"), "active");
     assert_eq!(
-        store
-            .get(&active_id, "status-proj")
-            .expect("get")
-            .expect("active row stored")
-            .status,
-        "active"
+        added_importance(&store, &plain_id, "sup-defaults"),
+        "medium",
+        "the level-less wrapper binds the default level by name"
+    );
+}
+
+#[test]
+fn superseding_candidate_stays_out_of_the_default_reads() {
+    // A candidate replacement is invisible to the active-only default reads, so
+    // the row must be found by id or an explicit candidate filter — never by
+    // accident of the default list.
+    let mut store = MemoryStore::test_store();
+    let old_id = add(&mut store, "status-visible", "original fact", None);
+    let control_id = add(&mut store, "status-visible", "unrelated active fact", None);
+    let candidate_id = supersede_with_status(
+        &mut store,
+        "status-visible",
+        "candidate replacement",
+        &old_id,
+        MemoryImportance::Medium,
+        MemoryStatus::Candidate,
     );
 
-    // And the level-less wrapper (the one the MCP `supersede_memory` tool uses)
-    // keeps binding both defaults by name.
-    let plain_id = store
-        .supersede(
-            "status-proj",
-            "third fact",
-            None,
-            MemoryType::Fact,
-            &active_id,
-        )
-        .unwrap();
-    let plain = store
-        .get(&plain_id, "status-proj")
-        .expect("get")
-        .expect("plain row stored");
-    assert_eq!(plain.status, "active");
-    assert_eq!(plain.importance, "medium");
+    let default_list = store.list("status-visible", 20, None, None).expect("list");
+    assert!(
+        default_list.iter().all(|m| m.id != candidate_id),
+        "default list stays active-only"
+    );
+    // A third, untouched active row is the control: the superseded original is
+    // absent from the default list too, so the guard above would also pass
+    // against a read path that returned nothing.
+    assert!(
+        default_list.iter().any(|m| m.id == control_id),
+        "the read path itself works: an ordinary active row is listed"
+    );
+    assert!(
+        store
+            .list("status-visible", 20, None, Some(["candidate"].as_slice()))
+            .expect("list")
+            .iter()
+            .any(|m| m.id == candidate_id),
+        "an explicit candidate filter finds the hidden replacement"
+    );
 }
 
 #[test]
@@ -457,13 +460,15 @@ fn add_superseding_refuses_a_status_that_is_not_insertable() {
     for status in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {
         let err = store
             .supersede_with_lifecycle(&crate::memory::NewSupersedingMemory {
-                project_id: "status-bad",
-                content: "bad replacement",
-                metadata: None,
-                memory_type: MemoryType::Fact,
+                row: NewMemory {
+                    project_id: "status-bad",
+                    content: "bad replacement",
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status,
+                },
                 old_id: &old_id,
                 importance: MemoryImportance::Medium,
-                status,
             })
             .expect_err("only active/candidate are insertable");
         assert!(
@@ -495,16 +500,14 @@ fn add_superseding_persists_the_importance_on_the_new_row() {
     // inside the supersede transaction, so that INSERT needs the binding too.
     let mut store = MemoryStore::test_store();
     let old_id = add(&mut store, "sup-proj", "original fact", None);
-    let new_id = store
-        .supersede_with_importance(
-            "sup-proj",
-            "replacement fact",
-            None,
-            MemoryType::Fact,
-            &old_id,
-            MemoryImportance::Critical,
-        )
-        .unwrap();
+    let new_id = supersede_with_status(
+        &mut store,
+        "sup-proj",
+        "replacement fact",
+        &old_id,
+        MemoryImportance::Critical,
+        MemoryStatus::Active,
+    );
     assert_eq!(
         added_importance(&store, &new_id, "sup-proj"),
         "critical",

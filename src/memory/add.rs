@@ -18,14 +18,16 @@ use super::store::MemoryStore;
 /// The caller-supplied fields of a memory the store is about to create on the
 /// add path.
 ///
-/// The supersede path is a separate entry point that takes its fields as
-/// plain parameters, so this shape belongs to the add entry points only (the
-/// store-layer counterpart of the storage layer's `UpdateOptions`, and the
-/// sibling of [`UpdateParams`](crate::memory::UpdateParams) on the write
-/// side). Grouping the fields keeps the internal helpers short without a
-/// `too_many_arguments` suppression, and keeps the importance level a named
-/// value at every call site — the trailing argument `--importance` dropped on
-/// its way to the column in issue #238.
+/// The supersede path is a separate entry point that builds its own
+/// [`NewSupersedingMemory`](crate::memory::NewSupersedingMemory), which embeds
+/// this shape and adds the replaced-id and level fields, so the shared columns
+/// have one definition (the store-layer counterpart of the storage layer's
+/// `UpdateOptions`, and the sibling of
+/// [`UpdateParams`](crate::memory::UpdateParams) on the write side). Grouping
+/// the fields keeps the internal helpers short without a `too_many_arguments`
+/// suppression, and keeps the importance level a named value at every call
+/// site — the trailing argument `--importance` dropped on its way to the column
+/// in issue #238.
 #[derive(Clone, Copy, Debug)]
 pub struct NewMemory<'a> {
     /// Project identifier (e.g., git repo URL or user-defined).
