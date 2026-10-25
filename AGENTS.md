@@ -77,10 +77,12 @@ cargo clippy --no-default-features --all-targets -- -D warnings
 cargo test --no-default-features
 ```
 
-`--all-targets` is what CI runs and it is what makes clippy compile the
-`test = false` bench target (`benches/db_search.rs`) — without it that target
-can rot with a green build. The `--no-default-features` pair is a real second
-build, not an edge case, because `mcp` is a default feature.
+`--all-targets` is what CI runs and it is what makes clippy lint the
+`[[bench]]` target (`benches/db_search.rs`): that target is `test = false` in
+`Cargo.toml` (so plain `cargo test` does not run it) and clippy does not lint
+it without `--all-targets` — so without that flag the target can rot with a
+green build. The `--no-default-features` pair is a real second build, not an
+edge case, because `mcp` is a default feature.
 
 `cargo deny` needs `cargo install cargo-deny` once. It checks the committed `Cargo.lock`
 against RustSec (`--locked` is what makes the gate describe the graph we actually ship) and
@@ -235,9 +237,10 @@ Orientation for agents new to the codebase (verify against the tree — the
 
 - **`Memory` read fan-in** — the `Memory` struct in `src/sqlite/` is the
   single row-level type the read paths share (`src/rrf.rs`, `src/memory/crud.rs`,
-  `src/mcp/helpers.rs`, `src/sqlite/{list,search,fts,export_scan}.rs`,
-  `src/commands/prune.rs`; not exhaustive — `mod sqlite` is private so the
-  public name is `vipune::Memory`). `map_row_to_memory`
+  `src/memory/search.rs`, `src/mcp/helpers.rs`,
+  `src/sqlite/{list,search,fts,export_scan}.rs`, `src/commands/prune.rs`;
+  not exhaustive — `mod sqlite` is private so the public name is
+  `vipune::Memory`). `map_row_to_memory`
   (`src/sqlite/query_mod.rs`) is the canonical decoder, but **three readers
   bypass it and decode by literal position** — `sqlite/search.rs`,
   `sqlite/fts.rs` and `sqlite/export_scan.rs` (`scan_all_rows`) — and the
@@ -256,8 +259,12 @@ Orientation for agents new to the codebase (verify against the tree — the
   (`MemoryType`/`MemoryStatus`/`MemoryImportance::from_str` in
   `src/memory/lifecycle.rs`, called from `src/commands/handlers.rs`,
   `src/commands/mod.rs`, `src/mcp/tools.rs`, and `parse_row` in
-  `src/commands/import.rs`). No read path validates, so a bad value that gets
-  in is persisted *and* echoed back to the user.
+  `src/commands/import.rs`). Neither `memory_type` nor `status` is validated on
+  any read path, so a bad value that gets in is persisted *and* echoed back to
+  the user. `importance` is the exception: the search path rejects it —
+  `ImportanceLevel::parse(&memory.importance).map_err(Error::InvalidInput)?`
+  (`src/memory/search.rs:95` and `:204`) — so a corrupt value surfaces as a
+  search error rather than an echo.
 - **`importance` has two independent vocabularies** — the write-side
   `MemoryImportance` (`src/memory/lifecycle.rs`) and the read-side
   `temporal::ImportanceLevel::parse` used by recency scoring, plus `prune`'s
