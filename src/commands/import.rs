@@ -277,8 +277,11 @@ pub(crate) fn run_import(db_path: &Path, source: &str) -> Result<ImportResponse,
     // quality, so the import is refused (use `reindex --force` after export
     // into a matching store, or re-export from a matching store).
     let (_rows, header_identity) = validate_header(lines[0])?;
-    let (recorded, marker) = identity::read_identity_and_marker(db.conn())
-        .map_err(|e| Error::Config(format!("identity read failed: {e}")))?;
+    // `Error::from` keeps the locked verdict: this command's documented
+    // contract is that a restore WAITS for the MCP server rather than failing
+    // instantly, so if a lock does surface here it must still be reportable as
+    // a lock, not flattened into "Configuration error".
+    let (recorded, marker) = identity::read_identity_and_marker(db.conn()).map_err(Error::from)?;
     if marker.is_some() {
         return Err(Error::InvalidInput(format!(
             "import refused: destination database is in the middle of a model migration ({}); complete it with `vipune reindex --force` and retry",

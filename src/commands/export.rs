@@ -297,8 +297,7 @@ pub fn handle_export(
     // The header records the identity the store's embeddings were produced
     // with (the recorded identity, or the default bge identity when no row
     // exists — the zero-change contract for pre-v6 stores).
-    let (recorded, _) = identity::read_identity_and_marker(db.conn())
-        .map_err(|e| Error::Config(format!("identity read failed: {e}")))?;
+    let (recorded, _) = identity::read_identity_and_marker(db.conn()).map_err(Error::from)?;
     let identity = recorded.unwrap_or_else(identity::ModelIdentity::default_identity);
 
     let rows = db

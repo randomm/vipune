@@ -652,6 +652,9 @@ instead of the bare `Database error`. The MCP server returns that same text
 verbatim in its `ErrorData` message, so a client's log shipper sees raw
 SQLite wording (`no such table: …`, `UNIQUE constraint failed: memories.id`)
 — intentional, since the same client can run the CLI and read it on stderr.
+That verbatim rule covers the database-error payloads only: where an error's
+payload is deliberately sanitised before reaching the boundary (memory ids in
+not-found errors), the sanitised text is what both surfaces show.
 
 **Common errors:**
 - Memory not found (`get`, `update`, `delete`)

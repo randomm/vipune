@@ -20,8 +20,9 @@ pub(crate) enum DbErrorKind<'a> {
     /// `SQLITE_BUSY` / `SQLITE_LOCKED` — another process holds a lock.
     ///
     /// The canonical busy text the storage layer renders for this verdict.
-    /// `hook/run.rs` and the pi-rukas `ctx7` wrapper both match it, so
-    /// `sqlite::Error::Locked`'s Display and the tests below are pinned to it.
+    /// The pi-rukas `ctx7` wrapper (outside this repo) matches it in the
+    /// CLI's stderr, so `sqlite::Error::Locked`'s Display and the tests below
+    /// are pinned to it.
     Locked,
     /// A vipune domain error surfaced through a row-conversion failure
     /// (`query_mod::corrupt_embedding_error`); carries the structured variant.
@@ -37,10 +38,13 @@ pub(crate) enum DbErrorKind<'a> {
 
 /// The domain errors a row-conversion failure is allowed to carry.
 ///
-/// `query_mod::corrupt_embedding_error` is the only producer, and it wraps
-/// exactly these three decoding failures. Anything else on the source chain is
-/// not ours to trust, so the classifier falls through to `Other` rather than
-/// promoting its payload into the public error.
+/// `query_mod::corrupt_embedding_error` is the only producer and always wraps
+/// `CorruptEmbedding` (the other two decoding failures reach it only as the
+/// `reason` string), so today this allow-list effectively has one member; the
+/// other two arms are cheap future-proofing for a producer that preserves the
+/// inner variant. Anything else on the source chain is not ours to trust, so
+/// the classifier falls through to `Other` rather than promoting its payload
+/// into the public error.
 fn is_trusted_domain_error(err: &Error) -> bool {
     matches!(
         err,
@@ -136,9 +140,9 @@ mod tests {
 
     #[test]
     fn locked_storage_error_renders_the_canonical_busy_text() {
-        // The storage boundary's rendering is what `hook/run.rs` and the
-        // pi-rukas `ctx7` wrapper match. Pinning it here turns a Display
-        // change from silent mis-classification into a failing test.
+        // The storage boundary's rendering is what the pi-rukas `ctx7` wrapper
+        // matches in the CLI's stderr. Pinning it here turns a Display change
+        // from silent mis-classification into a failing test.
         let busy = rusqlite::Error::SqliteFailure(
             ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
             Some("database is locked".to_string()),
@@ -146,5 +150,24 @@ mod tests {
         let storage: Error = busy.into();
         assert!(matches!(storage, Error::Locked));
         assert_eq!(storage.to_string(), LOCKED_DISPLAY);
+    }
+
+    #[test]
+    fn a_lock_without_a_result_code_is_other() {
+        // `classify_db_error` keys on `sqlite_error_code()`, which is `None`
+        // for every non-`SqliteFailure` variant — so a failure shape that
+        // carries no code cannot be classified as a lock and stays `Other`.
+        // This is deliberate: without a code there is no signal that is not
+        // message text. The two raw-rusqlite call sites (`backup::Backup::new`
+        // via `sqlite3_backup_init`, and the read-only diagnostic opens) both
+        // surface `SqliteFailure`, so the lock verdict survives them — pinned
+        // by `commands::db_busy::tests` for the wrapper and by the backup
+        // handler's `BEGIN EXCLUSIVE` test end to end.
+        let no_code = rusqlite::Error::InvalidColumnType(
+            0,
+            "embedding".to_string(),
+            rusqlite::types::Type::Blob,
+        );
+        assert!(matches!(classify_db_error(&no_code), DbErrorKind::Other));
     }
 }

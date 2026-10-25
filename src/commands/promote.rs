@@ -191,6 +191,12 @@ pub fn handle_promote(
     super::db_busy::wrap_busy(db.set_busy_timeout(std::time::Duration::ZERO))?;
 
     let threshold = resolve_promotion_threshold()?;
+    // Same partial-failure shape as `prune`: `run_promotion` commits each
+    // status update as it goes, so a lock acquired mid-loop leaves the rows
+    // already promoted and reports no count. Deliberate (mirrors the
+    // per-row re-embed loop in `reindex.rs` and the note in `prune.rs`):
+    // fixing it means detecting the lock inside the loop and returning the
+    // partial count, for all three handlers together.
     let promoted = run_promotion(&db, project_id)?;
 
     let response = serde_json::json!({

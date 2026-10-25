@@ -232,6 +232,13 @@ pub fn handle_prune(
     let evaluator = PruneEvaluator::new(count_threshold, age_threshold_days);
 
     // Run per project: the demotion path (Database::update) is project-scoped.
+    // `run_for_project` demotes row by row and commits each update, so a lock
+    // hit partway through has already moved the earlier rows. `wrap_busy_error`
+    // collapses that into the locked message and discards the partial
+    // `demoted_here` ids — a known partial-failure gap, not a bug this handler
+    // papers over. `reindex.rs` makes the same deliberate choice for its
+    // per-row re-embed loop; the fix for both is to detect the lock inside the
+    // loop and return the partial counts.
     let project_ids = super::db_busy::wrap_busy(db.list_all_project_ids())?;
     let mut demoted: Vec<String> = Vec::new();
     for project_id in &project_ids {

@@ -305,3 +305,44 @@ fn test_interrupted_migration_reports_old_identity_and_marker_target() {
     assert_eq!(read_identity(&conn).unwrap(), Some(old));
     assert!(is_migrating(&conn).unwrap());
 }
+
+/// A lock on the identity READ must stay classified as a lock (issue #255).
+///
+/// The read used to flatten `rusqlite::Error` into a message string, which
+/// destroyed the SQLite result code before the public conversion ran, so the
+/// MCP/hook chokepoints saw a generic database error with `is_locked() ==
+/// false` and lost the actionable MCP-server hint. This drives a real
+/// `BEGIN EXCLUSIVE` writer and asserts on the classified error, not the
+/// rendered text.
+#[test]
+fn test_lock_on_identity_read_stays_classified_locked() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("memories.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE model_identity (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            model_id TEXT,
+            model_revision TEXT,
+            migration_marker TEXT
+        );",
+    )
+    .unwrap();
+    drop(conn);
+
+    let lock_conn = Connection::open(&path).unwrap();
+    lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+    let reader = Connection::open(&path).unwrap();
+    // The busy timeout is already ZERO from the contended open above, so
+    // without it the reader would wait out the writer instead of failing.
+    reader.busy_timeout(std::time::Duration::ZERO).unwrap();
+    let err = assert_identity_ok(&reader, EMBED_MODEL_ID)
+        .expect_err("an exclusive writer must make the identity read fail");
+    assert!(
+        err.is_locked(),
+        "a lock on the identity read must classify as locked, got {err:?}"
+    );
+
+    lock_conn.execute("ROLLBACK", []).unwrap();
+}

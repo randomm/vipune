@@ -33,17 +33,20 @@ pub const LOCKED_DB_HINT: &str =
 ///
 /// The CLI prints `Error: {}`, so this string is the user-visible contract for
 /// every busy-database path. `concat!` cannot splice a `&str` const, so the
-/// composition is spelled out and pinned to the [`Error::DatabaseLocked`]
-/// Display by `errors_public_api_tests` — the one place the two are kept
-/// equal, so the CLI text cannot drift from the variant text unnoticed.
+/// composition is spelled out here rather than derived from
+/// [`Error::DatabaseLocked`]'s `#[error]` attribute: the two literals live in
+/// separate places and the equality is enforced by
+/// `errors_public_api_tests::locked_database_message_stays_byte_identical_to_the_cli_text`.
 pub const LOCKED_DB_MESSAGE: &str = "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.";
 
-/// Prefix the message of a [`Error::Tokenization`] with call-site context.
+/// Prefix a [`Error::Tokenization`] message with call-site context.
 ///
-/// For call sites that already converted a third-party error through
-/// [`From<tokenizers::Error>`] and want to say *which* tokenizer failed,
-/// without reaching around that conversion to build the variant by hand.
-pub fn with_prefix(prefix: &str) -> impl Fn(Error) -> Error + '_ {
+/// The two tokenizer call sites (`embedding/engine.rs`, `embedding/inference.rs`)
+/// already convert a third-party failure through [`From<tokenizers::Error>`]
+/// and want to say *which* tokenizer failed without reaching around that
+/// conversion to build the variant by hand. Crate-internal on purpose: the
+/// variant-matching behaviour would be a permanent public commitment otherwise.
+pub(crate) fn with_prefix(prefix: &str) -> impl Fn(Error) -> Error + '_ {
     move |err| match err {
         Error::Tokenization { message } => Error::Tokenization {
             message: format!("{prefix} {message}"),
@@ -66,6 +69,14 @@ pub enum Error {
     /// Database error. Replaces the old `SQLite(rusqlite::Error)` and
     /// `SqliteModule(String)` variants: the message is vipune-owned and the
     /// underlying message is included in it rather than dropped.
+    ///
+    /// The `Database error:` prefix is a match target for consumers outside
+    /// this repo (the pi-rukas `ctx7` wrapper greps the CLI's stderr for the
+    /// framed text), so it is pinned by
+    /// `errors_public_api_tests::database_display_prefix_is_pinned_because_classification_depends_on_it`.
+    /// Note a lock must never be routed through this variant: it renders like
+    /// the busy text but [`Error::is_locked`] reads the variant, so such a
+    /// lock would be invisible to both the typed API and the stderr matchers.
     #[error("Database error: {message}")]
     Database { message: String },
 
@@ -86,13 +97,16 @@ pub enum Error {
     #[error("Tokenization error: {message}")]
     Tokenization { message: String },
 
-    /// HuggingFace Hub failure. Kept because the download paths in
-    /// `embedding/engine.rs` convert `ApiError` through it.
+    /// HuggingFace Hub failure. Rendered by the `From<hf_hub::api::sync::ApiError>`
+    /// impl below — the download paths in `embedding/engine.rs` convert
+    /// `ApiError` through that impl (or re-render it as `Config` with the
+    /// air-gapped hint), so this is the shape a Hub failure takes when it is
+    /// not given the download hint.
     #[error("HuggingFace Hub error: {message}")]
     HfHub { message: String },
 
-    /// ONNX session failure. Kept because the inference path converts
-    /// `ort::error::Error` through it.
+    /// ONNX session failure. Rendered by the `From<ort::error::Error>` impl
+    /// below — the inference path converts `ort::error::Error` through it.
     #[error("ONNX session error: {message}")]
     Onnx { message: String },
 
@@ -144,7 +158,10 @@ pub enum Error {
     /// storage conversion — this id *is* rendered into CLI and MCP output: a
     /// corrupt row is unlocatable without it, which is the point of #186. The
     /// ids are the same UUIDs `list`/`search` already return, so naming one
-    /// discloses nothing the caller cannot already enumerate.
+    /// discloses nothing the caller cannot already enumerate. That argument
+    /// covers the `id` only: `reason` is the decoder's own message and a
+    /// hostile DB file can influence what it says, so it is not held to the
+    /// same "already enumerable" standard.
     #[error("Corrupt embedding for memory id: {id} ({reason})")]
     CorruptEmbedding { id: String, reason: String },
 
@@ -224,6 +241,13 @@ impl From<crate::sqlite::Error> for Error {
             crate::sqlite::Error::NotFound(_) => Error::NotFound("memory not found".to_string()),
             // Preserve the InvalidInput message so validation context is not lost.
             crate::sqlite::Error::InvalidInput(msg) => Error::InvalidInput(msg),
+            // Input-domain predicates, not storage faults: the callers pass
+            // the vector/limit that produced them, so they are reported as
+            // invalid input rather than under a variant that asserts a
+            // database failure.
+            crate::sqlite::Error::EmptyVector => Error::InvalidInput(err.to_string()),
+            crate::sqlite::Error::InvalidEmbedding(msg) => Error::InvalidInput(msg),
+            crate::sqlite::Error::InvalidLimit(msg) => Error::InvalidInput(msg),
             // Structured embedding failures keep their fields across the
             // public boundary (issue #255).
             crate::sqlite::Error::CorruptEmbedding { id, reason } => {
@@ -247,11 +271,6 @@ impl From<crate::sqlite::Error> for Error {
             // to match the message (issue #255).
             crate::sqlite::Error::Locked => Error::DatabaseLocked,
             crate::sqlite::Error::Sqlite(msg) => Error::Database { message: msg },
-            crate::sqlite::Error::EmptyVector => Error::Database {
-                message: err.to_string(),
-            },
-            crate::sqlite::Error::InvalidEmbedding(msg) => Error::Database { message: msg },
-            crate::sqlite::Error::InvalidLimit(msg) => Error::Database { message: msg },
         }
     }
 }

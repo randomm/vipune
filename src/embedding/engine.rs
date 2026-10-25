@@ -111,7 +111,15 @@ impl EmbeddingEngine {
         // Resolve through the profile table: unknown ids are rejected here, and
         // every profile carries its exact pinned revision.
         let profile = profile_for(model_id)?;
-        let api = ApiBuilder::new().build().map_err(Error::from)?;
+        // Same air-gapped remedy as the download sites below: a builder
+        // failure is a Hub/network failure too, so it must not arrive as a
+        // bare `HfHub` message that names no remedy.
+        let api = ApiBuilder::new().build().map_err(|e| {
+            Error::Config(format!(
+                "Failed to initialise the HuggingFace Hub client: {e}.\n\nIf running in an air-gapped environment, pre-fetch the model before going offline:\n  huggingface-cli download {} --revision {} --cache-dir ~/.cache/huggingface/hub",
+                profile.model_id, profile.revision
+            ))
+        })?;
 
         let repo = api.repo(Repo::with_revision(
             profile.model_id.to_string(),

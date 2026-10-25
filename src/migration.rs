@@ -65,8 +65,8 @@ use std::path::Path;
 ///   512-token limit once the target profile's passage prefix is applied.
 /// - `Error::MigrationIncomplete { report }` — the pass ran but at least one
 ///   row failed to embed; the marker stays, the old identity is kept.
-/// - `Error::SqliteModule(_)` — database-level failure (open, marker write,
-///   row listing, final commit).
+/// - [`Error::DatabaseLocked`] / [`Error::Database`] — database-level failure
+///   (open, marker write, row listing, final commit).
 pub fn migrate_model(
     db_path: &Path,
     config: &crate::config::Config,

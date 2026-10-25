@@ -122,8 +122,10 @@ impl std::fmt::Display for Error {
             Error::Sqlite(msg) => write!(f, "Database error: {}", msg),
             // Byte-compatible with the old `Sqlite("database is locked")`
             // rendering: the pi-rukas `ctx7` shell wrapper (outside this repo)
-            // matches this text in the CLI's stderr, and `hook/run.rs` matches
-            // it to classify a busy insert.
+            // matches this text in the CLI's stderr. `hook/run.rs` does NOT
+            // match it — its only text classifier is the UNIQUE-constraint
+            // check, and a locked insert is `Error::Locked`, which that
+            // matcher never sees.
             Error::Locked => write!(f, "{}", crate::sqlite::db_error::LOCKED_DISPLAY),
             Error::CorruptEmbedding { id, reason } => {
                 write!(f, "Corrupt embedding for memory id: {} ({})", id, reason)

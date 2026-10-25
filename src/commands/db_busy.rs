@@ -11,11 +11,17 @@
 //!
 //! The helpers take and return the public [`Error`] so no classification
 //! decision is made before the storage boundary's own `From` impls have run.
-//! The two `rusqlite::Error` call sites (the read-only doctor opens) convert
-//! first and then come through the same door.
+//! That guarantee is the producer's to keep: a call site that flattens a
+//! `rusqlite::Error` into a message string before reaching here destroys the
+//! result code and the verdict with it (`sqlite::identity::read_identity_row`
+//! used to do exactly that — it now converts through `From`, and
+//! `identity_tests::test_lock_on_identity_read_stays_classified_locked` pins
+//! it). The `rusqlite::Error` call sites — the read-only diagnostic opens and
+//! the Online Backup API — convert first and then come through the same door.
 //!
-//! They live here rather than as `Error` methods because their callers are all
-//! in the binary target: as library-target items they would read as dead code.
+//! They live here rather than as `Error` methods because they are CLI
+//! presentation helpers: they render the operator-facing locked message, and
+//! are deliberately not part of the public library API.
 
 use crate::errors::{Error, LOCKED_DB_MESSAGE};
 
@@ -46,23 +52,16 @@ pub(crate) fn wrap_rusqlite_busy<T>(result: Result<T, rusqlite::Error>) -> Resul
 /// Map a failure raised while opening the database to a `Config` error.
 ///
 /// A locked store becomes the actionable [`LOCKED_DB_MESSAGE`]; any other
-/// failure keeps its own message. Deliberately flattens the variant: the CLI
-/// prints every open-path failure (including migrations) as a configuration
-/// error, so the byte-identical text is preserved at the eight call sites.
-/// Callers that want the structured verdict use [`open_db_error_structured`].
+/// failure keeps its own message text. Deliberately flattens the variant: the
+/// CLI prints every open-path failure (including migrations) as a
+/// configuration error. A library consumer that wants the structured verdict
+/// uses `Error::from(sqlite::Error)` directly rather than this helper.
 #[must_use]
 pub(crate) fn open_db_error(err: crate::sqlite::Error) -> Error {
-    match open_db_error_structured(err) {
-        Error::DatabaseLocked => Error::Config(LOCKED_DB_MESSAGE.to_string()),
-        other => Error::Config(other.to_string()),
+    match err {
+        crate::sqlite::Error::Locked => Error::Config(LOCKED_DB_MESSAGE.to_string()),
+        other => Error::Config(Error::from(other).to_string()),
     }
-}
-
-/// [`open_db_error`]'s classification without the `Config` flattening, for
-/// callers that want to keep the structured variant.
-#[must_use]
-pub(crate) fn open_db_error_structured(err: crate::sqlite::Error) -> Error {
-    err.into()
 }
 
 #[cfg(test)]
@@ -88,10 +87,11 @@ mod tests {
 
     #[test]
     fn a_lock_that_arrives_as_a_raw_rusqlite_error_is_still_wrapped() {
-        // The Online Backup API (`backup`) and the read-only doctor opens
-        // surface locks as `rusqlite::Error` without a SqliteFailure code, so
-        // this path must classify too — it does, through the same
-        // result-code classifier.
+        // The Online Backup API (`backup`) and the read-only diagnostic opens
+        // surface locks as `rusqlite::Error`. The second argument is the
+        // optional message, not the result code: `classify_db_error` reads
+        // `sqlite_error_code()` from the `SqliteFailure` payload, so this
+        // fixture carries the code and no message.
         let raw = rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
             None,
@@ -112,12 +112,74 @@ mod tests {
     }
 
     #[test]
-    fn the_open_path_keeps_the_structured_locked_variant() {
-        // `open_db_error_structured` is what a library-shaped caller uses; it
-        // must not lose the variant the storage boundary produced.
-        let structured = open_db_error_structured(busy_sqlite_error());
-        assert!(matches!(structured, Error::DatabaseLocked));
-        assert!(structured.is_locked());
+    fn a_lock_without_a_result_code_stays_a_plain_database_error() {
+        // The wrapper must not turn every database failure into the busy hint:
+        // only the classified verdict does that, so a plain `Sqlite` message
+        // (which is what a code-less rusqlite failure becomes) passes through.
+        let err = crate::sqlite::Error::Sqlite("disk I/O error".to_string());
+        match wrap_busy(Err::<(), _>(err)) {
+            Err(Error::Database { message }) => assert_eq!(message, "disk I/O error"),
+            other => panic!("a non-locked failure must pass through unchanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_real_writer_holding_the_lock_classifies_a_statement_failure_as_locked() {
+        // The synthetic fixtures above hand-build a variant, so they cannot
+        // catch the verdict being lost between a real statement and the
+        // wrapper. This drives an actual `BEGIN EXCLUSIVE` writer and fails a
+        // mid-statement UPDATE (not an open), then asserts the structured
+        // verdict `wrap_busy` classifies on.
+        use crate::memory::lifecycle::MemoryStatus;
+        use crate::sqlite::UpdateOptions;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("memories.db");
+        let db = crate::sqlite::Database::open(&db_path).unwrap();
+        let emb = crate::memory::crud::test_fake_embedder("contended").unwrap();
+        let id = db
+            .insert("proj-a", "contended", &emb, None, "fact", "active")
+            .unwrap();
+        db.set_busy_timeout(std::time::Duration::ZERO).unwrap();
+
+        let lock_conn = rusqlite::Connection::open(&db_path).unwrap();
+        lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+        let result = wrap_busy(db.update(
+            &id,
+            "proj-a",
+            UpdateOptions {
+                content: None,
+                embedding: None,
+                metadata: None,
+                memory_type: None,
+                status: Some(MemoryStatus::Deprecated.as_str()),
+                importance: None,
+            },
+        ));
+        match result {
+            Err(Error::Config(msg)) => assert_eq!(msg, LOCKED_DB_MESSAGE),
+            other => panic!("expected the locked Config error, got {other:?}"),
+        }
+        // And the verdict really came from the classifier, not from text.
+        let raw: Error = db
+            .update(
+                &id,
+                "proj-a",
+                UpdateOptions {
+                    content: None,
+                    embedding: None,
+                    metadata: None,
+                    memory_type: None,
+                    status: Some(MemoryStatus::Deprecated.as_str()),
+                    importance: None,
+                },
+            )
+            .map_err(Error::from)
+            .expect_err("the writer still holds the lock");
+        assert!(raw.is_locked(), "a real lock must classify, got {raw:?}");
+
+        lock_conn.execute("ROLLBACK", []).unwrap();
     }
 
     #[test]

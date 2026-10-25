@@ -39,7 +39,8 @@ fn run_online_backup(source: &Path, destination: &Path) -> Result<u64, Error> {
     // The Online Backup API returns raw rusqlite errors when the source is in
     // a hot-journal state (another connection holds `BEGIN EXCLUSIVE` — the
     // same shape as a running MCP server holding a write lock), so both that
-    // path and the `crate::sqlite::Error` path go through `wrap_busy`.
+    // path and the `crate::sqlite::Error` path are classified by the shared
+    // helpers in `db_busy`.
     super::db_busy::wrap_busy(source_db.set_busy_timeout(Duration::ZERO))?;
 
     // Fresh destination: the Online Backup API copies pages into the target
@@ -54,8 +55,10 @@ fn run_online_backup(source: &Path, destination: &Path) -> Result<u64, Error> {
     // `SQLITE_BUSY` when the source is in a hot-journal state (e.g. another
     // connection has `BEGIN EXCLUSIVE` — the same shape as a running MCP
     // server holding a write lock). The error surfaces as a raw `rusqlite::
-    // Error` (not `crate::sqlite::Error`), so wrap it through `wrap_busy`
-    // here to convert it to the actionable MCP-server message.
+    // Error` (not `crate::sqlite::Error`), so it goes through
+    // `wrap_busy_error` here to convert it to the actionable MCP-server
+    // message. `wrap_rusqlite_busy` is the sibling for call sites that hold
+    // the raw error rather than a converted one.
     let backup = super::db_busy::wrap_busy_error(
         rusqlite::backup::Backup::new(source_db.conn(), &mut dest_conn).map_err(Error::from),
     )?;

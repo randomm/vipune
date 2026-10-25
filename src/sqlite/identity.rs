@@ -70,7 +70,10 @@ fn read_identity_row(conn: &Connection) -> crate::sqlite::Result<IdentityRow> {
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )
     .optional()
-    .map_err(|e| crate::sqlite::Error::Sqlite(e.to_string()))
+    // NOT `Sqlite(e.to_string())`: the `From` impl classifies the rusqlite
+    // result code into `Error::Locked`, and the identity read is on the
+    // MCP/hook chokepoints where a lock has to stay distinguishable (#255).
+    .map_err(crate::sqlite::Error::from)
 }
 
 /// Read the recorded identity, if any.
@@ -165,12 +168,17 @@ pub fn read_identity_and_marker(
 ///
 /// # Errors
 ///
-/// `Error::Config` with the refusal message; a database error (or
-/// [`Error::DatabaseLocked`]) if the identity table cannot be read.
+/// [`Error::Config`] with the refusal message; [`Error::DatabaseLocked`] when
+/// the store is locked, otherwise [`Error::Database`], if the identity table
+/// cannot be read.
 pub fn assert_identity_ok(
     conn: &Connection,
     configured_model_id: &str,
 ) -> Result<(), crate::errors::Error> {
+    // `read_identity_row` keeps the rusqlite result code (it converts through
+    // `From<rusqlite::Error>`, not a flattened message), so a lock on this
+    // read — the MCP add/update/search chokepoint and the hook insert —
+    // survives as the locked variant instead of a generic database error.
     let (recorded, marker) = read_identity_and_marker(conn).map_err(crate::errors::Error::from)?;
     if let Some(marker) = marker {
         return Err(crate::errors::Error::Config(format!(

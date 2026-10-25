@@ -8,6 +8,10 @@ use std::sync::{Arc, Mutex};
 
 use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 
+#[cfg(test)]
+#[path = "store_wrapper_error_tests.rs"]
+mod error_mapping_tests;
+
 /// Wrapper for MemoryStore to allow async-sound use.
 ///
 /// Since MCP stdio handles requests sequentially, the Mutex will never contend.
@@ -511,16 +515,47 @@ impl From<Error> for rmcp::ErrorData {
             // Downstream log-shipping therefore sees raw SQLite text
             // (`no such table: …`, `UNIQUE constraint failed: memories.id`).
             // A locked database is reported as such so an MCP client
-            // can retry rather than treat it as a server defect.
+            // can retry rather than treat it as a server defect. rmcp's
+            // `ErrorCode` set has no "try again later", so the code stays
+            // INTERNAL_ERROR and `data.type` is the discriminator a client
+            // must read — the code alone cannot tell a retryable lock from a
+            // server bug.
             Error::DatabaseLocked => rmcp::ErrorData::new(
                 rmcp::model::ErrorCode::INTERNAL_ERROR,
                 e.to_string(),
                 Some(serde_json::json!({"type": "database_locked"})),
             ),
-            Error::Database { .. }
-            | Error::CorruptEmbedding { .. }
-            | Error::InvalidBlobSize { .. }
-            | Error::MismatchedDimensions { .. } => McpError::internal_error(&e.to_string()),
+            // The structured embedding failures carry their fields in `data`
+            // as well as in the message, so a client can locate the corrupt
+            // row without parsing prose (the #186 payload, on the MCP side).
+            Error::Database { .. } => McpError::internal_error(&e.to_string()),
+            Error::CorruptEmbedding { ref id, ref reason } => rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                e.to_string(),
+                Some(serde_json::json!({
+                    "type": "corrupt_embedding",
+                    "id": id,
+                    "reason": reason
+                })),
+            ),
+            Error::InvalidBlobSize { expected, actual } => rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                e.to_string(),
+                Some(serde_json::json!({
+                    "type": "invalid_blob_size",
+                    "expected": expected,
+                    "actual": actual
+                })),
+            ),
+            Error::MismatchedDimensions { expected, actual } => rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                e.to_string(),
+                Some(serde_json::json!({
+                    "type": "mismatched_dimensions",
+                    "expected": expected,
+                    "actual": actual
+                })),
+            ),
             Error::EmbedderUnavailable { reason } => rmcp::ErrorData::new(
                 rmcp::model::ErrorCode::INTERNAL_ERROR,
                 reason,

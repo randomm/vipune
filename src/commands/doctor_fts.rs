@@ -16,7 +16,7 @@
 //!   the FTS5 rebuild special command `INSERT INTO memories_fts(memories_fts)
 //!   VALUES('rebuild')`. Repair is always GLOBAL and ignores `-p`.
 
-use crate::errors::Error;
+use crate::errors::{Error, LOCKED_DB_MESSAGE};
 use crate::output::{DoctorFtsProject, DoctorFtsResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::fts::FtsDesyncReport;
@@ -124,12 +124,18 @@ fn handle_doctor_fts_repair(
     // repo uses. It does not touch `memories` data. Fast-fail on a lock: a
     // SQLITE_BUSY here aborts the statement, so the caller is told to re-run
     // the repair (the rebuild is idempotent) rather than left guessing.
-    if let Err(e) = super::db_busy::wrap_busy(db.rebuild_fts()) {
-        return Err(match e {
-            Error::Config(_) => Error::Config(format!(
-                "{e} The FTS index may be half-rebuilt; re-run `vipune doctor --fts --repair` to complete it."
-            )),
-            other => other,
+    //
+    // The decision is made on the classified error BEFORE the locked message is
+    // rendered into `Error::Config`: only the locked verdict earns the
+    // half-rebuilt recovery note, so an unrelated failure from this call chain
+    // can never be told its index is half-rebuilt.
+    if let Err(e) = db.rebuild_fts().map_err(Error::from) {
+        return Err(if e.is_locked() {
+            Error::Config(format!(
+                "{LOCKED_DB_MESSAGE} The FTS index may be half-rebuilt; re-run `vipune doctor --fts --repair` to complete it."
+            ))
+        } else {
+            e
         });
     }
 
@@ -159,13 +165,15 @@ fn emit(response: &DoctorFtsResponse, json: bool) {
     }
 }
 
-/// Count `memories` rows globally and per project on an already-open `Database`.
+/// Count `memories` rows globally and per project on an already-open `Database`
+/// in a single aggregate pass. Deliberately NOT a `COUNT(*)` per project id:
+/// `Database::row_counts_by_project` is the aggregate sibling (the shape
+/// `export_scan::scan_all_rows` documents for scans).
 fn memory_counts(db: &Database) -> Result<MemoryCounts, Error> {
     let mut counts = MemoryCounts::default();
-    for pid in db.list_all_project_ids()? {
-        let c = db.count_rows_for_project(&pid)?;
-        counts.total += c;
-        *counts.by_project.entry(pid).or_insert(0) += c;
+    for (project_id, rows) in db.row_counts_by_project()? {
+        counts.total += rows;
+        *counts.by_project.entry(project_id).or_insert(0) += rows;
     }
     Ok(counts)
 }

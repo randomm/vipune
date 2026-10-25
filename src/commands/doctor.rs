@@ -196,16 +196,13 @@ pub(crate) fn collect_doctor_projects_response(
         OpenFlags::SQLITE_OPEN_READ_ONLY,
     ))?);
 
-    // Gather all project ids with row counts
+    // Gather all project ids with row counts (one aggregate query, not one
+    // COUNT(*) per project).
     let project_ids = super::db_busy::wrap_busy(db.list_all_project_ids())?;
 
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for pid in &project_ids {
-        counts.insert(
-            pid.clone(),
-            super::db_busy::wrap_busy(db.count_rows_for_project(pid))?,
-        );
-    }
+    let counts: HashMap<String, usize> = super::db_busy::wrap_busy(db.row_counts_by_project())?
+        .into_iter()
+        .collect();
 
     // Detect suspected split pairs using pure heuristic function.
     let suspected_splits = detect_split_pairs(&project_ids, &counts);
