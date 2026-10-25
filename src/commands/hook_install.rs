@@ -159,12 +159,11 @@ pub(crate) fn merge_vipune_groups(
                 result.insert(key, serde_json::json!([vipune_group(vipune_bin, event)]));
             }
             Some(val) => {
-                if let Some(arr) = val.as_array() {
-                    if !vipune_group_present(arr, &vipune_command) {
-                        if let Some(arr_mut) = val.as_array_mut() {
-                            arr_mut.push(vipune_group(vipune_bin, event));
-                        }
-                    }
+                if let Some(arr) = val.as_array()
+                    && !vipune_group_present(arr, &vipune_command)
+                    && let Some(arr_mut) = val.as_array_mut()
+                {
+                    arr_mut.push(vipune_group(vipune_bin, event));
                 }
             }
         }

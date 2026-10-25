@@ -194,6 +194,7 @@ impl std::error::Error for Error {}
 
 impl From<rusqlite::Error> for Error {
     fn from(err: rusqlite::Error) -> Self {
+<<<<<<< HEAD
         match db_error::classify_db_error(&err) {
             // The typed verdict survives the boundary: the classifier read the
             // SQLite result code, so nothing above has to match the busy text.

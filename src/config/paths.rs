@@ -4,21 +4,21 @@ use std::path::{Path, PathBuf};
 
 /// Expand `~` to home directory in a PathBuf (in-place).
 pub fn expand_tilde(path: &mut PathBuf) {
-    if path.starts_with("~") {
-        if let Some(home) = dirs::home_dir() {
-            let rest = path.strip_prefix("~").unwrap_or(Path::new(""));
-            *path = home.join(rest);
-        }
+    if path.starts_with("~")
+        && let Some(home) = dirs::home_dir()
+    {
+        let rest = path.strip_prefix("~").unwrap_or(Path::new(""));
+        *path = home.join(rest);
     }
 }
 
 /// Expand `~` to home directory in a PathBuf (returns new PathBuf).
 pub fn expand_tilde_path(path: &Path) -> PathBuf {
-    if path.starts_with("~") {
-        if let Some(home) = dirs::home_dir() {
-            let rest = path.strip_prefix("~").unwrap_or(Path::new(""));
-            return home.join(rest);
-        }
+    if path.starts_with("~")
+        && let Some(home) = dirs::home_dir()
+    {
+        let rest = path.strip_prefix("~").unwrap_or(Path::new(""));
+        return home.join(rest);
     }
     path.to_path_buf()
 }

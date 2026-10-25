@@ -180,10 +180,12 @@ mod integration_tests {
             if let Ok(entries) = std::fs::read_dir(parent_dir) {
                 for entry in entries.flatten() {
                     let p = entry.path();
-                    if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-                        if name.ends_with(".rs") && name != filename && !candidates.contains(&p) {
-                            candidates.push(p);
-                        }
+                    if let Some(name) = p.file_name().and_then(|n| n.to_str())
+                        && name.ends_with(".rs")
+                        && name != filename
+                        && !candidates.contains(&p)
+                    {
+                        candidates.push(p);
                     }
                 }
             }

@@ -127,21 +127,21 @@ pub fn build_filters<'p>(
     }
 
     // Type filter (only if explicitly provided)
-    if let Some(types) = memory_types {
-        if !types.is_empty() {
-            let placeholders: Vec<String> = (0..types.len())
-                .map(|i| format!("?{}", param_index + i))
-                .collect();
-            where_clauses.push(format!(
-                "{}type IN ({})",
-                column_prefix,
-                placeholders.join(", ")
-            ));
-            for t in types {
-                params.push(t);
-            }
-            param_index += types.len();
+    if let Some(types) = memory_types
+        && !types.is_empty()
+    {
+        let placeholders: Vec<String> = (0..types.len())
+            .map(|i| format!("?{}", param_index + i))
+            .collect();
+        where_clauses.push(format!(
+            "{}type IN ({})",
+            column_prefix,
+            placeholders.join(", ")
+        ));
+        for t in types {
+            params.push(t);
         }
+        param_index += types.len();
     }
 
     param_index

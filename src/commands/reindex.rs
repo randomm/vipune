@@ -98,18 +98,16 @@ pub fn handle_reindex(
     // Human mode, scoped to a single project: nudge the user about the other
     // projects in the store so a scoped reindex doesn't quietly leave them
     // behind (mirrors the issue #156 under-reporting concern).
-    if !json {
-        if let Some(filter) = project_filter {
-            let other_count = all_project_ids
-                .iter()
-                .filter(|pid| pid.as_str() != filter)
-                .count();
-            if other_count > 0 {
-                println!(
-                    "Note: {} other project(s) in this database not reindexed. Run with --all-projects to reindex them.",
-                    other_count
-                );
-            }
+    if !json && let Some(filter) = project_filter {
+        let other_count = all_project_ids
+            .iter()
+            .filter(|pid| pid.as_str() != filter)
+            .count();
+        if other_count > 0 {
+            println!(
+                "Note: {} other project(s) in this database not reindexed. Run with --all-projects to reindex them.",
+                other_count
+            );
         }
     }
 
@@ -420,7 +418,7 @@ where
             }
         }
 
-        if !json && processed % PROGRESS_INTERVAL == 0 {
+        if !json && processed.is_multiple_of(PROGRESS_INTERVAL) {
             println!(
                 "  Progress: {} processed ({} reindexed, {} skipped, {} failed)",
                 processed,

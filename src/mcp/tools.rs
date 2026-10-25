@@ -398,10 +398,10 @@ impl ToolHandler {
         };
 
         // Update retrieval telemetry unless no_touch is true
-        if !params.no_touch.unwrap_or(false) {
-            if let Err(e) = self.store.touch_memories(&[memory.id.as_str()]) {
-                eprintln!("warning: touch_memories failed (telemetry not updated): {e}");
-            }
+        if !params.no_touch.unwrap_or(false)
+            && let Err(e) = self.store.touch_memories(&[memory.id.as_str()])
+        {
+            eprintln!("warning: touch_memories failed (telemetry not updated): {e}");
         }
 
         // Format memory as JSON using helper

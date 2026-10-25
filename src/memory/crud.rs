@@ -300,12 +300,12 @@ impl MemoryStore {
         }
 
         // Validate status if provided - reject "superseded"
-        if let Some(s) = status {
-            if s == MemoryStatus::Superseded {
-                return Err(Error::InvalidInput(
-                    "Cannot set status to 'superseded'. Use --supersedes flag instead.".to_string(),
-                ));
-            }
+        if let Some(s) = status
+            && s == MemoryStatus::Superseded
+        {
+            return Err(Error::InvalidInput(
+                "Cannot set status to 'superseded'. Use --supersedes flag instead.".to_string(),
+            ));
         }
 
         // If content is provided, validate and generate new embedding

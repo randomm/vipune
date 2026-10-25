@@ -170,15 +170,15 @@ impl Config {
     /// (`~/.cache/huggingface/hub/` by default), which `hf-hub` creates on
     /// demand — vipune does not pre-create any model directory.
     pub fn ensure_directories(&self) -> Result<(), Error> {
-        if let Some(parent) = self.database_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    Error::Config(format!(
-                        "Failed to create database directory {}: {e}",
-                        parent.display()
-                    ))
-                })?;
-            }
+        if let Some(parent) = self.database_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Error::Config(format!(
+                    "Failed to create database directory {}: {e}",
+                    parent.display()
+                ))
+            })?;
         }
 
         Ok(())
