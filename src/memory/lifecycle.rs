@@ -137,6 +137,22 @@ impl MemoryStatus {
     /// hand-written variants of this message are how the two wordings drifted
     /// apart (issue #258).
     ///
+    /// The predicate form of [`Self::ensure_valid_for_insert`], kept for the
+    /// released public API (shipped in v0.15.4 — issue #258 must not remove it).
+    ///
+    /// The store's write paths call the `Result`-returning method above, so the
+    /// wording of the rejection lives in exactly one place; this copy exists so
+    /// a library caller that only wants the verdict keeps the method it
+    /// compiled against. Delegation is the only body: the two cannot disagree.
+    // Released in v0.15.4 and part of the additive-only public API; the store's
+    // write paths all call `ensure_valid_for_insert`, so nothing in this crate
+    // reaches it but the test below.
+    #[cfg_attr(not(test), allow(dead_code))] // Public API for library consumers
+    #[must_use = "the verdict is the reason to call this"]
+    pub fn is_valid_for_insert(self) -> bool {
+        self.ensure_valid_for_insert().is_ok()
+    }
+
     /// # Errors
     ///
     /// Returns [`Error::InvalidInput`] if `self` is not insertable.
@@ -323,8 +339,14 @@ mod tests {
 
     #[test]
     fn test_ensure_valid_for_insert() {
+        // `is_valid_for_insert` (shipped in v0.15.4, restored by #258) delegates
+        // to this method, so one table pins both spellings of the rule rather
+        // than letting a predicate that always returns `false` pass unnoticed.
         assert!(MemoryStatus::Active.ensure_valid_for_insert().is_ok());
         assert!(MemoryStatus::Candidate.ensure_valid_for_insert().is_ok());
+        for accepted in [MemoryStatus::Active, MemoryStatus::Candidate] {
+            assert!(accepted.is_valid_for_insert(), "{accepted:?} is insertable");
+        }
         // The two states below belong to an existing row's UPDATE, never to an
         // INSERT: if either ever became insertable the supersede path would
         // accept a replacement row that is born already replaced.
@@ -336,6 +358,10 @@ mod tests {
                 err.to_string()
                     .contains("is not valid for new memory insertion"),
                 "unexpected error for {rejected:?}: {err}"
+            );
+            assert!(
+                !rejected.is_valid_for_insert(),
+                "the predicate must refuse {rejected:?} for the same reason"
             );
         }
     }

@@ -256,6 +256,23 @@ fn added_status(store: &MemoryStore, id: &str, project: &str) -> String {
         .status
 }
 
+/// Add a row through the released, level-only public entry point
+/// [`MemoryStore::supersede_with_importance`] — the one `vipune add
+/// --supersedes --importance` drove before #258 replaced it internally with
+/// [`MemoryStore::supersede_with`]. It stays in the public API (additive-only,
+/// shipped in v0.15.4), so its behaviour is pinned here rather than assumed.
+fn supersede_with_importance(
+    store: &mut MemoryStore,
+    project: &str,
+    content: &str,
+    old_id: &str,
+    importance: MemoryImportance,
+) -> String {
+    store
+        .supersede_with_importance(project, content, None, MemoryType::Fact, old_id, importance)
+        .expect("supersede_with_importance must succeed")
+}
+
 /// Add a row through `vipune add --supersedes`'s own entry point — the
 /// status- and level-carrying supersede — so a test can pin what that path
 /// writes. `vipune add` reaches the store through `handle_add`, which is
@@ -500,19 +517,26 @@ fn add_superseding_persists_the_importance_on_the_new_row() {
     // inside the supersede transaction, so that INSERT needs the binding too.
     let mut store = MemoryStore::test_store();
     let old_id = add(&mut store, "sup-proj", "original fact", None);
-    let new_id = supersede_with_status(
+    let new_id = supersede_with_importance(
         &mut store,
         "sup-proj",
         "replacement fact",
         &old_id,
         MemoryImportance::Critical,
-        MemoryStatus::Active,
     );
     assert_eq!(
         added_importance(&store, &new_id, "sup-proj"),
         "critical",
         "the superseding row must carry the level the operator asked for"
     );
+    assert_eq!(
+        added_status(&store, &new_id, "sup-proj"),
+        MemoryStatus::Active.as_str(),
+        "the released wrapper's own semantics: the new row is active"
+    );
+    // The old row was replaced by this call: the released signature keeps the
+    // supersede transaction's other half intact.
+    assert_eq!(added_status(&store, &old_id, "sup-proj"), "superseded");
     // The superseded row keeps its own level, and the defaulting wrapper lands
     // on medium rather than sharing the variant's value by accident.
     assert_eq!(added_importance(&store, &old_id, "sup-proj"), "medium");
