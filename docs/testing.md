@@ -315,8 +315,34 @@ cargo test
 
 If any test fails, fix it locally. CI verifies, but does not discover.
 
+## Dependency Advisory Gate
+
+CI also runs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) against the committed
+`Cargo.lock`, on pull requests, pushes to `main` and the nightly schedule. It is not a test suite
+— it fails the build for a dependency that has a RustSec advisory, a yanked release, or a denied
+feature. Configuration lives in [`deny.toml`](../deny.toml) at the repo root.
+
+Run the same gate locally (install once with `cargo install cargo-deny`):
+
+```bash
+cargo deny --locked check advisories bans
+```
+
+What it covers, and what it deliberately does not:
+
+- **Advisories** — RustSec advisories for the whole dependency graph, including dev and bench
+  deps, via `[graph] all-features = true` (so the `mcp` feature is covered too).
+- **Triage rows** — each ignored advisory carries an `id`, a `reason` and the upstream blocker.
+  `unused-ignored-advisory = "deny"` fails the check when an ignored advisory stops firing, so a
+  lockfile fix and the `ignore` row it supersedes must be committed together.
+- **Denied features** — `base64` 0.23 may not resolve with `simd-unsafe`, because that crate
+  decodes untrusted import files and feature unification would otherwise re-enable it.
+- **Not configured** — `[licenses]` and `[sources]` are intentionally absent; enabling them is a
+  separate decision, and adding an empty section rejects every license in the graph.
+
 ## See Also
 
 - [Architecture documentation](architecture.md) for module structure
 - [CONTRIBUTING.md](../CONTRIBUTING.md) for quality gates
+- [`deny.toml`](../deny.toml) for the dependency advisory gate configuration
 - [Main README](../README.md) for project overview

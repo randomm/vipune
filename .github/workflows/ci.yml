@@ -105,3 +105,31 @@ jobs:
 
       - name: Test (no default features)
         run: cargo test --no-default-features
+
+  # Dependency-advisory gate (issue #253). Runs on pull_request (and every push
+  # to main) plus the nightly schedule above, so a newly published RustSec
+  # advisory reddens the nightly even when nothing changed here. Kept separate
+  # from the test jobs: it needs no target/ or HuggingFace cache and no compile,
+  # so it reports in seconds. `--locked` checks the committed Cargo.lock — the
+  # graph we actually ship — instead of a fresh resolution nobody runs.
+  #
+  # cargo-deny is pinned so the gate's verdict cannot change under us mid-PR;
+  # bump it with `cargo deny --locked check advisories bans` run locally, since
+  # a new release can tighten reporting and turn green red.
+  deny:
+    name: Dependency advisories
+    runs-on: ubicloud-standard-4
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: Check advisories and denied features
+        run: cargo deny --locked check advisories bans

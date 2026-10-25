@@ -1,0 +1,65 @@
+# Dependency-advisory and feature gate (issue #253).
+#
+# Run locally before pushing — the check names are part of the command, not
+# optional. Bare `cargo deny check` also runs `licenses`, which is deliberately
+# unconfigured below and would reject every license in the graph:
+#   cargo deny check advisories bans
+# The --locked flag makes the check resolve against the committed Cargo.lock,
+# so the gate cannot pass on a graph nobody ships:
+#   cargo deny --locked check advisories bans
+#
+# Only [advisories] and the base64 feature ban are configured on purpose.
+# [licenses] and [sources] are deliberately absent: unconfigured they reject
+# every license in the graph, so adding them is a separate decision.
+
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db.git"]
+# A yanked release that a release build still compiles is a real problem.
+yanked = "deny"
+# Unmaintained/unsound advisories are only acted on for crates vipune depends
+# on directly; transitive ones (paste via tokenizers, rand via hf-hub) would
+# redden PRs for upstream churn nothing in this repo can fix.
+unmaintained = "workspace"
+unsound = "workspace"
+# An ignore row whose advisory no longer fires means the offending crate was
+# updated and the row is dead weight. Deny so triage rows cannot rot silently —
+# this is what couples this file to Cargo.lock: dropping a row requires the
+# corresponding `cargo update -p <crate>` in the same commit.
+unused-ignored-advisory = "deny"
+ignore = [
+    # rmcp 1.3.0 is the highest release that compiles against this repo's
+    # src/mcp wiring; 1.4.0 fixes Host-header validation for the Streamable
+    # HTTP server transport. vipune's MCP server speaks stdio
+    # (`transport-io`), which the advisory itself says is unaffected, so this
+    # is not exploitable in the shipped binary. `cargo update -p rmcp` stops at
+    # 1.8.0 because rmcp 2.x breaks the src/mcp API; that migration is the
+    # upstream blocker.
+    { id = "RUSTSEC-2026-0189", reason = "rmcp 1.3.0; stdio transport only, not the affected Streamable HTTP transport. Blocked on the rmcp 2.x migration of src/mcp (issue #253)" },
+]
+
+[graph]
+# The advisory graph must cover the mcp feature and the dev/bench deps
+# (criterion, tempfile, tokio), not just the default-feature release graph.
+all-features = true
+
+[bans]
+# Cargo.lock resolves several copies of the same crate (base64 0.13/0.22/0.23,
+# webpki-roots 0.26/1.x) through independent upstream constraints; deduplicating
+# them needs upstream changes, not a vipune change, so this is not a gate here.
+multiple-versions = "allow"
+wildcards = "allow"
+# Skip the two base64 copies that are *not* the one vipune decodes with, so the
+# ban below only reports for 0.23 (they do not even define `simd-unsafe`, and
+# cargo-deny warns about denied features a crate does not have).
+skip-tree = [
+    { crate = "base64@0.13.1", reason = "transitive of tokenizers/spm_precompiled; not the crate src/commands/import.rs decodes with" },
+    { crate = "base64@0.22.1", reason = "transitive of rmcp/ureq/ureq-proto; not the crate src/commands/import.rs decodes with" },
+]
+features = [
+    # vipune decodes the `embedding` field of untrusted import files
+    # (src/commands/import.rs) via base64 0.23, which Cargo.toml opts out of
+    # default features for precisely this reason. Cargo feature unification
+    # would silently re-enable simd-unsafe (unsafe SIMD, a 0.23 default feature)
+    # if any other crate ever depends on base64 0.23 with defaults.
+    { deny = ["simd-unsafe"], crate = "base64@0.23", reason = "base64 0.23 decodes untrusted import files; simd-unsafe is a 0.23 default feature and must stay off" },
+]

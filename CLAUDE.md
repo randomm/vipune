@@ -7,10 +7,16 @@ This document helps AI agents working on vipune understand the codebase and how 
 Before pushing any changes:
 
 ```bash
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny --locked check advisories bans
 ```
 
-All three checks must pass. No exceptions, no bypasses (`--no-verify`, suppressions, etc.).
+All four checks must pass. No exceptions, no bypasses (`--no-verify`, suppressions, etc.).
+
+`cargo deny` is [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) (`cargo install
+cargo-deny` once), configured in `deny.toml`. It fails on a RustSec advisory that is neither
+fixed by a compatible update nor triaged in `deny.toml` with an ID, reason and upstream blocker,
+and on `base64` 0.23 resolving with the `simd-unsafe` feature. See
+`docs/testing.md#dependency-advisory-gate`.
 
 ## Architecture
 
@@ -62,7 +68,8 @@ This creates persistent memory across tasks — store patterns, conventions, got
 | Lint | `cargo clippy --all-targets -- -D warnings` |
 | Format check | `cargo fmt --check` |
 | Format code | `cargo fmt` |
-| All gates | `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` |
+| All gates | `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny --locked check advisories bans` |
+| Dependency advisories | `cargo deny --locked check advisories bans` |
 | Build release | `cargo build --release` |
 
 ## Key Constraints
