@@ -30,6 +30,15 @@ pub struct StoreMemoryParams {
     #[schemars(description = "Memory status: active, candidate (default: active).")]
     pub status: Option<String>,
 
+    /// Importance: low, medium, high, critical (default: medium). `high` and
+    /// `critical` are protected from prune.
+    #[serde(default)]
+    #[schemars(
+        description = "Importance: low, medium, high, critical (default: medium). Case-insensitive. The level affects search ranking: critical never recency-decays and high decays slowly. high and critical are never demoted by prune. Set at store time - update_memory does not change it.",
+        extend("enum" = &["low", "medium", "high", "critical"])
+    )]
+    pub importance: Option<String>,
+
     /// ID of memory to supersede (creates new memory, marks old as superseded).
     #[serde(default)]
     #[schemars(

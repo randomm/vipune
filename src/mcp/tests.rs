@@ -4,7 +4,8 @@ use crate::config::Config;
 use crate::mcp::params::*;
 use crate::mcp::store_wrapper::StoreWrapper;
 use crate::mcp::tools::ToolHandler;
-use crate::memory::{MemoryStore, UpdateParams};
+use crate::memory::lifecycle::MemoryImportance;
+use crate::memory::{MemoryStore, NewMemory, UpdateParams};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
@@ -16,7 +17,7 @@ use tempfile::TempDir;
 ///
 /// ⚠️ The TempDir is forgotten to keep the database file alive for the test duration.
 /// This matches the pattern used by `MemoryStore::test_store()`.
-fn create_test_store() -> MemoryStore {
+pub(super) fn create_test_store() -> MemoryStore {
     use crate::sqlite::Database;
 
     let dir = TempDir::new().expect("create temp dir");
@@ -27,42 +28,87 @@ fn create_test_store() -> MemoryStore {
     MemoryStore::from_db_with_test_embedder(db)
 }
 
+/// Seed an active row at a chosen level through the wrapper, so a
+/// handler-driven test starts from a known row without going through the
+/// tool under test.
+pub(super) fn seed_row_at(
+    wrapper: &StoreWrapper,
+    project: &str,
+    text: &str,
+    importance: MemoryImportance,
+) -> crate::Memory {
+    use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+    let row = NewMemory {
+        project_id: project,
+        content: text,
+        metadata: None,
+        memory_type: MemoryType::Fact,
+        status: MemoryStatus::Active,
+    };
+    let seeded = wrapper
+        .ingest_with_lifecycle(&row, true, importance)
+        .expect("seed add");
+    let id = seeded["id"].as_str().expect("seed id").to_string();
+    wrapper
+        .get(&id, project)
+        .expect("get")
+        .expect("seeded row readable")
+}
+
+/// Seed one active row at the default level. See [`seed_row_at`].
+pub(super) fn seed_row(wrapper: &StoreWrapper, project: &str, text: &str) -> crate::Memory {
+    seed_row_at(wrapper, project, text, MemoryImportance::Medium)
+}
+
+/// Pull the `id` out of a tool result's JSON text content.
+///
+/// The tool handlers return `CallToolResult`, whose payload is a list of
+/// text contents holding the serialised response, so a handler-driven test
+/// has to unwrap that envelope once instead of per assertion.
+pub(super) fn tool_result_id(result: &rmcp::model::CallToolResult) -> String {
+    let text = result
+        .content
+        .iter()
+        .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
+        .next()
+        .expect("tool result carries text content");
+    serde_json::from_str::<serde_json::Value>(text)
+        .expect("tool result text is JSON")
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("tool result JSON carries an id")
+        .to_string()
+}
+
+/// The arguments an MCP client would send for a `store_memory` call.
+pub(super) fn store_memory_args(
+    text: &str,
+    status: Option<&str>,
+    supersedes: Option<&str>,
+) -> serde_json::Value {
+    store_memory_args_full(text, status, supersedes, None)
+}
+
+/// As [`store_memory_args`], with the `importance` an agent would send.
+/// An absent key and `"importance": null` both deserialize to `None`, so
+/// passing `None` here is the omitted-field case.
+pub(super) fn store_memory_args_full(
+    text: &str,
+    status: Option<&str>,
+    supersedes: Option<&str>,
+    importance: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "text": text,
+        "status": status,
+        "supersedes": supersedes,
+        "importance": importance,
+    })
+}
+
 #[cfg(all(test, feature = "mcp"))]
 mod tool_handler_tests {
     use super::*;
-
-    /// Pull the `id` out of a tool result's JSON text content.
-    ///
-    /// The tool handlers return `CallToolResult`, whose payload is a list of
-    /// text contents holding the serialised response, so a handler-driven test
-    /// has to unwrap that envelope once instead of per assertion.
-    fn tool_result_id(result: &rmcp::model::CallToolResult) -> String {
-        let text = result
-            .content
-            .iter()
-            .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
-            .next()
-            .expect("tool result carries text content");
-        serde_json::from_str::<serde_json::Value>(text)
-            .expect("tool result text is JSON")
-            .get("id")
-            .and_then(|v| v.as_str())
-            .expect("tool result JSON carries an id")
-            .to_string()
-    }
-
-    /// The arguments an MCP client would send for a `store_memory` call.
-    fn store_memory_args(
-        text: &str,
-        status: Option<&str>,
-        supersedes: Option<&str>,
-    ) -> serde_json::Value {
-        serde_json::json!({
-            "text": text,
-            "status": status,
-            "supersedes": supersedes,
-        })
-    }
 
     /// Test that MCP server can be initialized.
     #[test]
@@ -108,6 +154,7 @@ mod tool_handler_tests {
             metadata: Some(serde_json::json!({"topic": "test"})),
             memory_type: None,
             status: None,
+            importance: None,
             supersedes: None,
             force: None,
         };
@@ -118,6 +165,7 @@ mod tool_handler_tests {
         assert!(decoded.metadata.is_some());
         assert!(decoded.memory_type.is_none());
         assert!(decoded.status.is_none());
+        assert!(decoded.importance.is_none());
         assert!(decoded.supersedes.is_none());
         assert!(decoded.force.is_none());
     }
@@ -130,6 +178,7 @@ mod tool_handler_tests {
             metadata: Some(serde_json::json!({"topic": "test"})),
             memory_type: Some("preference".to_string()),
             status: Some("active".to_string()),
+            importance: Some("critical".to_string()),
             supersedes: Some("old-memory-id".to_string()),
             force: Some(true),
         };
@@ -140,6 +189,7 @@ mod tool_handler_tests {
         assert!(decoded.metadata.is_some());
         assert_eq!(decoded.memory_type, Some("preference".to_string()));
         assert_eq!(decoded.status, Some("active".to_string()));
+        assert_eq!(decoded.importance, Some("critical".to_string()));
         assert_eq!(decoded.supersedes, Some("old-memory-id".to_string()));
         assert_eq!(decoded.force, Some(true));
     }
@@ -516,13 +566,16 @@ mod tool_handler_tests {
         let project_id = "test-project";
 
         // Store a memory
-        let result = wrapper.ingest_with_type_status(
-            project_id,
-            "original content",
-            "null",
+        let result = wrapper.ingest_with_lifecycle(
+            &NewMemory {
+                project_id,
+                content: "original content",
+                metadata: None,
+                memory_type: MemoryType::Fact,
+                status: MemoryStatus::Active,
+            },
             false,
-            MemoryType::Fact,
-            MemoryStatus::Active,
+            MemoryImportance::Medium,
         );
         assert!(result.is_ok());
         let value = result.unwrap();
@@ -621,13 +674,16 @@ mod tool_handler_tests {
         let handler = ToolHandler::new(store, "status-proj".to_string(), Config::default());
 
         let seeded = wrapper
-            .ingest_with_type_status(
-                "status-proj",
-                "original content",
-                "null",
+            .ingest_with_lifecycle(
+                &NewMemory {
+                    project_id: "status-proj",
+                    content: "original content",
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status: MemoryStatus::Active,
+                },
                 true,
-                MemoryType::Fact,
-                MemoryStatus::Active,
+                MemoryImportance::Medium,
             )
             .expect("seed add");
         let old_id = seeded["id"].as_str().expect("seed id").to_string();
@@ -669,13 +725,16 @@ mod tool_handler_tests {
         // listed either — so the guard cannot be satisfied by a list call that
         // returned nothing.
         let control = wrapper
-            .ingest_with_type_status(
-                "status-proj",
-                "unrelated active control",
-                "null",
+            .ingest_with_lifecycle(
+                &NewMemory {
+                    project_id: "status-proj",
+                    content: "unrelated active control",
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status: MemoryStatus::Active,
+                },
                 true,
-                MemoryType::Fact,
-                MemoryStatus::Active,
+                MemoryImportance::Medium,
             )
             .expect("seed control");
         let control_id = control["id"].as_str().expect("control id").to_string();
@@ -716,67 +775,6 @@ mod tool_handler_tests {
                 .status,
             MemoryStatus::Active.as_str(),
             "the status-less wrapper keeps writing active explicitly"
-        );
-    }
-
-    /// `StoreWrapper::supersede_with_status` takes a `MemoryStatus`, wider than
-    /// the `active`/`candidate` vocabulary an inserted row may carry, so the
-    /// wrapper itself cannot be the thing that rejects the rest: the store must.
-    /// Issue #258 was a status that travelled the wrong frame, and a
-    /// `superseded` replacement row would be the same class of silent corruption
-    /// seen from the MCP surface, where the tool schema is just a string.
-    #[tokio::test]
-    async fn supersede_with_status_refuses_a_status_that_is_not_insertable() {
-        use crate::memory::lifecycle::{MemoryStatus, MemoryType};
-
-        let store = create_test_store();
-        let store = Arc::new(Mutex::new(store));
-        let wrapper = StoreWrapper::new(store.clone());
-
-        let seeded = wrapper
-            .ingest_with_type_status(
-                "guard-proj",
-                "original content",
-                "null",
-                true,
-                MemoryType::Fact,
-                MemoryStatus::Active,
-            )
-            .expect("seed add");
-        let old_id = seeded["id"].as_str().expect("seed id").to_string();
-
-        for status in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {
-            let err = wrapper
-                .supersede_with_status(
-                    "guard-proj",
-                    "replacement content",
-                    "null",
-                    MemoryType::Fact,
-                    &old_id,
-                    status,
-                )
-                .expect_err("the widened wrapper must not reach the INSERT");
-            assert!(
-                err.message
-                    .contains("is not valid for new memory insertion"),
-                "{status:?} reached the supersede INSERT: {err:?}"
-            );
-        }
-
-        // Nothing was replaced and nothing was inserted: the original is still
-        // the live row, and the only rows in scope are the original.
-        let replaced_row = wrapper
-            .get(&old_id, "guard-proj")
-            .expect("get")
-            .expect("original row still readable");
-        assert_eq!(replaced_row.status, MemoryStatus::Active.as_str());
-        let listed: Vec<serde_json::Value> =
-            serde_json::from_value(wrapper.list("guard-proj", 20, None, None).expect("list"))
-                .expect("list payload is an array");
-        assert_eq!(
-            listed.len(),
-            1,
-            "a refused supersede must insert no replacement row"
         );
     }
 }
