@@ -310,6 +310,18 @@ fn test_locked_database_fast_fails() {
         Ok(_) => panic!("Expected error when database is locked, got Ok"),
     }
 
+    // The fast-fail is driven by the structured classification, not the
+    // message: the same lock, read straight off the storage boundary, must
+    // surface as the dedicated locked variant (issue #255).
+    let locked = crate::sqlite::Database::open(&db_path)
+        .err()
+        .expect("opening a locked database must fail");
+    let public: Error = locked.into();
+    assert!(
+        matches!(public, Error::DatabaseLocked) && public.is_locked(),
+        "a locked database must surface as Error::DatabaseLocked, got {public:?}"
+    );
+
     // Release lock
     lock_conn.execute("ROLLBACK", []).unwrap();
 }

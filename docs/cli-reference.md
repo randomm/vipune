@@ -645,11 +645,22 @@ All commands return exit code `1` on error, with error message to stderr or JSON
 }
 ```
 
+The `error` key, the output stream, and the exit codes above are stable; only
+the message body reflects the underlying failure. Database errors now render
+the underlying SQLite message (`Database error: no such table: memories`)
+instead of the bare `Database error`.
+
 **Common errors:**
 - Memory not found (`get`, `update`, `delete`)
 - Invalid metadata (not valid JSON)
 - Database errors (permissions, disk full)
 - Missing or invalid configuration
+
+**Locked database:** when another process (usually a running MCP server) holds
+a write lock, commands fast-fail with
+`Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.`
+and exit `1`. Library consumers should match `vipune::Error::DatabaseLocked`
+or call `Error::is_locked()` rather than matching this text.
 
 ---
 

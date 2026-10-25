@@ -12,27 +12,13 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-/// Wrap a rusqlite::Error, converting SQLITE_BUSY into the actionable MCP-server message.
+/// Wrap a `rusqlite::Error` from a read-only diagnostic open, converting a
+/// locked database into the actionable MCP-server message. The public enum
+/// carries no rusqlite type, so the conversion happens here.
 fn wrap_rusqlite_busy<T>(result: Result<T, rusqlite::Error>) -> Result<T, Error> {
     match result {
         Ok(v) => Ok(v),
-        Err(e) if e.to_string().contains("database is locked") => Err(Error::Config(
-            "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-        )),
-        Err(e) => Err(Error::Config(e.to_string())),
-    }
-}
-
-/// Wrap a database error, converting SQLITE_BUSY into the actionable MCP-server message.
-fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(Error::SqliteModule(msg)) if msg.contains("database is locked") => {
-            Err(Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-            ))
-        }
-        Err(e) => Err(e),
+        Err(e) => super::db_busy::wrap_busy_error(Err(Error::from(e))),
     }
 }
 
@@ -53,18 +39,10 @@ pub fn handle_doctor(
     json: bool,
 ) -> Result<ExitCode, Error> {
     // Open database
-    let db = Database::open(db_path).map_err(|e| {
-        let err_msg = e.to_string();
-        if err_msg.contains("database is locked") {
-            return Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-            );
-        }
-        Error::Config(err_msg)
-    })?;
+    let db = Database::open(db_path).map_err(super::db_busy::open_db_error)?;
 
     // Determine which projects to audit
-    let all_project_ids: Vec<String> = wrap_busy(db.list_all_project_ids().map_err(Error::from))?;
+    let all_project_ids: Vec<String> = super::db_busy::wrap_busy(db.list_all_project_ids())?;
 
     // When scoped to a single project, warn about other projects in the
     // database so the report is not misread as covering the whole store.
@@ -101,7 +79,7 @@ pub fn handle_doctor(
     let mut responses: Vec<DoctorResponse> = vec![];
 
     for project_id in &projects {
-        let result = wrap_busy(audit_project(&db, project_id))?;
+        let result = super::db_busy::wrap_busy_error(audit_project(&db, project_id))?;
         responses.push(DoctorResponse {
             project_id: project_id.clone(),
             total_rows: result.total,
@@ -221,13 +199,13 @@ pub(crate) fn collect_doctor_projects_response(
     ))?);
 
     // Gather all project ids with row counts
-    let project_ids = wrap_busy(db.list_all_project_ids().map_err(Error::from))?;
+    let project_ids = super::db_busy::wrap_busy(db.list_all_project_ids())?;
 
     let mut counts: HashMap<String, usize> = HashMap::new();
     for pid in &project_ids {
         counts.insert(
             pid.clone(),
-            wrap_busy(db.count_rows_for_project(pid).map_err(Error::from))?,
+            super::db_busy::wrap_busy(db.count_rows_for_project(pid))?,
         );
     }
 

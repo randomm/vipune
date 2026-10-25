@@ -19,7 +19,9 @@ pub(crate) fn encode_and_infer(
     let encoding = engine
         .tokenizer
         .encode(input, true)
-        .map_err(|e| Error::Tokenization(format!("inference tokenizer: {e}").into()))?;
+        .map_err(|e| Error::Tokenization {
+            message: format!("inference tokenizer: {e}"),
+        })?;
     let input_ids = encoding.get_ids();
     let attention_mask = encoding.get_attention_mask();
 

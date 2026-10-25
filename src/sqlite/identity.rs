@@ -165,14 +165,13 @@ pub fn read_identity_and_marker(
 ///
 /// # Errors
 ///
-/// `Error::Config` with the refusal message; `Error::SqliteModule` if the
-/// identity table cannot be read.
+/// `Error::Config` with the refusal message; a database error (or
+/// [`Error::DatabaseLocked`]) if the identity table cannot be read.
 pub fn assert_identity_ok(
     conn: &Connection,
     configured_model_id: &str,
 ) -> Result<(), crate::errors::Error> {
-    let (recorded, marker) = read_identity_and_marker(conn)
-        .map_err(|e| crate::errors::Error::SqliteModule(e.to_string()))?;
+    let (recorded, marker) = read_identity_and_marker(conn).map_err(crate::errors::Error::from)?;
     if let Some(marker) = marker {
         return Err(crate::errors::Error::Config(format!(
             "model migration in progress: database is migrating to {marker} — add/update/search are refused until the migration completes. Run `vipune reindex --force` to complete it."

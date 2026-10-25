@@ -1,6 +1,7 @@
 //! Command handlers for vipune CLI.
 
 mod backup;
+mod db_busy;
 mod doctor;
 mod doctor_fts;
 mod export;

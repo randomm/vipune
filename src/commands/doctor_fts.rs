@@ -25,40 +25,22 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-/// Wrap a `rusqlite::Error`, converting a locked-DB error into the actionable
-/// MCP-server message. Duplicated from `doctor.rs` (its copy is not `pub`).
+/// Wrap a `rusqlite::Error` from a read-only diagnostic open, converting a
+/// locked database into the actionable MCP-server message. Duplicated from
+/// `doctor.rs` (its copy is not `pub`); the public enum carries no rusqlite
+/// type, so the conversion happens at this boundary.
 fn wrap_rusqlite_busy<T>(result: Result<T, rusqlite::Error>) -> Result<T, Error> {
     match result {
         Ok(v) => Ok(v),
-        Err(e) if e.to_string().contains("database is locked") => Err(Error::Config(
-            "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-        )),
-        Err(e) => Err(Error::Config(e.to_string())),
+        Err(e) => super::db_busy::wrap_busy_error(Err(Error::from(e))),
     }
 }
 
-/// Wrap a `Result<T, crate::sqlite::Error>`, converting a locked-DB error into the
-/// actionable `Error::Config` message.
+/// Wrap a `Result<T, crate::sqlite::Error>`, converting a locked-DB error into
+/// the actionable `Error::Config` message and mapping everything else through
+/// the public conversion.
 fn wrap_sqlite_busy<T>(result: Result<T, crate::sqlite::Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(e) if e.to_string().contains("database is locked") => Err(Error::Config(
-            "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-        )),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Wrap a `Result<T, Error>` (crate::errors::Error), converting a locked-DB
-/// `SqliteModule` error into the actionable `Error::Config` message.
-fn wrap_errors_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(Error::SqliteModule(msg)) if msg.contains("database is locked") => Err(Error::Config(
-            "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-        )),
-        Err(e) => Err(e),
-    }
+    super::db_busy::wrap_busy(result)
 }
 
 /// A database-wide view of `memories` counts, keyed by project.
@@ -112,7 +94,7 @@ fn handle_doctor_fts_detect(
     ))?);
 
     let report: FtsDesyncReport = wrap_sqlite_busy(db.detect_fts_desync())?;
-    let counts = wrap_errors_busy(memory_counts(&db))?;
+    let counts = super::db_busy::wrap_busy_error(memory_counts(&db))?;
 
     let response = build_response(&report, &counts, project_filter, false, 0);
 
@@ -141,7 +123,7 @@ fn handle_doctor_fts_repair(
 
     // No desync → skip the rebuild entirely, report zero actions, data_version untouched.
     if !pre_report.is_desynced() {
-        let counts = wrap_errors_busy(memory_counts(&pre))?;
+        let counts = super::db_busy::wrap_busy_error(memory_counts(&pre))?;
         let response = build_response(&pre_report, &counts, project_filter, true, 0);
         emit(&response, json);
         return Ok(ExitCode::SUCCESS);
@@ -152,12 +134,12 @@ fn handle_doctor_fts_repair(
     let db = open_read_write(db_path)?;
     // Rebuild the FTS index in place. This is the FTS5 special command — it
     // re-reads every `memories` row into `memories_fts` and is the only rebuild the
-    // repo uses. It does not touch `memories` data.
-    db.rebuild_fts()?;
+    // repo uses. It does not touch `memories` data. Fast-fail on a lock.
+    super::db_busy::wrap_busy(db.rebuild_fts())?;
 
     // Post-rebuild: detect again on the same (still-open, read-write) connection.
     let post_report: FtsDesyncReport = wrap_sqlite_busy(db.detect_fts_desync())?;
-    let counts = wrap_errors_busy(memory_counts(&db))?;
+    let counts = super::db_busy::wrap_busy_error(memory_counts(&db))?;
     let actions = post_report.total_desynced() + pre_report.total_desynced();
     let response = build_response(&post_report, &counts, project_filter, true, actions);
 
@@ -168,15 +150,7 @@ fn handle_doctor_fts_repair(
 /// Open the database read-write (schema creation is a no-op on an existing DB), then
 /// set a ZERO busy timeout so a locked DB fast-fails with the actionable message.
 fn open_read_write(db_path: &Path) -> Result<Database, Error> {
-    let db = Database::open(db_path).map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("database is locked") {
-            return Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-            );
-        }
-        Error::Config(msg)
-    })?;
+    let db = Database::open(db_path).map_err(super::db_busy::open_db_error)?;
     db.set_busy_timeout(std::time::Duration::ZERO)?;
     Ok(db)
 }

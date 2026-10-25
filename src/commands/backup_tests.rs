@@ -171,12 +171,15 @@ fn test_backup_fails_fast_when_source_locked() {
 
     let result = handle_backup(&src, None, true);
     // The actionable "Database is locked … MCP server" message is produced by
-    // `wrap_busy` for both `Error::SqliteModule` (the `crate::sqlite::Error`
-    // path) and `Error::SQLite` (the direct `rusqlite::Error` path, which is
-    // what `rusqlite::backup::Backup::new` returns when the source is in a
-    // hot-journal state). The `Display` form of `Error::Config` is the inner
-    // string verbatim, so asserting on the `to_string()` form works regardless
-    // of which conversion path the lock error took.
+    // `Error::wrap_busy` / `Error::wrap_busy_error`, which classify via
+    // `Error::is_locked` — backed by the SQLite result code at the storage
+    // boundary — for both the `crate::sqlite::Error` path and the raw
+    // `rusqlite::Error` path that `rusqlite::backup::Backup::new` returns when
+    // the source is in a hot-journal state (issue #255 removed the old
+    // `Error::SQLite(rusqlite::Error)` arm). The `Display` form of
+    // `Error::Config` is the inner string verbatim, so asserting the rendered
+    // text still works regardless of which conversion path the lock took,
+    // while `is_locked()` proves the classification is structured.
     match result {
         Err(e) => {
             let msg = e.to_string();

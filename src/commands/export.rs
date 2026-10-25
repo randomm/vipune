@@ -292,15 +292,7 @@ pub fn handle_export(
         );
     }
 
-    let db = Database::open(db_path).map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("database is locked") {
-            return Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-            );
-        }
-        Error::Config(msg)
-    })?;
+    let db = Database::open(db_path).map_err(super::db_busy::open_db_error)?;
 
     // The header records the identity the store's embeddings were produced
     // with (the recorded identity, or the default bge identity when no row

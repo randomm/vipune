@@ -31,7 +31,7 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 | `src/embedding.rs` | ONNX model loading and text-to-vector conversion using bge-small-en-v1.5 and HuggingFace tokenizer |
 | `src/project.rs` | Project auto-detection from git remote, environment variable, or working directory |
 | `src/config/` | Configuration loading from TOML files, environment variables, and validation |
-| `src/errors.rs` | Unified error types wrapping rusqlite, ONNX, tokenizer, and HuggingFace Hub errors |
+| `src/errors.rs` | Unified, vipune-owned error types. No variant stores a third-party error type: rusqlite, ONNX, tokenizer and HuggingFace Hub failures are flattened into a message at the boundary, so upgrading those crates is not a breaking change to the public API. A locked database is the dedicated `Error::DatabaseLocked` variant, testable with `Error::is_locked()`. |
 | `src/memory_types.rs` | Shared type definitions (AddResult, ConflictMemory) |
 | `src/output.rs` | JSON response formatting for CLI output |
 | `src/temporal.rs` | Recency decay scoring with exponential/linear decay functions for search result weighting |

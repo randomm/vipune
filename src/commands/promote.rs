@@ -184,15 +184,7 @@ pub fn handle_promote(
     project_id: &str,
     json: bool,
 ) -> Result<ExitCode, Error> {
-    let db = Database::open(db_path).map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("database is locked") {
-            return Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string(),
-            );
-        }
-        Error::Config(msg)
-    })?;
+    let db = Database::open(db_path).map_err(super::db_busy::open_db_error)?;
 
     let threshold = resolve_promotion_threshold()?;
     let promoted = run_promotion(&db, project_id)?;

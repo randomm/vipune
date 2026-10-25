@@ -278,7 +278,7 @@ pub(crate) fn run_import(db_path: &Path, source: &str) -> Result<ImportResponse,
     // into a matching store, or re-export from a matching store).
     let (_rows, header_identity) = validate_header(lines[0])?;
     let (recorded, marker) = identity::read_identity_and_marker(db.conn())
-        .map_err(|e| Error::SqliteModule(format!("identity read failed: {e}")))?;
+        .map_err(|e| Error::Config(format!("identity read failed: {e}")))?;
     if marker.is_some() {
         return Err(Error::InvalidInput(format!(
             "import refused: destination database is in the middle of a model migration ({}); complete it with `vipune reindex --force` and retry",

@@ -20,34 +20,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-/// Wrap a database error, converting SQLITE_BUSY into the actionable MCP-server message.
-///
-/// Handles both `crate::sqlite::Error` (the `SqliteModule` variant, where the
-/// `Display` string is verbatim) and `rusqlite::Error` directly (the `SQLite`
-/// variant, where the `Display` string is "Database error: <msg>"). The Online
-/// Backup API (`rusqlite::backup::Backup::new`) returns the latter when the
-/// source is in a hot-journal state (e.g. another connection has
-/// `BEGIN EXCLUSIVE` — the same shape as a running MCP server holding a
-/// write lock).
-fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
-    match result {
-        Ok(v) => Ok(v),
-        Err(Error::SqliteModule(msg)) if msg.contains("database is locked") => {
-            Err(Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-            ))
-        }
-        Err(Error::SQLite(rusqlite_err))
-            if rusqlite_err.to_string().contains("database is locked") =>
-        {
-            Err(Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-            ))
-        }
-        Err(e) => Err(e),
-    }
-}
-
 /// Run the online backup.
 ///
 /// Copies `source` to `destination` via `rusqlite::backup::Backup::run_to_completion`,
@@ -61,22 +33,14 @@ fn wrap_busy<T>(result: Result<T, Error>) -> Result<T, Error> {
 /// Returns an error if the source cannot be opened, the backup step fails, or
 /// the produced copy fails the SQLite integrity check.
 fn run_online_backup(source: &Path, destination: &Path) -> Result<u64, Error> {
-    let source_db = Database::open(source).map_err(|e| {
-        let err_msg = e.to_string();
-        if err_msg.contains("database is locked") {
-            return Error::Config(
-                "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry.".to_string()
-            );
-        }
-        Error::Config(err_msg)
-    })?;
+    let source_db = Database::open(source).map_err(super::db_busy::open_db_error)?;
 
     // Fast-fail if the source is locked (MCP server holding a write lock, etc.)
-    wrap_busy(
-        source_db
-            .set_busy_timeout(Duration::ZERO)
-            .map_err(Error::from),
-    )?;
+    // The Online Backup API returns raw rusqlite errors when the source is in
+    // a hot-journal state (another connection holds `BEGIN EXCLUSIVE` — the
+    // same shape as a running MCP server holding a write lock), so both that
+    // path and the `crate::sqlite::Error` path go through `wrap_busy`.
+    super::db_busy::wrap_busy(source_db.set_busy_timeout(Duration::ZERO))?;
 
     // Fresh destination: the Online Backup API copies pages into the target
     // database; a pre-existing target would leave a partially-overwritten file
@@ -92,7 +56,7 @@ fn run_online_backup(source: &Path, destination: &Path) -> Result<u64, Error> {
     // server holding a write lock). The error surfaces as a raw `rusqlite::
     // Error` (not `crate::sqlite::Error`), so wrap it through `wrap_busy`
     // here to convert it to the actionable MCP-server message.
-    let backup = wrap_busy(
+    let backup = super::db_busy::wrap_busy_error(
         rusqlite::backup::Backup::new(source_db.conn(), &mut dest_conn).map_err(Error::from),
     )?;
     // Drive `step(-1)` ("back up all remaining pages" per the SQLite docs) in

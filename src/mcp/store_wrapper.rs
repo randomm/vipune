@@ -501,6 +501,20 @@ impl From<Error> for rmcp::ErrorData {
                 msg,
                 Some(serde_json::json!({"type": "not_found"})),
             ),
+            // Database errors keep the INTERNAL_ERROR code and the rendered
+            // message (issue #255 changed only the message body: the underlying
+            // SQLite text is now included instead of the bare "Database
+            // error"). A locked database is reported as such so an MCP client
+            // can retry rather than treat it as a server defect.
+            Error::DatabaseLocked => rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INTERNAL_ERROR,
+                e.to_string(),
+                Some(serde_json::json!({"type": "database_locked"})),
+            ),
+            Error::Database { .. }
+            | Error::CorruptEmbedding { .. }
+            | Error::InvalidBlobSize { .. }
+            | Error::MismatchedDimensions { .. } => McpError::internal_error(&e.to_string()),
             Error::EmbedderUnavailable { reason } => rmcp::ErrorData::new(
                 rmcp::model::ErrorCode::INTERNAL_ERROR,
                 reason,

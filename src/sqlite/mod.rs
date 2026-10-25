@@ -2,6 +2,7 @@
 //!
 //! Provides: `Database`, `Memory`, `embedding`, `search`, `fts`, `hash` modules.
 
+pub mod db_error;
 pub mod embedding;
 pub mod export_scan;
 pub mod fts;
@@ -12,6 +13,7 @@ pub mod insert;
 pub mod list;
 pub mod migration_types;
 pub mod migrations;
+pub mod project_queries;
 pub mod query_mod;
 pub mod search;
 pub mod supersede;
@@ -155,18 +157,13 @@ impl std::error::Error for Error {}
 
 impl From<rusqlite::Error> for Error {
     fn from(err: rusqlite::Error) -> Self {
-        // Row-level `FromSqlConversionFailure`s built by
-        // `query_mod::corrupt_embedding_error` carry a `CorruptEmbedding`
-        // domain error (naming the affected memory id) as their source —
-        // surface it directly so the id reaches the caller (issue #186).
-        if let rusqlite::Error::FromSqlConversionFailure(_, _, boxed) = &err {
-            if let Some(source) = (**boxed).source() {
-                if let Some(domain) = source.downcast_ref::<Error>() {
-                    return domain.clone();
-                }
-            }
+        match db_error::classify_db_error(&err) {
+            // Canonical rusqlite busy text, so `Error::is_locked` still
+            // recognises it on the other side of the public boundary.
+            db_error::DbErrorKind::Locked => Error::Sqlite("database is locked".to_string()),
+            db_error::DbErrorKind::Domain(domain) => domain.clone(),
+            db_error::DbErrorKind::Other => Error::Sqlite(err.to_string()),
         }
-        Error::Sqlite(err.to_string())
     }
 }
 
@@ -463,37 +460,6 @@ impl Database {
             return Err(Error::NotFound(id.to_string()));
         }
         Ok(())
-    }
-
-    /// List all distinct project_ids in the database.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the database query fails.
-    pub fn list_all_project_ids(&self) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT DISTINCT project_id FROM memories ORDER BY project_id")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut results = Vec::new();
-        for row_result in rows {
-            results.push(row_result?);
-        }
-        Ok(results)
-    }
-
-    /// Count rows for a specific project_id.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the database query fails.
-    pub fn count_rows_for_project(&self, project_id: &str) -> Result<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM memories WHERE project_id = ?",
-            [project_id],
-            |row| row.get(0),
-        )?;
-        Ok(count as usize)
     }
 
     /// Merge all rows from one project_id into another within a single transaction.

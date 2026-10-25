@@ -297,6 +297,9 @@ fn f9_locked_db_fast_fails_on_detect_and_repair() {
     lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
 
     // Detect (read-only open) must fast-fail with the actionable message.
+    // The classification is structured: `wrap_rusqlite_busy` decides via
+    // `Error::is_locked`, which is backed by the SQLite result code at the
+    // storage boundary — not by matching the rusqlite Display text (issue #255).
     match handle_doctor_fts(&db_path, None, false, false) {
         Err(Error::Config(msg)) => {
             assert!(msg.contains("locked"), "got: {msg}");

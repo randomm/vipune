@@ -111,7 +111,7 @@ impl EmbeddingEngine {
         // Resolve through the profile table: unknown ids are rejected here, and
         // every profile carries its exact pinned revision.
         let profile = profile_for(model_id)?;
-        let api = ApiBuilder::new().build()?;
+        let api = ApiBuilder::new().build().map_err(Error::from)?;
 
         let repo = api.repo(Repo::with_revision(
             profile.model_id.to_string(),
@@ -135,18 +135,21 @@ impl EmbeddingEngine {
             .map_err(wrap_download_err)?;
         let tokenizer_path = repo.get("tokenizer.json").map_err(wrap_download_err)?;
 
-        let mut tokenizer = Tokenizer::from_file(tokenizer_path)?;
+        let mut tokenizer = Tokenizer::from_file(tokenizer_path).map_err(Error::from)?;
         tokenizer
             .with_padding(None)
             .with_truncation(Some(TruncationParams {
                 max_length: 512,
                 ..Default::default()
             }))
-            .map_err(Error::Tokenization)?;
+            .map_err(Error::from)?;
 
-        let session = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level1)?
-            .commit_from_file(&model_path)?;
+        let session = Session::builder()
+            .map_err(Error::from)?
+            .with_optimization_level(GraphOptimizationLevel::Level1)
+            .map_err(Error::from)?
+            .commit_from_file(&model_path)
+            .map_err(Error::from)?;
 
         // Check if model requires token_type_ids input
         let requires_token_type_ids = session
@@ -157,9 +160,7 @@ impl EmbeddingEngine {
         // Pre-initialize a truncation-free tokenizer for accurate token counting.
         // Cloning once at startup avoids a 700KB+ deep copy on every embed() call.
         let mut count_tokenizer = tokenizer.clone();
-        count_tokenizer
-            .with_truncation(None)
-            .map_err(Error::Tokenization)?;
+        count_tokenizer.with_truncation(None).map_err(Error::from)?;
 
         Ok(EmbeddingEngine {
             session,
@@ -260,10 +261,12 @@ impl EmbeddingEngine {
     }
 
     fn count_tokens(&self, input: &str) -> Result<usize, Error> {
-        let encoding = self
-            .count_tokenizer
-            .encode(input, true)
-            .map_err(|e| Error::Tokenization(format!("count tokenizer: {e}").into()))?;
+        let encoding =
+            self.count_tokenizer
+                .encode(input, true)
+                .map_err(|e| Error::Tokenization {
+                    message: format!("count tokenizer: {e}"),
+                })?;
         Ok(encoding.get_ids().len())
     }
 }
