@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-10-25
+
+### Bug Fixes
+
+- Honour --status on the superseding row of vipune add --supersedes ([#264](https://github.com/randomm/vipune/pull/264))
+
+### Miscellaneous
+
+- Add a cargo-deny dependency advisory gate to CI ([#263](https://github.com/randomm/vipune/pull/263))
+
+
 ## [0.16.2] - 2026-10-24
 
 ### Documentation
