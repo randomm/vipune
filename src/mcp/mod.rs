@@ -31,3 +31,7 @@ pub mod tools;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "store_memory_importance_tests.rs"]
+mod store_memory_importance_tests;
