@@ -8,8 +8,10 @@ All notable changes to this project will be documented in this file.
 
 ### ⚠ Breaking Changes
 
-- `vipune::Error` no longer exposes third-party error types and is now `#[non_exhaustive]` — add a wildcard arm when matching on it. The `SQLite`, `SqliteModule`, `Json` and `Chrono` variants are removed: database failures surface as `Error::Database { message }` and `Error::DatabaseLocked` (call `Error::is_locked()` instead of matching the "database is locked" Display text), and JSON/date parse failures as `Error::InvalidInput`. `Tokenization`, `Onnx` and `HfHub` now carry a `message` field instead of the third-party error ([#273](https://github.com/randomm/vipune/pull/273))
-- `Database::count_rows_for_project` is removed; drive `Database::row_counts_by_project` — one `GROUP BY` pass returning `Vec<(String, usize)>`, which omits projects with zero rows ([#273](https://github.com/randomm/vipune/pull/273))
+- `vipune::Error` no longer exposes third-party error types ([#273](https://github.com/randomm/vipune/pull/273))
+  - **Library API**: the enum is `#[non_exhaustive]` — add a wildcard arm when matching on it. `SQLite`, `SqliteModule`, `Json` and `Chrono` are removed. Database failures are `Error::Database { message }` or `Error::DatabaseLocked`; call `Error::is_locked()` rather than matching message text. JSON and date parse failures become `Error::InvalidInput`. `Tokenization`, `Onnx` and `HfHub` carry a `message` instead of the third-party error. `Error::Io` is unchanged.
+  - **CLI and MCP are unchanged**: exit codes are as before, and a locked database is still reported as "Database is locked. Another process (likely the MCP server) is holding a lock. Stop the MCP server and retry." MCP errors carry a `data.type` discriminator (`database_locked` for a lock); non-lock database errors now include the underlying SQLite message in their text.
+- `Database::count_rows_for_project` is removed; drive `Database::row_counts_by_project` — one `GROUP BY` pass returning `Vec<(String, usize)>`. It omits projects with zero rows, so use `Database::list_all_project_ids` for the full project list ([#273](https://github.com/randomm/vipune/pull/273))
 - The minimum supported Rust version is now 1.88, declared as `rust-version` in `Cargo.toml` and gated in CI ([#277](https://github.com/randomm/vipune/pull/277))
 
 ### Bug Fixes
@@ -29,7 +31,6 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Add a cargo-deny dependency advisory gate to CI ([#263](https://github.com/randomm/vipune/pull/263))
-
 
 ## [0.16.2] - 2026-10-24
 
