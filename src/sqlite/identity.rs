@@ -168,9 +168,9 @@ pub fn read_identity_and_marker(
 ///
 /// # Errors
 ///
-/// [`Error::Config`] with the refusal message; [`Error::DatabaseLocked`] when
-/// the store is locked, otherwise [`Error::Database`], if the identity table
-/// cannot be read.
+/// [`crate::errors::Error::Config`] with the refusal message;
+/// [`crate::errors::Error::DatabaseLocked`] when the store is locked, otherwise
+/// [`crate::errors::Error::Database`], if the identity table cannot be read.
 pub fn assert_identity_ok(
     conn: &Connection,
     configured_model_id: &str,

@@ -8,7 +8,7 @@
 //!
 //! The locked-DB and repair tests use the real handler end-to-end.
 
-use crate::commands::doctor_fts::handle_doctor_fts;
+use crate::commands::doctor_fts::{handle_doctor_fts, recovery_note};
 use crate::errors::{Error, LOCKED_DB_MESSAGE};
 use crate::memory::crud::test_fake_embedder;
 use crate::output::DoctorFtsResponse;
@@ -377,13 +377,18 @@ fn the_recovery_note_requires_the_locked_verdict() {
     // against an index that was never opened for writing.
     let locked_recovery_note = |e: Error| -> Error {
         if e.is_locked() {
-            Error::Config(format!(
-                "{LOCKED_DB_MESSAGE} The FTS index may be half-rebuilt; re-run `vipune doctor --fts --repair` to complete it."
-            ))
+            Error::Config(recovery_note())
         } else {
             e
         }
     };
+
+    // The note is composed by the handler itself, so the wording asserted here
+    // is the wording the CLI renders — no copy to drift.
+    assert!(
+        recovery_note().starts_with(LOCKED_DB_MESSAGE),
+        "the recovery note leads with the standard locked message"
+    );
 
     let locked = Error::DatabaseLocked;
     match locked_recovery_note(locked) {

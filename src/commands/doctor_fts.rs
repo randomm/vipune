@@ -131,9 +131,7 @@ fn handle_doctor_fts_repair(
     // can never be told its index is half-rebuilt.
     if let Err(e) = db.rebuild_fts().map_err(Error::from) {
         return Err(if e.is_locked() {
-            Error::Config(format!(
-                "{LOCKED_DB_MESSAGE} The FTS index may be half-rebuilt; re-run `vipune doctor --fts --repair` to complete it."
-            ))
+            Error::Config(recovery_note())
         } else {
             e
         });
@@ -163,6 +161,18 @@ fn emit(response: &DoctorFtsResponse, json: bool) {
     } else {
         print_human_detect(response);
     }
+}
+
+/// The locked-repair guidance: the standard busy message plus the re-run
+/// command, since an interrupted rebuild leaves the index half-populated.
+///
+/// A function rather than an inline `format!` so
+/// `the_recovery_note_requires_the_locked_verdict` asserts the *handler's*
+/// text instead of a copy of it (issue #255 review, round 3).
+pub(crate) fn recovery_note() -> String {
+    format!(
+        "{LOCKED_DB_MESSAGE} The FTS index may be half-rebuilt; re-run `vipune doctor --fts --repair` to complete it."
+    )
 }
 
 /// Count `memories` rows globally and per project on an already-open `Database`
