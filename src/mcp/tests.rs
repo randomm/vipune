@@ -674,4 +674,65 @@ mod tool_handler_tests {
             "the status-less wrapper keeps writing active explicitly"
         );
     }
+
+    /// `StoreWrapper::supersede_with_status` takes a `MemoryStatus`, wider than
+    /// the `active`/`candidate` vocabulary an inserted row may carry, so the
+    /// wrapper itself cannot be the thing that rejects the rest: the store must.
+    /// Issue #258 was a status that travelled the wrong frame, and a
+    /// `superseded` replacement row would be the same class of silent corruption
+    /// seen from the MCP surface, where the tool schema is just a string.
+    #[tokio::test]
+    async fn supersede_with_status_refuses_a_status_that_is_not_insertable() {
+        use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+
+        let store = create_test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = StoreWrapper::new(store.clone());
+
+        let seeded = wrapper
+            .ingest_with_type_status(
+                "guard-proj",
+                "original content",
+                "null",
+                true,
+                MemoryType::Fact,
+                MemoryStatus::Active,
+            )
+            .expect("seed add");
+        let old_id = seeded["id"].as_str().expect("seed id").to_string();
+
+        for status in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {
+            let err = wrapper
+                .supersede_with_status(
+                    "guard-proj",
+                    "replacement content",
+                    "null",
+                    MemoryType::Fact,
+                    &old_id,
+                    status,
+                )
+                .expect_err("the widened wrapper must not reach the INSERT");
+            assert!(
+                err.message
+                    .contains("is not valid for new memory insertion"),
+                "{status:?} reached the supersede INSERT: {err:?}"
+            );
+        }
+
+        // Nothing was replaced and nothing was inserted: the original is still
+        // the live row, and the only rows in scope are the original.
+        let replaced_row = wrapper
+            .get(&old_id, "guard-proj")
+            .expect("get")
+            .expect("original row still readable");
+        assert_eq!(replaced_row.status, MemoryStatus::Active.as_str());
+        let listed: Vec<serde_json::Value> =
+            serde_json::from_value(wrapper.list("guard-proj", 20, None, None).expect("list"))
+                .expect("list payload is an array");
+        assert_eq!(
+            listed.len(),
+            1,
+            "a refused supersede must insert no replacement row"
+        );
+    }
 }

@@ -92,10 +92,10 @@ vipune add "Alice now works at Google" --supersedes abc123-old-memory-id
 ```
 This inserts the new memory and marks the old one as `superseded` in a single transaction.
 
-`--status` applies to the row this creates, so a replacement can be staged as a candidate first:
+`--status` applies to the row this creates, so a replacement can be staged as a candidate first
+(see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement)):
 
 ```bash
-# Insert the replacement as a candidate (hidden from default search/list)
 vipune add "Alice now works at Google" --supersedes abc123-old-memory-id --status candidate
 ```
 
@@ -116,6 +116,11 @@ vipune update <new-memory-id> --status active
 counter — only `search`/`get` retrievals do. A candidate that nothing has been retrieved by id
 therefore never promotes, which is deliberate (see the `promote` module doc); the explicit
 `update --status active` above is the deterministic route.
+
+The same rule is what `store_memory`'s `supersedes` + `status: "candidate"` writes over MCP.
+This section is the only place the consequence is stated — `add --status`, the MCP tool
+parameters and `agent-integration.md` link here rather than restating it. (`update --status` is
+the route named above, and its own flag table notes the one asymmetry it has with `add --status`.)
 
 ---
 
@@ -358,7 +363,7 @@ vipune update <id> [text] [--metadata <json>]
 
 **Flags:**
 - `-m, --metadata <json>` - Replace metadata (must be valid JSON)
-- `--status <status>` - Set lifecycle status (`active`, `candidate`, `deprecated`, `superseded`); `superseded` is rejected with an error — that status is written only by `add --supersedes`. Unlike `add --status`, which accepts only `active`/`candidate`, this path does accept `deprecated`, which is what `prune` writes
+- `--status <status>` - Set lifecycle status (`active`, `candidate`, `deprecated`, `superseded`); `superseded` is rejected with an error — that status is written only by `add --supersedes`. Unlike `add --status`, which accepts only `active`/`candidate` (see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for why an insert may not name the other two), this path does accept `deprecated`, which is what `prune` writes
 
 **Behavior:**
 - If only `text` provided: generates new embedding, preserves metadata
@@ -480,7 +485,7 @@ vipune mcp
 - `text` — the information to remember (required)
 - `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
 - `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
-- `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes` (see [`add --status`](#add) for what a hidden `candidate` replacement means and how to activate it)
+- `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes` (see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for what a hidden `candidate` replacement means and how to activate it)
 - `supersedes` — ID of memory to supersede (atomically replaces old memory)
 - `force` — force store even if conflicts detected (default: `false`)
 

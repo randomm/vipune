@@ -54,12 +54,26 @@ impl MemoryStore {
     /// prune exemption). A caller that expresses no level passes `None` and
     /// gets [`MemoryImportance::default`], bound by name by the public
     /// `Database::insert` wrapper — never the column's `NOT NULL DEFAULT`.
+    ///
+    /// The insert-status rule has exactly one call site for the add side, in
+    /// the first statement of this body, which [`Self::add_with_conflict`] (and
+    /// through it `ingest`, `ingest_with_type_status` and `batch_ingest`) and
+    /// [`Self::ingest_with_importance`] both forward to — so no add entry point
+    /// can insert a `superseded`/`deprecated` row whatever default it binds. See
+    /// [`MemoryStatus::ensure_valid_for_insert`] for the map of call sites.
     pub(crate) fn add_impl(
         &mut self,
         row: &NewMemory<'_>,
         force: bool,
         importance: Option<MemoryImportance>,
     ) -> Result<AddResult, Error> {
+        // The insert-status rule, at the one body every add path shares:
+        // `add_with_conflict` (and through it `ingest`,
+        // `ingest_with_type_status` and `batch_ingest`) and
+        // `ingest_with_importance` both call this, so no add entry point can
+        // insert a `superseded`/`deprecated` row whatever default it binds.
+        row.status.ensure_valid_for_insert()?;
+
         Self::validate_input_length(row.content)?;
 
         let embedding = self.get_embedding(row.content, EmbeddingRole::Passage)?;

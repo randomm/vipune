@@ -20,7 +20,7 @@ impl super::Database {
     /// INSERT, so the two paths cannot drift — and binds both lifecycle columns
     /// by name rather than leaving either to the column DEFAULT. This is the
     /// entry point for a caller that names neither level nor status; a caller
-    /// that does name them goes through [`crate::MemoryStore::supersede_with_lifecycle`],
+    /// that does name them goes through [`crate::MemoryStore::supersede_with`],
     /// which is how the CLI and MCP supersede paths reach the INSERT.
     #[allow(dead_code)] // Public API for library consumers (e.g., kide)
     pub fn supersede(

@@ -80,7 +80,7 @@ pub(crate) fn handle_add(
         // transaction, so the validated level AND the validated status have to
         // travel with it (issues #238, #258): handing over only the level left
         // `--status candidate` silently stored as `active`.
-        let new_id = store.supersede_with_lifecycle(&NewSupersedingMemory {
+        let new_id = store.supersede_with(&NewSupersedingMemory {
             row: NewMemory {
                 project_id,
                 content: text,

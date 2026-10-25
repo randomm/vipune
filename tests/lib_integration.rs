@@ -1743,7 +1743,13 @@ fn test_default_list_excludes_non_active() {
 
     let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
 
-    // Add memories with various statuses using add_with_conflict with force=true
+    // Add memories with various statuses. `active` and `candidate` go through
+    // add_with_conflict with force=true; `deprecated` is created as an active
+    // row and then moved, because an INSERT may not name it — the store refuses
+    // that (`MemoryStatus::ensure_valid_for_insert`) and `deprecated` is written
+    // by the update path, which is what `vipune update --status` and `prune`
+    // drive. The list assertions below are unchanged: they only care that the
+    // row exists in that status.
     let _active_id = match store
         .add_with_conflict(
             &project_id,
@@ -1781,13 +1787,23 @@ fn test_default_list_excludes_non_active() {
             None,
             true,
             MemoryType::Fact,
-            MemoryStatus::Deprecated,
+            MemoryStatus::Active,
         )
-        .expect("Failed to add deprecated")
+        .expect("Failed to add row to be deprecated")
     {
         vipune::AddResult::Added { id } => id,
         _ => panic!("Expected AddResult::Added"),
     };
+    store
+        .update(
+            &_deprecated_id,
+            &project_id,
+            UpdateParams {
+                status: Some(MemoryStatus::Deprecated),
+                ..Default::default()
+            },
+        )
+        .expect("Failed to deprecate");
 
     // List with statuses=None (default = active only)
     let results = store

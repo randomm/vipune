@@ -1,7 +1,7 @@
 //! The `vipune add` handler's importance and status plumbing (issues #238, #258).
 //!
 //! The store-level tests (`memory/tests/crud.rs`, `commands/prune_tests.rs`)
-//! call `ingest_with_importance` / `supersede_with_lifecycle` directly, so
+//! call `ingest_with_importance` / `supersede_with` directly, so
 //! they pass whether or not `handle_add` ever hands the parsed level to them —
 //! exactly how #238 shipped (`let _ = importance_val;` one line above the call,
 //! with the row created by the level-less `ingest_with_type_status`). The same

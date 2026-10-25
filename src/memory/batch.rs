@@ -1,4 +1,11 @@
-//! Batch operations for the memory store.
+//! The store's supersede path and its batch ingest entry point.
+//!
+//! The supersede path owns an INSERT of its own — it writes the replacement row
+//! and the old row's `superseded` UPDATE in one transaction — so it is kept
+//! apart from `crud.rs`, which holds the plain add, read and update operations.
+//! Every supersede caller funnels through [`MemoryStore::supersede_with`], the
+//! one body that names the columns, because a second body is how `--importance`
+//! became a no-op in issue #238 and `--status` in issue #258.
 
 use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
@@ -10,7 +17,8 @@ use super::NewMemory;
 use super::store::MemoryStore;
 
 /// The caller-supplied fields of a memory the store is about to create on the
-/// supersede path: [`NewMemory`] plus the replaced id and the level.
+/// supersede path: a [`NewMemory`] row composed with the replaced id and the
+/// operator's level.
 ///
 /// The shared columns are embedded rather than copied, so the two INSERT paths
 /// cannot drift column-for-column — the defect class of #238 and #258. The
@@ -18,12 +26,14 @@ use super::store::MemoryStore;
 /// and built by name: that keeps a future field additive for external callers
 /// instead of silently breaking every literal.
 ///
-/// `importance` and `status` are **required** rather than `Option`: the whole
-/// point of the supersede body is that both lifecycle columns are named in the
-/// INSERT, so a caller cannot express "no status" and quietly get the column
-/// DEFAULT — the shape that made `--importance` a no-op in #238 and `--status`
-/// a no-op in #258. The level-less public wrapper
-/// ([`MemoryStore::supersede`]) binds the defaults by name instead.
+/// `importance` is **required** rather than `Option`, for the same reason: the
+/// whole point of the supersede body is that both lifecycle columns are named in
+/// the INSERT, so a caller cannot express "no level" and quietly get the column
+/// DEFAULT. The level-less public wrapper ([`MemoryStore::supersede`]) binds the
+/// default by name instead. The status is not duplicated here — it is the
+/// `status` field of the embedded [`NewMemory`], the same shape the add path
+/// carries, and [`MemoryStore::supersede_with`] validates it with
+/// [`MemoryStatus::ensure_valid_for_insert`] before any INSERT.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct NewSupersedingMemory<'a> {
@@ -142,8 +152,9 @@ impl MemoryStore {
     /// that supersedes it. Both memories remain in the database but the old one
     /// has status "superseded" and superseded_by pointing to the new ID. The new
     /// row is `active` by default; a caller that wants it `candidate` uses
-    /// [`Self::supersede_with_lifecycle`], which also takes the importance level
-    /// and is the entry point the CLI and MCP supersede paths drive.
+    /// [`Self::supersede_with`], the one params-based entry point — it also
+    /// takes the importance level and is what the CLI and MCP supersede paths
+    /// drive.
     pub fn supersede(
         &mut self,
         project_id: &str,
@@ -152,7 +163,7 @@ impl MemoryStore {
         memory_type: MemoryType,
         old_id: &str,
     ) -> Result<String, Error> {
-        self.supersede_impl(&NewSupersedingMemory {
+        self.supersede_with(&NewSupersedingMemory {
             row: NewMemory {
                 project_id,
                 content,
@@ -166,19 +177,25 @@ impl MemoryStore {
     }
 
     #[must_use = "the new memory ID is needed for downstream operations"]
-    /// Supersede an existing memory with a new row carrying both an explicit
-    /// importance level and an explicit lifecycle status — the one supersede
-    /// entry point the CLI (`vipune add --supersedes --importance <level>
-    /// --status <status>`) and the MCP `store_memory` supersedes arm drive.
+    /// Supersede an existing memory with a new row whose importance and
+    /// lifecycle status are named by `row` — the **one** supersede entry point:
+    /// the CLI (`vipune add --supersedes --importance <level> --status
+    /// <status>`) and the MCP `store_memory` supersedes arm call it directly,
+    /// and the level-less [`Self::supersede`] wrapper forwards to it with both
+    /// defaults bound by name. Supersedes are not a family of entry points with
+    /// their own argument lists any more; there is one body, so there is one
+    /// place that can name the wrong column (issues #238, #258).
     ///
     /// Before issue #258 the supersede path hardcoded `active` into the row it
     /// built, so `--status candidate` was accepted, validated, and then dropped
     /// two frames above the INSERT. Insertability is enforced here and nowhere
-    /// else: a superseding row is a *new* row, so `superseded`/`deprecated` are
-    /// not insertable — that lifecycle belongs to the old row's UPDATE, which
-    /// the store issues itself. The CLI and MCP layers pre-check the same rule
-    /// with the same [`MemoryStatus::ensure_valid_for_insert`] for their own
-    /// error shape; this is the copy that protects a library caller.
+    /// else in the store — [`MemoryStatus::ensure_valid_for_insert`] is the
+    /// rule, and this is the only call site that guards the write: a superseding
+    /// row is a *new* row, so `superseded`/`deprecated` are not insertable and
+    /// that lifecycle belongs to the old row's UPDATE, which this body issues
+    /// itself. The CLI and MCP layers call the same method before arriving here
+    /// only to answer with their own error shape; a library caller that skips
+    /// that precheck is stopped by this copy.
     ///
     /// A `candidate` replacement is invisible to default search/list (which bind
     /// `status = 'active'`), and supersede does not touch its retrieval
@@ -186,25 +203,19 @@ impl MemoryStore {
     /// to activate one is `vipune update <id> --status active` with the id this
     /// method returns. Promotion stays retrieval-driven and correct — see the
     /// `promote` module doc. Documented in `docs/cli-reference.md`.
-    pub fn supersede_with_lifecycle(
-        &mut self,
-        row: &NewSupersedingMemory<'_>,
-    ) -> Result<String, Error> {
-        row.row.status.ensure_valid_for_insert()?;
-        self.supersede_impl(row)
-    }
-
-    /// Validate, embed, and insert the replacement row — the shared body of
-    /// every public supersede entry point, so none can drift from the others.
     ///
-    /// Every caller names both lifecycle columns: the status-carrying entry
-    /// point forwards what it was given, and the level-less `supersede` wrapper
-    /// binds `MemoryStatus::Active` / `MemoryImportance::default` by name rather
-    /// than leaving either to the column DEFAULT. Both are required fields on
-    /// [`NewSupersedingMemory`] precisely so a caller cannot bind one and drop
-    /// the other — that is how `--importance` lost its value in #238 and
-    /// `--status` in #258.
-    fn supersede_impl(&mut self, row: &NewSupersedingMemory<'_>) -> Result<String, Error> {
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidInput`] if `row.row.status` is not insertable, if
+    /// the content is empty or over the limit, or if `row.row.metadata` is blank
+    /// or invalid JSON; a storage-layer error if `row.old_id` does not exist in
+    /// `row.row.project_id`.
+    pub fn supersede_with(&mut self, row: &NewSupersedingMemory<'_>) -> Result<String, Error> {
+        // The insert-status rule, enforced on the one path every supersede
+        // takes — no entry point above this can admit a `superseded` or
+        // `deprecated` replacement.
+        row.row.status.ensure_valid_for_insert()?;
+
         Self::validate_input_length(row.row.content)?;
 
         // Validate metadata: reject empty strings and invalid JSON

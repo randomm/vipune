@@ -269,7 +269,7 @@ fn supersede_with_status(
     status: MemoryStatus,
 ) -> String {
     store
-        .supersede_with_lifecycle(&crate::memory::NewSupersedingMemory {
+        .supersede_with(&crate::memory::NewSupersedingMemory {
             row: NewMemory {
                 project_id: project,
                 content,
@@ -459,7 +459,7 @@ fn add_superseding_refuses_a_status_that_is_not_insertable() {
     let old_id = add(&mut store, "status-bad", "original fact", None);
     for status in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {
         let err = store
-            .supersede_with_lifecycle(&crate::memory::NewSupersedingMemory {
+            .supersede_with(&crate::memory::NewSupersedingMemory {
                 row: NewMemory {
                     project_id: "status-bad",
                     content: "bad replacement",
@@ -520,4 +520,93 @@ fn add_superseding_persists_the_importance_on_the_new_row() {
         .supersede("sup-proj", "third fact", None, MemoryType::Fact, &new_id)
         .unwrap();
     assert_eq!(added_importance(&store, &plain_id, "sup-proj"), "medium");
+}
+
+/// Every entry point that creates a row must refuse a status the INSERT may not
+/// name, no matter which frame a caller enters at — the CLI and MCP prechecks
+/// can be skipped by a library caller, and #258 was exactly a status that was
+/// validated somewhere above and dropped below. `MemoryStatus::
+/// ensure_valid_for_insert` owns the rule; these pin that each write body calls
+/// it rather than trusting its caller.
+#[test]
+fn every_row_creating_entry_point_refuses_a_non_insertable_status() {
+    let mut store = MemoryStore::test_store();
+    let old_id = add(&mut store, "guard-proj", "original fact", None);
+
+    for status in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {
+        // Supersede: the params-based entry point is the only body, and the
+        // defaulting wrapper above it binds `active` by name.
+        let err = store
+            .supersede_with(&crate::memory::NewSupersedingMemory {
+                row: NewMemory {
+                    project_id: "guard-proj",
+                    content: "guard replacement",
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status,
+                },
+                old_id: &old_id,
+                importance: MemoryImportance::Medium,
+            })
+            .expect_err("a superseding row cannot be born superseded/deprecated");
+        assert!(
+            err.to_string()
+                .contains("is not valid for new memory insertion"),
+            "supersede_with accepted {status:?}: {err}"
+        );
+
+        // The params-based add (the one `vipune add` drives).
+        let err = store
+            .ingest_with_importance(
+                &NewMemory {
+                    project_id: "guard-proj",
+                    content: "guard add",
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status,
+                },
+                IngestPolicy::Force,
+                MemoryImportance::Medium,
+            )
+            .expect_err("an added row cannot be born superseded/deprecated");
+        assert!(
+            err.to_string()
+                .contains("is not valid for new memory insertion"),
+            "ingest_with_importance accepted {status:?}: {err}"
+        );
+
+        // The defaulting add family, which takes the status as an argument.
+        let err = store
+            .add_with_conflict(
+                "guard-proj",
+                "guard add",
+                None,
+                true,
+                MemoryType::Fact,
+                status,
+            )
+            .expect_err("an added row cannot be born superseded/deprecated");
+        assert!(
+            err.to_string()
+                .contains("is not valid for new memory insertion"),
+            "add_with_conflict accepted {status:?}: {err}"
+        );
+    }
+
+    // None of the refusals wrote anything: the project still holds only the
+    // original row, and that row is still live.
+    assert_eq!(added_status(&store, &old_id, "guard-proj"), "active");
+    assert_eq!(
+        store
+            .list(
+                "guard-proj",
+                20,
+                None,
+                Some(["active", "candidate", "superseded", "deprecated"].as_slice())
+            )
+            .expect("list")
+            .len(),
+        1,
+        "a refused row creation must insert nothing"
+    );
 }

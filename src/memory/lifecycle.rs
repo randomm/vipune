@@ -103,29 +103,50 @@ impl MemoryStatus {
         }
     }
 
-    /// Check if this status is allowed for new memory insertion.
-    pub fn is_valid_for_insert(self) -> bool {
-        matches!(self, MemoryStatus::Active | MemoryStatus::Candidate)
-    }
-
     /// The one owner of the "this status cannot be inserted" verdict.
     ///
-    /// Every layer that creates a row — the CLI handler, the MCP tool, and the
-    /// store's supersede body — calls this instead of restating the rule and
-    /// hand-writing its own message, which is how the CLI and MCP wordings
-    /// drifted apart for the same rejection (issue #258).
+    /// A row being created is either `active` or `candidate`. `superseded` and
+    /// `deprecated` are lifecycle states an existing row is *moved into* — by
+    /// the supersede transaction's own UPDATE, by `prune`, or by
+    /// `vipune update --status` — never states a fresh INSERT may carry, and the
+    /// column has no CHECK constraint, so a store method is the only thing that
+    /// can enforce it. There is exactly one call site per write path, in the
+    /// body that owns that path's vocabulary, so no entry point above it can
+    /// admit a status the INSERT must not name:
+    ///
+    /// - [`MemoryStore::supersede_with`](crate::memory::MemoryStore::supersede_with)
+    ///   — the only supersede body: a superseding row is a *new* row, and the
+    ///   old row's `superseded` UPDATE is issued by that same body. Every
+    ///   supersede caller, including the `supersede` defaulting wrapper, goes
+    ///   through it.
+    /// - the store's `add_impl` body — the one both
+    ///   [`MemoryStore::add_with_conflict`](crate::memory::MemoryStore::add_with_conflict)
+    ///   (and through it `ingest`, `ingest_with_type_status` and `batch_ingest`)
+    ///   and
+    ///   [`MemoryStore::ingest_with_importance`](crate::memory::MemoryStore::ingest_with_importance)
+    ///   — the params-based add the CLI drives — forward to, so one check there
+    ///   covers every add entry point whatever default it binds.
+    ///
+    /// [`MemoryStore::update`](crate::memory::MemoryStore::update) is the
+    /// deliberate exception: it changes an *existing* row, `deprecated` is a
+    /// legal target there (it is what `prune` writes), and it rejects only
+    /// `superseded`, which no caller may set outside the supersede transaction.
+    ///
+    /// The CLI and MCP layers call this method too, before reaching the store,
+    /// only so the rejection reaches their client in their own error shape;
+    /// hand-written variants of this message are how the two wordings drifted
+    /// apart (issue #258).
     ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidInput`] if `self` is not insertable.
     pub fn ensure_valid_for_insert(self) -> Result<(), Error> {
-        if self.is_valid_for_insert() {
-            Ok(())
-        } else {
-            Err(Error::InvalidInput(format!(
+        match self {
+            MemoryStatus::Active | MemoryStatus::Candidate => Ok(()),
+            _ => Err(Error::InvalidInput(format!(
                 "Status '{}' is not valid for new memory insertion. Must be 'active' or 'candidate'.",
                 self.as_str()
-            )))
+            ))),
         }
     }
 }
@@ -301,10 +322,21 @@ mod tests {
     }
 
     #[test]
-    fn test_is_valid_for_insert() {
-        assert!(MemoryStatus::Active.is_valid_for_insert());
-        assert!(MemoryStatus::Candidate.is_valid_for_insert());
-        assert!(!MemoryStatus::Superseded.is_valid_for_insert());
-        assert!(!MemoryStatus::Deprecated.is_valid_for_insert());
+    fn test_ensure_valid_for_insert() {
+        assert!(MemoryStatus::Active.ensure_valid_for_insert().is_ok());
+        assert!(MemoryStatus::Candidate.ensure_valid_for_insert().is_ok());
+        // The two states below belong to an existing row's UPDATE, never to an
+        // INSERT: if either ever became insertable the supersede path would
+        // accept a replacement row that is born already replaced.
+        for rejected in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {
+            let err = rejected
+                .ensure_valid_for_insert()
+                .expect_err("not insertable");
+            assert!(
+                err.to_string()
+                    .contains("is not valid for new memory insertion"),
+                "unexpected error for {rejected:?}: {err}"
+            );
+        }
     }
 }

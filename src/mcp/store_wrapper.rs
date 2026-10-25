@@ -148,10 +148,12 @@ impl StoreWrapper {
     /// with the status it had just parsed and validated still in a local, so a
     /// caller passing `status: "candidate"` together with `supersedes` got an
     /// `active` row and no warning (issue #258). The status is threaded to the
-    /// store here so the MCP surface matches the CLI. Insertability itself is
-    /// validated by the store's `supersede_with_lifecycle` — the single owner of
-    /// that rule — and reaches the client as an `invalid_input` through
-    /// `From<Error> for rmcp::ErrorData`.
+    /// store here so the MCP surface matches the CLI. This frame adds nothing to
+    /// the insert-status rule: it takes `MemoryStatus`, the same type the store
+    /// takes, so no string can become an unvalidated status one frame lower, and
+    /// [`MemoryStore::supersede_with`] is the one place that rejects
+    /// `superseded`/`deprecated` — the error arrives back as `invalid_input`
+    /// through `From<Error> for rmcp::ErrorData`.
     pub(crate) fn supersede_with_status(
         &self,
         project_id: &str,
@@ -169,7 +171,7 @@ impl StoreWrapper {
             Some(metadata)
         };
 
-        let new_id = match store.supersede_with_lifecycle(&NewSupersedingMemory {
+        let new_id = match store.supersede_with(&NewSupersedingMemory {
             row: NewMemory {
                 project_id,
                 content: new_text,
