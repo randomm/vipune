@@ -67,12 +67,12 @@ All code changes must pass these checks before PR submission:
 cargo fmt --check     # Code formatting
 cargo clippy -- -D warnings  # Linting (all warnings are errors)
 cargo test            # All tests pass
-cargo deny check advisories bans  # Dependency advisories + denied features
+cargo deny --locked check advisories bans  # Dependency advisories + denied features
 ```
 
 Run all checks together:
 ```bash
-cargo fmt --check && cargo clippy -- -D warnings && cargo test && cargo deny check advisories bans
+cargo fmt --check && cargo clippy -- -D warnings && cargo test && cargo deny --locked check advisories bans
 ```
 
 **These checks must pass locally before pushing.** CI verifies, but does not discover — fix issues locally first.
@@ -91,9 +91,14 @@ cargo deny --locked check advisories bans
 
 A new advisory is triaged in its own PR, either by a compatible update
 (`cargo update -p <crate>`) or by an `ignore` entry in `deny.toml` that records the advisory ID,
-the reason and the upstream blocker. `unused-ignored-advisory = "deny"` means an `ignore` row
-whose advisory has since been fixed fails the check, so an update and the row it replaces must
-land in the same commit.
+the reason and the upstream blocker. An `ignore` row whose advisory has since stopped firing is
+reported by cargo-deny's `advisory-not-detected` lint, which is an error by default, so an update
+and the row it supersedes must land in the same commit — a row cannot rot silently.
+
+The gate also refuses to audit against an advisory database it cannot refresh: `deny.toml` sets
+`maximum-db-staleness = "P2D"`, so a database whose last fetch is more than two days old aborts
+the check instead of passing quietly. See [docs/testing.md](docs/testing.md#dependency-advisory-gate)
+for how to triage that.
 
 The `bans` check also fails if `base64` 0.23 ever resolves with the `simd-unsafe` feature, which
 Cargo feature unification could otherwise re-enable silently — see the comment in

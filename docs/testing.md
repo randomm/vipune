@@ -330,15 +330,45 @@ cargo deny --locked check advisories bans
 
 What it covers, and what it deliberately does not:
 
-- **Advisories** — RustSec advisories for the whole dependency graph, including dev and bench
-  deps, via `[graph] all-features = true` (so the `mcp` feature is covered too).
-- **Triage rows** — each ignored advisory carries an `id`, a `reason` and the upstream blocker.
-  `unused-ignored-advisory = "deny"` fails the check when an ignored advisory stops firing, so a
-  lockfile fix and the `ignore` row it supersedes must be committed together.
+- **Advisories** — RustSec advisories for the crates cargo-deny resolves from the committed
+  `Cargo.lock`. The `mcp` feature is covered because it is a default feature, and dev/bench deps
+  (criterion, tempfile, tokio) are included by default.
+- **Yanked releases** — `yanked = "deny"` fails the build for a dependency release that has been
+  withdrawn from crates.io.
+- **Stale advisory database** — `maximum-db-staleness = "P2D"` aborts the check when the local
+  RustSec clone is more than two days old, so a network outage or a frozen CI cache cannot turn the
+  gate green by checking nothing. The default is to fetch and carry on; this makes it fail closed.
+- **Unmaintained / unsound** — reported for direct dependencies only (`"workspace"`). Transitive
+  ones (paste via tokenizers, rand via hf-hub) would redden PRs for upstream churn this repo cannot
+  fix. No current direct dependency carries either kind of advisory: dirs' RUSTSEC-2020-0053 was
+  withdrawn in 2021 and is skipped, and the tokio unsound advisories are all patched at the
+  resolved version.
+- **Triage rows** — each ignored advisory carries an `id`, a `reason` and the upstream blocker. An
+  `ignore` row whose advisory stops firing is reported by cargo-deny's `advisory-not-detected`
+  lint, an error by default, so a lockfile fix and the row it supersedes must be committed
+  together. cargo-deny 0.20.2 has no key to change that lint's level; the behaviour is the default,
+  not a setting in `deny.toml`.
 - **Denied features** — `base64` 0.23 may not resolve with `simd-unsafe`, because that crate
   decodes untrusted import files and feature unification would otherwise re-enable it.
 - **Not configured** — `[licenses]` and `[sources]` are intentionally absent; enabling them is a
   separate decision, and adding an empty section rejects every license in the graph.
+
+### Triaging a gate that flips without a repo change
+
+Because the nightly schedule refetches the advisory database, a build that was green can go red
+with no commit in between. That is the gate working: new RustSec data, not a broken merge. Read
+the diagnostic the failure prints — the crate, the version, and the advisory ID and URL are all in
+it — then:
+
+1. Open the advisory URL and check the patched version range against `Cargo.lock`.
+2. If a compatible update exists, `cargo update -p <crate>` and commit it with the same message as
+   the triage; the gate must pass against the committed lockfile.
+3. If it does not (an upstream breaking change, or the advisory does not apply to how vipune uses
+   the crate), add an `ignore` row to `deny.toml` with the ID, the reason, and the upstream
+   blocker, and file an issue for the migration.
+4. If the failure says the advisory database is stale, delete the clone under
+   `~/.cargo/advisory-dbs/` and rerun: a fetch that cannot complete is the point of
+   `maximum-db-staleness`, not a bug to work around.
 
 ## See Also
 

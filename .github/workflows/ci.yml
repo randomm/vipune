@@ -119,6 +119,7 @@ jobs:
   deny:
     name: Dependency advisories
     runs-on: ubicloud-standard-4
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v7

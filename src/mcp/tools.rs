@@ -7,7 +7,6 @@ use crate::errors::Error;
 use crate::mcp::params::*;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
-use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::tool;
@@ -17,7 +16,6 @@ use std::sync::{Arc, Mutex};
 
 /// MCP tool handler.
 pub struct ToolHandler {
-    tool_router: ToolRouter<Self>,
     store: StoreWrapper,
     project_id: String,
     config: crate::config::Config,
@@ -30,7 +28,6 @@ impl ToolHandler {
         config: crate::config::Config,
     ) -> Self {
         Self {
-            tool_router: Self::tool_router(),
             store: StoreWrapper(store),
             project_id,
             config,
