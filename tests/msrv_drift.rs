@@ -8,11 +8,13 @@
 //! CONTRIBUTING.md. Every one of the last four is a hand-copied string or step,
 //! so any of them can silently drift from the declaration.
 //!
-//! Deliberately independent of `model_free.rs`: that file is compiled under
-//! `--no-default-features` too, and this lock reads only
-//! `Cargo.toml` + `ci.yml` + docs — all always present regardless of features
-//! — so it guards the MSRV on both feature sets without dragging the engine
-//! imports into the tokio-free build. Same drift class as
+//! An integration test rather than a module under `src/embedding/tests/`: this
+//! lock reads only `Cargo.toml` + `ci.yml` + docs, so it needs nothing from the
+//! crate and, as its own crate, it compiles from `std` alone — no `use super::*`
+//! pulling the engine imports of a sibling test file into a module that uses
+//! none of them (which is what forced a lint suppression when it lived there),
+//! and it runs on both feature sets since integration targets are feature-set
+//! agnostic. Same drift class as
 //! `test_air_gapped_docs_and_ci_cache_match_embed_revision`.
 
 use std::path::Path;
