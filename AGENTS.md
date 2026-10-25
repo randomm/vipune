@@ -8,7 +8,7 @@ reciprocal-rank fusion), and expose the same store through an MCP server.
 The human-facing workflow (setup, testing, release process, debugging tips)
 lives in `CONTRIBUTING.md` — this file is agent-only doctrine.
 
-Last updated: 2026-09-23
+Last updated: 2026-10-25
 
 ## Context7 Protocol
 
@@ -61,8 +61,14 @@ Before creating ANY code, ask:
 `git push`. Never push to "see if CI catches anything."
 
 ```bash
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny --locked check advisories bans
 ```
+
+`cargo deny` needs `cargo install cargo-deny` once. It checks the committed `Cargo.lock`
+against RustSec (`--locked` is what makes the gate describe the graph we actually ship) and
+fails if `base64` 0.23 resolves with `simd-unsafe` — the feature Cargo.toml opts out of because
+import files are untrusted input. Config in `deny.toml`; triage policy in
+`docs/testing.md`.
 
 Do NOT:
 
@@ -261,7 +267,7 @@ Before creating documentation, ask: "Will this be true in 200 PRs?"
 
 | Task | Command |
 |------|---------|
-| All quality gates (pre-push) | `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` |
+| All quality gates (pre-push) | `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo deny --locked check advisories bans` |
 | Format (write) | `cargo fmt` |
 | Lint | `cargo clippy --all-targets -- -D warnings` |
 | All tests | `cargo test` |

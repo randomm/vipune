@@ -1,0 +1,42 @@
+# Dependency-advisory and feature gate (issue #253).
+#
+# The check names are part of the command: bare `cargo deny check` also runs
+# `licenses`, which is unconfigured here and would reject every license.
+#   cargo deny --locked check advisories bans
+# --locked resolves against the committed Cargo.lock, so the gate cannot pass on
+# a graph nobody ships.
+#
+# [licenses] and [sources] are deliberately absent: unconfigured they reject
+# every license in the graph, so adding them is a separate decision.
+
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db.git"]
+# A yanked release that a release build still compiles is a real problem.
+yanked = "deny"
+# Only read under --offline/--frozen (Fetch::Disallow, check.rs:313); the online
+# run re-fetches every time and a failed fetch is itself the error.
+maximum-db-staleness = "P2D"
+# Transitive unmaintained/unsound advisories (paste via tokenizers, rand via
+# hf-hub) are upstream churn this repo cannot fix; direct deps stay covered.
+unmaintained = "workspace"
+unsound = "workspace"
+# 0.20.2 defaults this to warn (advisories/cfg.rs:266), so an ignore row that
+# stops matching would rot silently; deny makes a stale row fail the gate.
+unused-ignored-advisory = "deny"
+# Nothing ignored: rmcp 1.8.0 is past the 1.4.0 fix for RUSTSEC-2026-0189
+# (Host-header validation, Streamable HTTP transport); vipune's MCP server is
+# stdio-only (transport-io), which the advisory says is unaffected.
+ignore = []
+
+[bans]
+# Cargo.lock resolves several copies of base64 and webpki-roots through
+# independent upstream constraints; deduplicating needs upstream changes.
+multiple-versions = "allow"
+features = [
+    # vipune decodes the `embedding` field of untrusted import files
+    # (src/commands/import.rs) via base64 0.23, which Cargo.toml opts out of
+    # default features for precisely this reason. Cargo feature unification
+    # would silently re-enable simd-unsafe (unsafe SIMD, a 0.23 default feature)
+    # if any other crate ever depends on base64 0.23 with defaults.
+    { deny = ["simd-unsafe"], crate = "base64@0.23", reason = "base64 0.23 decodes untrusted import files; simd-unsafe is a 0.23 default feature and must stay off" },
+]

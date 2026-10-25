@@ -67,14 +67,44 @@ All code changes must pass these checks before PR submission:
 cargo fmt --check     # Code formatting
 cargo clippy -- -D warnings  # Linting (all warnings are errors)
 cargo test            # All tests pass
+cargo deny --locked check advisories bans  # Dependency advisories + denied features
 ```
 
 Run all checks together:
 ```bash
-cargo fmt --check && cargo clippy -- -D warnings && cargo test
+cargo fmt --check && cargo clippy -- -D warnings && cargo test && cargo deny --locked check advisories bans
 ```
 
 **These checks must pass locally before pushing.** CI verifies, but does not discover — fix issues locally first.
+
+### Dependency advisories
+
+The advisory gate is [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) configured in
+[`deny.toml`](deny.toml), and CI runs the same `advisories` and `bans` checks on every pull
+request, on every push to `main`, and nightly. Install it once with `cargo install cargo-deny`.
+
+`--locked` checks the committed `Cargo.lock` rather than a fresh resolution, so run it that way:
+
+```bash
+cargo deny --locked check advisories bans
+```
+
+A new advisory is triaged in its own PR, either by a compatible update
+(`cargo update -p <crate>`) or by an `ignore` entry in `deny.toml` that records the advisory ID,
+the reason and the upstream blocker. An `ignore` row whose advisory has since stopped firing is
+reported by cargo-deny's `advisory-not-detected` lint, which `deny.toml` sets to `deny` (the
+0.20.2 default is `warn`), so an update and the row it supersedes must land in the same commit — a
+row cannot rot silently.
+
+In CI the gate fetches the RustSec advisory database on every run, and a fetch that fails is an
+error — the check does not pass on a database it could not update. `maximum-db-staleness = "P2D"`
+is a separate bound: cargo-deny only reads it when fetching is disabled, i.e. under
+`--offline`/`--frozen`, where it aborts if the local clone's last fetch is older than two days.
+See [docs/testing.md](docs/testing.md#dependency-advisory-gate) for how to triage that.
+
+The `bans` check also fails if `base64` 0.23 ever resolves with the `simd-unsafe` feature, which
+Cargo feature unification could otherwise re-enable silently — see the comment in
+[`deny.toml`](deny.toml).
 
 ## Commit Style
 

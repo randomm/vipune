@@ -7,7 +7,6 @@ use crate::errors::Error;
 use crate::mcp::params::*;
 use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
-use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
 use rmcp::tool;
@@ -17,7 +16,6 @@ use std::sync::{Arc, Mutex};
 
 /// MCP tool handler.
 pub struct ToolHandler {
-    tool_router: ToolRouter<Self>,
     store: StoreWrapper,
     project_id: String,
     config: crate::config::Config,
@@ -30,7 +28,6 @@ impl ToolHandler {
         config: crate::config::Config,
     ) -> Self {
         Self {
-            tool_router: Self::tool_router(),
             store: StoreWrapper(store),
             project_id,
             config,
@@ -43,6 +40,18 @@ impl ToolHandler {
     #[cfg(test)]
     pub(crate) fn config(&self) -> &crate::config::Config {
         &self.config
+    }
+
+    /// `#[tool_router]` generates a **private** `tool_router()` constructor
+    /// (rmcp-macros 1.8.0 src/tool_router.rs:63-67 emits `#vis fn tool_router()`
+    /// and `#vis` is filled only from the macro's own `vis = "..."` attribute),
+    /// so the generated item is not reachable from `mcp::tests`. This thin
+    /// wrapper gives the tests a crate-visible path to the router the server
+    /// actually serves; rename the generated one and this line, not the tests,
+    /// is what breaks.
+    #[cfg(test)]
+    pub(crate) fn test_tool_router() -> rmcp::handler::server::router::tool::ToolRouter<Self> {
+        Self::tool_router()
     }
 }
 

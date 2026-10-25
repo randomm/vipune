@@ -1,5 +1,22 @@
 # Security Policy
 
+## Detection
+
+Before a report reaches us, CI scans dependencies with
+[cargo-deny](https://github.com/EmbarkStudios/cargo-deny) against the [RustSec advisory
+database](https://rustsec.org/) on every pull request, every push to `main`, and nightly. The
+configuration is [`deny.toml`](deny.toml); how to run the gate locally, and how to triage a
+newly-published advisory, is in
+[docs/testing.md](docs/testing.md#dependency-advisory-gate). The gate audits the committed
+`Cargo.lock` (`--locked`) and fetches the RustSec database on every run, so an unreachable
+database fails the check rather than passing it quietly. An advisory that cannot be fixed by a compatible
+`cargo update` is recorded in `deny.toml` with its ID, a reason and the upstream blocker, so
+ignored risk is written down rather than forgotten — the list is currently empty, and an `ignore`
+row that stops matching fails the gate (`unused-ignored-advisory = "deny"`).
+
+This covers the dependency graph only. Vulnerabilities in vipune's own code are not detected
+automatically — please report them as described below.
+
 ## Reporting a Vulnerability
 
 **Do NOT report security vulnerabilities via public GitHub Issues.**

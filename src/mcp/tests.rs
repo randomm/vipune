@@ -199,6 +199,50 @@ mod tool_handler_tests {
         assert_eq!(decoded.limit, None);
     }
 
+    /// The tool router must expose exactly the tools the MCP server advertises.
+    ///
+    /// `#[tool_router]` generates `ToolHandler::tool_router()` from the `#[tool]`
+    /// attributes, and `#[tool_handler]` routes `tools/list` through
+    /// `Self::tool_router().list_all()` (rmcp-macros 1.8.0
+    /// src/tool_handler.rs:66-77, src/tool_router.rs:62-70). An rmcp API change
+    /// that silently drops a route would remove a tool from clients with no
+    /// compile error and no failing test — this is that test. No embedding model
+    /// is needed to list tools, so it runs in the default `cargo test`.
+    #[test]
+    fn test_tool_router_exposes_all_expected_tools() {
+        let expected = [
+            "delete_memory",
+            "get_memory",
+            "list_memories",
+            "search_memories",
+            "store_memory",
+            "supersede_memory",
+            "update_memory",
+        ];
+
+        let listed: Vec<String> = ToolHandler::test_tool_router()
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.into_owned())
+            .collect();
+
+        // `list_all` sorts by name (rmcp 1.8.0 src/handler/server/router/tool.rs:580-589),
+        // so the comparison below is order-stable; assert it to keep that assumption visible.
+        assert_eq!(
+            listed,
+            expected.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        );
+
+        // Every tool is also reachable by name, which is the path `tools/call`
+        // takes through the router.
+        for name in expected {
+            assert!(
+                ToolHandler::test_tool_router().get(name).is_some(),
+                "tool '{name}' is missing from the MCP tool router"
+            );
+        }
+    }
+
     /// Test success response serialization.
     #[test]
     fn test_success_response_serde() {

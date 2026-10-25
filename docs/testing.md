@@ -315,8 +315,70 @@ cargo test
 
 If any test fails, fix it locally. CI verifies, but does not discover.
 
+## Dependency Advisory Gate
+
+CI also runs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) against the committed
+`Cargo.lock`, on pull requests, pushes to `main` and the nightly schedule. It is not a test suite
+— it fails the build for a dependency that has a RustSec advisory, a yanked release, or a denied
+feature. Configuration lives in [`deny.toml`](../deny.toml) at the repo root.
+
+Run the same gate locally (install once with `cargo install cargo-deny`):
+
+```bash
+cargo deny --locked check advisories bans
+```
+
+What it covers, and what it deliberately does not:
+
+- **Advisories** — RustSec advisories for the crates cargo-deny resolves from the committed
+  `Cargo.lock`. The `mcp` feature is covered because it is a default feature, and dev/bench deps
+  (criterion, tempfile, tokio) are included by default.
+- **Yanked releases** — `yanked = "deny"` fails the build for a dependency release that has been
+  withdrawn from crates.io.
+- **Advisory database freshness** — CI runs online, so cargo-deny re-fetches the RustSec
+  database on every run and a fetch that fails is reported as an error (`git.rs:126` returns
+  `Err` on a failed clone/fetch, and `check.rs:346` propagates it). `maximum-db-staleness = "P2D"`
+  is a *different* mechanism: cargo-deny only consults it when fetching is disabled — the
+  `Fetch::Disallow` branch selected by `--offline`/`--frozen` (`check.rs:313`, `db.rs:62`) — where
+  it aborts if the local clone's last fetch is older than two days. It does not affect the online
+  CI run.
+- **Unmaintained / unsound** — reported for direct dependencies only (`"workspace"`). Transitive
+  ones (paste via tokenizers, rand via hf-hub) would redden PRs for upstream churn this repo cannot
+  fix. No current direct dependency carries either kind of advisory: dirs' RUSTSEC-2020-0053 was
+  withdrawn in 2021 and is skipped, and the tokio unsound advisories are all patched at the
+  resolved version.
+- **Triage rows** — each ignored advisory carries an `id`, a `reason` and the upstream blocker. An
+  `ignore` row whose advisory stops firing is reported by cargo-deny's `advisory-not-detected`
+  lint. In 0.20.2 that lint defaults to **warn**, which would let a stale row rot silently, so
+  `deny.toml` sets `unused-ignored-advisory = "deny"` explicitly and a fabricated ignore id fails
+  the gate. (A row naming an id that is absent from the database *itself* is `unknown-advisory`,
+  which is a warning and does not fail the run.)
+- **Denied features** — `base64` 0.23 may not resolve with `simd-unsafe`, because that crate
+  decodes untrusted import files and feature unification would otherwise re-enable it.
+- **Not configured** — `[licenses]` and `[sources]` are intentionally absent; enabling them is a
+  separate decision, and adding an empty section rejects every license in the graph.
+
+### Triaging a gate that flips without a repo change
+
+Because the nightly schedule refetches the advisory database, a build that was green can go red
+with no commit in between. That is the gate working: new RustSec data, not a broken merge. Read
+the diagnostic the failure prints — the crate, the version, and the advisory ID and URL are all in
+it — then:
+
+1. Open the advisory URL and check the patched version range against `Cargo.lock`.
+2. If a compatible update exists, `cargo update -p <crate>` and commit it with the same message as
+   the triage; the gate must pass against the committed lockfile.
+3. If it does not (an upstream breaking change, or the advisory does not apply to how vipune uses
+   the crate), add an `ignore` row to `deny.toml` with the ID, the reason, and the upstream
+   blocker, and file an issue for the migration.
+4. If the failure says the advisory database is stale, it came from an `--offline`/`--frozen` run
+   (the only mode that reads `maximum-db-staleness`): delete the clone under
+   `~/.cargo/advisory-dbs/`, rerun online, and let the fetch refresh it. An online run that cannot
+   reach the database fails with a fetch error instead.
+
 ## See Also
 
 - [Architecture documentation](architecture.md) for module structure
 - [CONTRIBUTING.md](../CONTRIBUTING.md) for quality gates
+- [`deny.toml`](../deny.toml) for the dependency advisory gate configuration
 - [Main README](../README.md) for project overview
