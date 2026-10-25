@@ -8,7 +8,7 @@ reciprocal-rank fusion), and expose the same store through an MCP server.
 The human-facing workflow (setup, testing, release process, debugging tips)
 lives in `CONTRIBUTING.md` — this file is agent-only doctrine.
 
-Last updated: 2026-10-24
+Last updated: 2026-10-25
 
 ## Context7 Protocol
 
@@ -62,8 +62,10 @@ Before creating ANY code, ask:
 **CI is for VERIFICATION, not DISCOVERY.** All gates pass locally before
 `git push`. Never push to "see if CI catches anything."
 
-The per-gate commands are below. The same chain is documented for humans in
-`CONTRIBUTING.md` (Quality Gates).
+The per-gate commands are below. `CONTRIBUTING.md` (Quality Gates) documents the
+human-facing chain, but its copy omits `--all-targets` and the
+`--no-default-features` pair, so this file keeps its own full chain rather than
+pointing at it.
 
 ```bash
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
@@ -112,10 +114,13 @@ Do NOT:
   `find src -name '*.rs' | xargs wc -l | sort -n` (`src/**/*.rs` under default
   bash silently drops top-level `src/*.rs`, including `src/main.rs`) — the cap
   is the target for new and touched code, not a claim about the current tree.
-- **Synchronous library core** — `src/lib.rs` is fully synchronous,
-  stdlib-first; the async runtime (`tokio`) exists only inside the MCP server,
-  which is a **default** Cargo feature (`default = ["mcp"]`) — build with
-  `--no-default-features` for a sync-only, tokio-free tree
+- **Synchronous library core** — `src/lib.rs` is synchronous apart from the
+  async runtime (`tokio`), which appears only inside the MCP server — and that
+  server is a **default** Cargo feature (`default = ["mcp"]`), so the default
+  build *does* compile tokio/rmcp/schemars; build with `--no-default-features`
+  for a sync-only, tokio-free tree. `src/main.rs` is a separate binary crate
+  whose `config::Config` is a distinct nominal type from `vipune::Config`, which
+  is why `to_lib_config()` has to exist
 - **Stdlib-first** — do not add a dependency without a concrete, vetted reason
 - No `TODO` / `FIXME` / `HACK` comments — the GitHub issue is the TODO; file
   an issue instead
@@ -206,11 +211,17 @@ verify against the tree; the `Memory` struct and these paths are load-bearing:
 
 | Module | Responsibility |
 |--------|---------------|
-| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` onto the library `vipune::Config` and feeds **only** `run_mcp`, so an unmapped field silently takes its `Default` in MCP sessions while the CLI honours the configured value — `vipune::Config` derives `Default`, so there is no compile or runtime signal. The guard test is `#[cfg(feature = "mcp")]` and its asserts are hand-written (verify both against the tree before trusting them) |
+| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` onto the library `vipune::Config` and feeds **only** `run_mcp` (the `Commands::Mcp` branch; every other command gets a `MemoryStore` built from the *CLI* config), so an unmapped field silently takes its `Default` in MCP sessions while the CLI honours the configured value — `vipune::Config` derives `Default`, so there is no compile or runtime signal. The guard test is `#[cfg(feature = "mcp")]` `test_to_lib_config_maps_all_fields_non_default` (`src/main.rs:394`) — hand-written equality over the **current 9 fields**, so a field added to either struct compiles without failing it: it is exhaustive only over today's shape (verify both claims against the tree before trusting them) |
 | `src/lib.rs` | Synchronous library core; public API surface (`MemoryStore`, `MemoryType`, `MemoryStatus`, `Config`). `mod sqlite` is **private** — `Memory` escapes only through the `pub use sqlite::Memory` re-export, so the type's public name is `vipune::Memory` |
 | `src/memory/` | Domain layer: `store` (`MemoryStore`), `add` (`NewMemory`, `MemoryStore::add_impl`/`insert_row` — the *validating* write edge; `hook/run.rs` reaches the insert sinks directly and bypasses it), `crud` (`UpdateParams`, the enum-typed update boundary), `search`, `batch`, `lifecycle` (types/status) |
 | `src/mcp/` | MCP server (`rmcp` + `tokio`) behind the **default** `mcp` feature. Long-lived process over a `Mutex<MemoryStore>`: a poisoned lock must surface as a per-request `INTERNAL_ERROR`, never abort the server (precedent: the four `map_err` sites in `store_wrapper.rs`) |
-| `src/errors.rs`, `src/output.rs` | `thiserror` errors; JSON/text response DTOs (`SearchResultItem`, `GetResponse`, …) |
+| `src/commands/` | CLI command layer. `mod.rs` holds the three clap enums — `Commands` (18 variants: `Validate`, `Add`, `Search`, `Get`, `List`, `Delete`, `Update`, `Doctor`, `Import`, `Reindex`, `Export`, `Prune`, `Backup`, `Project{ProjectCommands}`, `Hook{HookCommands}`, `Version`, `Mcp`, …), `ProjectCommands` (`Merge`) and `HookCommands` (the five event variants + `Install`/`Uninstall`). **Hook install/uninstall live here** (`hook_install.rs`, `handle_hook_install`/`handle_hook_uninstall`), as does event dispatch (`hook_run.rs::handle_hook_event`); `handlers.rs` projects `Memory` into the `output.rs` DTOs |
+| `src/hook/` | Hook *event* machinery only — `payload.rs` (`HookPayload`, `parse_hook_payload`), `extract.rs` (`extract_candidate`, `CREDENTIAL_PATTERNS`), `embedding.rs` (`placeholder_embedding`, `ensure_hook_identity_ok`), `run.rs` (`run_hook_event`, which inserts via `Database::insert_with_hash`), and the `HookEvent` enum that `main.rs::hook_event_from_command` maps `HookCommands` onto. **Not** install/uninstall — that is `src/commands/hook_install.rs` |
+| `src/migration.rs` | Model-revision migration: `migrate_model` + `write_migration_marker`/`record_identity_and_clear_marker` (marker-first, crash-safe lifecycle: marker → re-embed → identity → clear). Uses `Database::conn()` directly |
+| `src/sqlite/identity.rs` | `ModelIdentity` and the read side of the identity marker (`read_identity`, `read_marker`, `is_migrating`, `assert_identity_ok`) — the gate every embedding-capable path must pass |
+| `src/embedding_profiles.rs` | `BUILTIN_PROFILES` (bge + `intfloat/multilingual-e5-small`), `profile_for`, `available_profile_ids`, and `EmbeddingRole::prefix` — per-model query/passage prefix mapping |
+| `src/memory_types.rs` | Cross-layer result types (not storage): `AddResult`, `ConflictMemory`, `IngestPolicy`, `BatchIngestItemResult`, `BatchIngestResult` |
+| `src/errors.rs`, `src/output.rs` | `thiserror` errors; JSON/text response DTOs (`SearchResultItem`, `GetResponse`, …) — `output.rs` declares its **own** DTOs and never imports `Memory` |
 
 **Key invariants:**
 
@@ -226,14 +237,16 @@ verify against the tree; the `Memory` struct and these paths are load-bearing:
   and `commands/prune.rs`. Three further readers bypass the mapper and decode
   by literal position in their own closure, so they must be edited in lockstep
   with the projection: `sqlite/search.rs`, `sqlite/fts.rs` and
-  `sqlite/export_scan.rs` (`scan_all_rows`). The 13-column projection is
+  `sqlite/export_scan.rs` (`scan_all_rows`; its own use of
+  `map_row_to_memory` is test-only). The 13-column projection is
   duplicated verbatim in `query_mod.rs`, `list.rs`, `search.rs`,
   `export_scan.rs`, `prune.rs` and `mod.rs` (`Database::get`) — find them with
   `rg 'SELECT id, project_id, content, metadata, embedding' src/`; `fts.rs`
   carries the same 13 columns `m.`-qualified plus a trailing `bm25_score`, so
   it is positional-compatible but not verbatim. A column reorder therefore has
-  to be fixed in four decoders and silently mis-maps fields if it is not. The
-  row shape is enforced only by those hard-coded 0–12 offsets; the
+  to be fixed in the mapper *and* the three positional decoders, and silently
+  mis-maps fields if it is not. The row shape is enforced only by those
+  hard-coded 0–12 offsets; the
   `EMBEDDING_COLUMN` constant in `src/sqlite/mod.rs` covers column 4 alone and
   shares no guard with the rest. The projection is also **unbounded** —
   `sqlite/search.rs` fetches every row of a project and applies `limit` after
