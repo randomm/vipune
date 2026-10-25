@@ -244,9 +244,10 @@ Orientation for agents new to the codebase (verify against the tree — the
   the crate it is `crate::sqlite::Memory`, and `vipune::Memory` is the public
   name). Two distinct hazards:
   - **Positional decoders that bypass `map_row_to_memory`
-    (`src/sqlite/query_mod.rs`)**: `sqlite/search.rs`, `sqlite/fts.rs` and
-    `sqlite/export_scan.rs` (`scan_all_rows`) construct `Memory { .. }` from
-    literal `row.get(N)` offsets; `sqlite/list.rs` `get_many` is a hybrid — it
+    (`src/sqlite/query_mod.rs`)**: `sqlite/search.rs` and `sqlite/fts.rs`
+    construct `Memory { .. }` from literal `row.get(N)` offsets, and
+    `sqlite/export_scan.rs` (`scan_all_rows`) decodes the same 13 offsets into
+    `ExportRow`; `sqlite/list.rs` `get_many` is a hybrid — it
     calls `map_row_to_memory` but re-selects the projection itself. Discover
     with `rg -e 'row\.get\(12\)' -e 'row\.get::<_, String>\(12\)' src/`
     (the last positional read — hits `query_mod.rs` too, the mapper itself)
@@ -271,7 +272,8 @@ Orientation for agents new to the codebase (verify against the tree — the
   `MemoryType`/`MemoryStatus::from_str`: `commands/handlers.rs`,
   `commands/mod.rs` (update) and `mcp/tools.rs`. `MemoryImportance::from_str`:
   `commands/handlers.rs`, `commands/mod.rs` **and** `parse_row` in
-  `commands/import.rs` — which validates `importance` only, so imported
+  `commands/import.rs` (the validating edge, not the INSERT) — which validates
+  `importance` only, so imported
   `memory_type`/`status` are inserted unvalidated. The MCP update tool parses
   but the write itself goes through `store_wrapper`/`UpdateParams` (enum-typed,
   `src/memory/crud.rs`). The storage layer takes all three as `&str` and
