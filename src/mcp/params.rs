@@ -137,16 +137,6 @@ pub struct ListMemoriesParams {
     pub no_touch: Option<bool>,
 }
 
-/// Response when a memory is successfully added.
-#[derive(Debug, Serialize)]
-#[allow(dead_code)]
-pub struct SuccessResponse {
-    /// Memory ID
-    pub id: String,
-    /// Status
-    pub status: String,
-}
-
 /// Parameters for the get_memory tool.
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct GetMemoryParams {
@@ -189,16 +179,4 @@ pub struct UpdateMemoryParams {
     #[serde(default)]
     #[schemars(description = "New memory status: active, candidate.")]
     pub status: Option<String>,
-}
-
-/// A conflicting memory.
-#[derive(Debug, Serialize)]
-#[allow(dead_code)]
-pub struct ConflictMemory {
-    /// Memory ID
-    pub id: String,
-    /// Memory content
-    pub content: String,
-    /// Similarity score
-    pub similarity: f64,
 }

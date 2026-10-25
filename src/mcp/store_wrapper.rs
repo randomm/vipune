@@ -16,6 +16,9 @@ use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 /// at the call site rather than a positional tail an extra argument can slip
 /// past (#238, #256, #258).
 ///
+/// `pub(crate)` only because `src/mcp/tests.rs` seeds rows through it; no
+/// production caller outside this file names it.
+///
 /// The arm itself is part of the type: [`McpIngest`] carries `force` and
 /// [`McpSupersede`] carries the replaced id, so neither wrapper can be handed
 /// the other arm's value. An earlier version carried both fields on one struct
@@ -255,99 +258,6 @@ impl StoreWrapper {
         store.search_hybrid(project_id, query, limit, recency_weight, options)
     }
 
-    /// Search memories by semantic meaning.
-    #[allow(dead_code)] // Used in tests but not in actual MCP flow
-    pub(crate) fn search(
-        &self,
-        project_id: &str,
-        query: &str,
-        limit: usize,
-        recency_weight: f64,
-        memory_types: Option<Vec<&str>>,
-        statuses: Option<Vec<&str>>,
-    ) -> Result<serde_json::Value, Error> {
-        let mut store = self.lock_store_library()?;
-        let memories = store.search(
-            project_id,
-            query,
-            limit,
-            recency_weight,
-            crate::memory::SearchOptions {
-                memory_types,
-                statuses,
-            },
-        )?;
-
-        let results: Vec<serde_json::Value> = memories
-            .into_iter()
-            .map(|m| {
-                let metadata_value = match m.metadata {
-                    Some(ref meta_str) if meta_str.trim() != "null" => {
-                        serde_json::from_str::<serde_json::Value>(meta_str)
-                            .unwrap_or_else(|_| serde_json::Value::String(meta_str.clone()))
-                    }
-                    _ => serde_json::Value::Null,
-                };
-
-                serde_json::json!({
-                    "id": m.id,
-                    "content": m.content,
-                    "similarity": m.similarity.unwrap_or(0.0),
-                    "created_at": m.created_at,
-                    "updated_at": m.updated_at,
-                    "project_id": m.project_id,
-                    "metadata": metadata_value
-                })
-            })
-            .collect();
-
-        Ok(serde_json::to_value(results)?)
-    }
-
-    /// Search memories by hybrid (semantic + BM25 with RRF fusion).
-    #[allow(dead_code)] // MCP tool, available for future use
-    pub(crate) fn search_hybrid(
-        &self,
-        project_id: &str,
-        query: &str,
-        limit: usize,
-        recency_weight: f64,
-        memory_types: Option<Vec<&str>>,
-        statuses: Option<Vec<&str>>,
-    ) -> Result<serde_json::Value, Error> {
-        let mut store = self.lock_store_library()?;
-        let options = crate::memory::SearchOptions {
-            memory_types,
-            statuses,
-        };
-        let memories = store.search_hybrid(project_id, query, limit, recency_weight, options)?;
-
-        let results: Vec<serde_json::Value> = memories
-            .into_iter()
-            .map(|m| {
-                let metadata_value = match m.metadata {
-                    Some(ref meta_str) if meta_str.trim() != "null" => {
-                        serde_json::from_str::<serde_json::Value>(meta_str)
-                            .unwrap_or_else(|_| serde_json::Value::String(meta_str.clone()))
-                    }
-                    _ => serde_json::Value::Null,
-                };
-
-                serde_json::json!({
-                    "id": m.id,
-                    "content": m.content,
-                    "similarity": m.similarity.unwrap_or(0.0),
-                    "created_at": m.created_at,
-                    "updated_at": m.updated_at,
-                    "project_id": m.project_id,
-                    "metadata": metadata_value
-                })
-            })
-            .collect();
-
-        Ok(serde_json::to_value(results)?)
-    }
-
     /// List recent memories.
     pub(crate) fn list(
         &self,
@@ -384,12 +294,6 @@ impl StoreWrapper {
         Ok(serde_json::to_value(results)?)
     }
 
-    /// Access the inner Arc<Mutex<MemoryStore>> for ToolHandler.
-    #[allow(dead_code)]
-    pub(crate) fn inner(&self) -> &Arc<Mutex<MemoryStore>> {
-        &self.0
-    }
-
     /// Lock the store, answering a poisoned mutex as an internal error for this
     /// request rather than panicking the long-lived MCP server — one poison must
     /// not make every later request fail (AGENTS.md, `src/mcp` invariants). The
@@ -417,7 +321,9 @@ impl StoreWrapper {
     }
 
     /// Get a specific memory by ID scoped to a project.
-    #[allow(dead_code)] // Used by get_memory tool
+    ///
+    /// Reached by the `get_memory` tool and by every test that has to read a
+    /// column the tool's own JSON response does not carry.
     pub(crate) fn get(
         &self,
         id: &str,
@@ -429,8 +335,7 @@ impl StoreWrapper {
             .map_err(|e| -> rmcp::ErrorData { e.into() })
     }
 
-    /// Delete a memory by ID scoped to a project.
-    #[allow(dead_code)] // Used by delete_memory tool
+    /// Delete a memory by ID scoped to a project — the `delete_memory` tool.
     pub(crate) fn delete(&self, id: &str, project_id: &str) -> Result<bool, rmcp::ErrorData> {
         let store = self.lock_store()?;
         store
@@ -438,8 +343,8 @@ impl StoreWrapper {
             .map_err(|e| -> rmcp::ErrorData { e.into() })
     }
 
-    /// Update a memory's content, metadata, type, or status.
-    #[allow(dead_code)] // Used by update_memory tool
+    /// Update a memory's content, metadata, type, or status — the
+    /// `update_memory` tool.
     pub(crate) fn update(
         &self,
         id: &str,
@@ -452,8 +357,9 @@ impl StoreWrapper {
             .map_err(|e| -> rmcp::ErrorData { e.into() })
     }
 
-    /// Update retrieval telemetry for a list of memory IDs.
-    #[allow(dead_code)] // Used by search_memories and get_memory tools
+    /// Update retrieval telemetry for a list of memory IDs — called by the
+    /// `search_memories` and `get_memory` tools unless the caller asked not to
+    /// touch.
     pub(crate) fn touch_memories(&self, ids: &[&str]) -> Result<(), rmcp::ErrorData> {
         let store = self.lock_store()?;
         store
@@ -462,14 +368,26 @@ impl StoreWrapper {
     }
 }
 
-/// Response type for successful operations.
+/// Response type for a successful write: the id of the row the tool created and
+/// what happened to it (`added`, `superseded`).
+///
+/// Lives here rather than in `params.rs` because the params module declares the
+/// shapes that come *in* from a client; this one goes out, and only ever inside
+/// a `CallToolResult` text envelope. `cfg(test)` widens it to the test module
+/// that pins the envelope's shape; every production caller is in this file.
 #[derive(serde::Serialize)]
-struct SuccessResponse {
-    id: String,
-    status: String,
+#[cfg_attr(test, derive(Debug))]
+pub(crate) struct SuccessResponse {
+    pub(crate) id: String,
+    pub(crate) status: String,
 }
 
-/// Conflict memory type for MCP errors.
+/// The payload of a conflict error: one existing memory similar enough to the
+/// proposed row that the write was refused (`McpError::conflict`).
+///
+/// Declared here, not re-exported from `crate::memory_types`: the store's
+/// `ConflictMemory` is its own wire shape and this one is the MCP error's, so a
+/// field renamed on either side cannot silently change what an agent reads.
 #[derive(serde::Serialize)]
 pub struct ConflictMemory {
     pub id: String,

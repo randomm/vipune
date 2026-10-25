@@ -2,7 +2,9 @@
 
 use crate::config::Config;
 use crate::mcp::params::*;
-use crate::mcp::store_wrapper::{McpIngest, McpRow, McpSupersede, StoreWrapper};
+use crate::mcp::store_wrapper::{
+    ConflictMemory, McpIngest, McpRow, McpSupersede, StoreWrapper, SuccessResponse,
+};
 use crate::mcp::tools::ToolHandler;
 use crate::memory::{MemoryStore, UpdateParams};
 use std::sync::{Arc, Mutex};
@@ -250,6 +252,28 @@ mod tool_handler_tests {
             .collect()
     }
 
+    /// The `search_memories` tool's result array — the payload an MCP client
+    /// actually receives.
+    ///
+    /// The tests below drive the tool rather than a `StoreWrapper` JSON wrapper,
+    /// because the only such wrapper is the tool itself: the server has exactly
+    /// one search entry point (`tools.rs`, `search_hybrid_raw`/`search_raw` +
+    /// `format_memory_json`) and a test-local second decoder would pin a shape
+    /// no client ever sees.
+    async fn search_rows(handler: &ToolHandler, query: &str) -> Vec<serde_json::Value> {
+        let result = handler
+            .call_tool_for_test("search_memories", serde_json::json!({ "query": query }))
+            .await
+            .expect("search_memories succeeds");
+        let text = result
+            .content
+            .iter()
+            .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
+            .next()
+            .expect("search result carries text content");
+        serde_json::from_str(text).expect("search payload is a JSON array")
+    }
+
     /// Test that MCP server can be initialized.
     #[test]
     fn test_mcp_server_initialization() {
@@ -466,7 +490,10 @@ mod tool_handler_tests {
         }
     }
 
-    /// Test success response serialization.
+    /// The tool's success envelope is `{ id, status }`, and the id in it is the
+    /// only handle a client gets for the row it just asked for: every read-back
+    /// assertion in this module goes through `tool_result_id`, so a response that
+    /// lost the key is caught here rather than in a dozen `expect`s.
     #[test]
     fn test_success_response_serde() {
         let response = SuccessResponse {
@@ -474,13 +501,19 @@ mod tool_handler_tests {
             status: "added".to_string(),
         };
 
-        let json = serde_json::to_string(&response).unwrap();
-        // Verify JSON contains expected fields
-        assert!(json.contains("test-id"));
-        assert!(json.contains("added"));
+        let value = serde_json::to_value(&response).expect("serialises");
+        assert_eq!(value["id"], serde_json::json!("test-id"));
+        assert_eq!(value["status"], serde_json::json!("added"));
+        assert_eq!(
+            value.as_object().expect("object").len(),
+            2,
+            "the envelope carries exactly the id and the status"
+        );
     }
 
-    /// Test conflict memory serialization.
+    /// The conflict error's payload names the memories that blocked the write, so
+    /// an agent can decide between `force` and rewording — which needs all three
+    /// fields, not just a count.
     #[test]
     fn test_conflict_memory_serde() {
         let memory = ConflictMemory {
@@ -489,63 +522,55 @@ mod tool_handler_tests {
             similarity: 0.85,
         };
 
-        let json = serde_json::to_string(&memory).unwrap();
-        assert!(json.contains("test-id"));
-        assert!(json.contains("test content"));
-        assert!(json.contains("0.85"));
+        let value = serde_json::to_value(&memory).expect("serialises");
+        assert_eq!(value["id"], serde_json::json!("test-id"));
+        assert_eq!(value["content"], serde_json::json!("test content"));
+        assert_eq!(value["similarity"], serde_json::json!(0.85));
     }
 
-    /// Tests ToolHandler data path: ingest, search, and list operations through StoreWrapper.
+    /// The MCP data path end to end: ingest, the `search_memories` tool, and list.
     #[tokio::test]
     async fn test_store_and_search_integration() {
-        let store = create_test_store();
-        let store = Arc::new(Mutex::new(store));
-        let wrapper = StoreWrapper::new(store.clone());
-        let project_id = "test-project";
+        let (wrapper, handler) = fixtures("test-project");
 
         // Ingest a memory
-        let result = ingest_fact(&wrapper, project_id, "rust is awesome");
+        let result = ingest_fact(&wrapper, "test-project", "rust is awesome");
         assert!(result.is_ok());
         let value = result.unwrap();
         let json_str = serde_json::to_string(&value).unwrap();
         assert!(json_str.contains("added"));
 
-        // Search for it
-        let search_result = wrapper.search(
-            project_id,
-            "rust programming",
-            5,
-            0.0,
-            None::<Vec<&str>>,
-            None,
+        // Search for it through the tool the server actually serves
+        let results = search_rows(&handler, "rust programming").await;
+        assert!(
+            results
+                .iter()
+                .any(|row| row["content"] == serde_json::json!("rust is awesome"))
         );
-        assert!(search_result.is_ok());
-        let search_value = search_result.unwrap();
-        let search_str = serde_json::to_string(&search_value).unwrap();
-        assert!(search_str.contains("rust is awesome"));
 
         // List it
-        let list_result = wrapper.list(project_id, 10, None, None);
+        let list_result = wrapper.list("test-project", 10, None, None);
         assert!(list_result.is_ok());
-        let list_value = list_result.unwrap();
-        let list_str = serde_json::to_string(&list_value).unwrap();
+        let list_str = serde_json::to_string(&list_result.unwrap()).unwrap();
         assert!(list_str.contains("rust is awesome"));
     }
 
-    /// Test that search results include metadata, project_id, and updated_at fields.
+    /// Test that the `search_memories` response includes metadata, project_id,
+    /// and updated_at fields.
+    ///
+    /// The field set is the one the tool's client sees, so it is asserted on the
+    /// tool's own payload: a key dropped from `format_memory_json` is a breaking
+    /// change for every MCP agent, and this is the test that notices.
     #[tokio::test]
     async fn test_search_results_include_metadata_and_project_id() {
-        let store = create_test_store();
-        let store = Arc::new(Mutex::new(store));
-        let wrapper = StoreWrapper::new(store.clone());
-        let project_id = "test-project";
+        let (wrapper, handler) = fixtures("test-project");
 
         // Ingest a memory with metadata
         let metadata_json = serde_json::json!({"topic": "rust", "type": "fact"});
         let metadata_str = serde_json::to_string(&metadata_json).unwrap();
         let result = ingest_fact_with(
             &wrapper,
-            project_id,
+            "test-project",
             "rust is awesome",
             Some(&metadata_str),
             false,
@@ -553,36 +578,28 @@ mod tool_handler_tests {
         assert!(result.is_ok());
 
         // Search for it
-        let search_result = wrapper.search(project_id, "rust", 5, 0.0, None::<Vec<&str>>, None);
-        assert!(search_result.is_ok());
-        let search_value = search_result.unwrap();
-
-        // Parse JSON to verify all fields are present
-        let search_str = serde_json::to_string(&search_value).unwrap();
-        assert!(search_str.contains("\"id\""));
-        assert!(search_str.contains("\"content\""));
-        assert!(search_str.contains("\"similarity\""));
-        assert!(search_str.contains("\"created_at\""));
-        assert!(search_str.contains("\"updated_at\""));
-        assert!(search_str.contains("\"project_id\""));
-        assert!(search_str.contains("\"metadata\""));
-        assert!(search_str.contains("rust is awesome"));
-        assert!(search_str.contains("test-project"));
-
-        // Verify the JSON structure by parsing it
-        let parsed: serde_json::Value = serde_json::from_str(&search_str).unwrap();
-        assert!(parsed.is_array());
-        let results = parsed.as_array().unwrap();
+        let results = search_rows(&handler, "rust").await;
         assert!(!results.is_empty());
-
         let first_result = &results[0];
-        assert!(first_result.get("id").is_some());
-        assert!(first_result.get("content").is_some());
-        assert!(first_result.get("similarity").is_some());
-        assert!(first_result.get("created_at").is_some());
-        assert!(first_result.get("updated_at").is_some());
-        assert!(first_result.get("project_id").is_some());
-        assert!(first_result.get("metadata").is_some());
+
+        for key in [
+            "id",
+            "content",
+            "similarity",
+            "created_at",
+            "updated_at",
+            "project_id",
+            "metadata",
+        ] {
+            assert!(
+                first_result.get(key).is_some(),
+                "the search response must carry {key}: {first_result}"
+            );
+        }
+        assert_eq!(
+            first_result["content"],
+            serde_json::json!("rust is awesome")
+        );
 
         // Verify project_id matches
         assert_eq!(
@@ -594,31 +611,18 @@ mod tool_handler_tests {
         assert_eq!(first_result["metadata"], metadata_json);
     }
 
-    /// Test that search results serialize correctly when metadata is None.
+    /// Test that the `search_memories` response serialises metadata as null when
+    /// the row has none.
     #[tokio::test]
     async fn test_search_results_with_null_metadata() {
-        let store = create_test_store();
-        let store = Arc::new(Mutex::new(store));
-        let wrapper = StoreWrapper::new(store.clone());
-        let project_id = "test-project";
+        let (wrapper, handler) = fixtures("test-project");
 
-        // Ingest a memory without metadata (null)
-        let result = ingest_fact(&wrapper, project_id, "simple fact");
+        // Ingest a memory without metadata — the store keeps `None`, not "null"
+        let result = ingest_fact(&wrapper, "test-project", "simple fact");
         assert!(result.is_ok());
 
         // Search for it
-        let search_result = wrapper.search(project_id, "simple", 5, 0.0, None::<Vec<&str>>, None);
-        assert!(search_result.is_ok());
-        let search_value = search_result.unwrap();
-
-        // Parse JSON to verify metadata field is present and null
-        let search_str = serde_json::to_string(&search_value).unwrap();
-        assert!(search_str.contains("\"metadata\":null"));
-
-        // Verify the JSON structure by parsing it
-        let parsed: serde_json::Value = serde_json::from_str(&search_str).unwrap();
-        assert!(parsed.is_array());
-        let results = parsed.as_array().unwrap();
+        let results = search_rows(&handler, "simple").await;
         assert!(!results.is_empty());
 
         let first_result = &results[0];
