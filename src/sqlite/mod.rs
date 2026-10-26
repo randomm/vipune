@@ -417,11 +417,12 @@ impl Database {
     }
 
     /// Borrow the connection — the escape hatch for *connection-level* work
-    /// like `rusqlite::backup::Backup` (`commands/backup.rs`) or `PRAGMA`s, not
-    /// for queries. `&Connection` is write-capable: rusqlite's `execute` takes
-    /// `&self`, so a statement through it bypasses `Database`'s error mapping
-    /// and transaction discipline. New queries belong on a `Database` method;
-    /// `rg '\.conn\(\)' src/` lists today's escape-hatch users.
+    /// like `rusqlite::backup::Backup` (`commands/backup.rs`) or a `PRAGMA`, not
+    /// for queries (`set_busy_timeout` is the `Database` method for the busy
+    /// timeout, for instance). `&Connection` is write-capable: rusqlite's
+    /// `execute` takes `&self`, so a statement through it bypasses `Database`'s
+    /// error mapping and transaction discipline. New queries belong on a
+    /// `Database` method.
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
