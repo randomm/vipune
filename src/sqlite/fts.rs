@@ -30,7 +30,7 @@ impl Error {
     /// exactly what loses the classification.
     ///
     /// Crate-visible rather than private only so
-    /// `sqlite::tests::fts::an_unclassified_fts_migration_failure_keeps_its_context_and_its_message`
+    /// `sqlite::tests::fts_error_shape::an_unclassified_fts_migration_failure_keeps_its_context_and_its_message`
     /// can drive both arms directly; it is not part of the public surface.
     pub(crate) fn with_context(self, context: &str) -> Self {
         match self {

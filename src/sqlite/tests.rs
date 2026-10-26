@@ -11,6 +11,10 @@ mod fts;
 mod fts_migration;
 
 #[cfg(test)]
+#[path = "fts_error_shape_tests.rs"]
+mod fts_error_shape;
+
+#[cfg(test)]
 #[path = "migration_tests.rs"]
 mod migration;
 
