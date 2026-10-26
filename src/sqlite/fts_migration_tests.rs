@@ -5,41 +5,26 @@
 //! drive `Database::initialize_fts` against a real `BEGIN EXCLUSIVE` writer,
 //! plus the classifier/context contract of the error it returns — a coherent
 //! seam separate from the BM25/desync coverage next door.
+//!
+//! Issue #278 added the two `delete`-mode precheck cases and the
+//! absent-FTS-table case, and stopped these tests leaking their `TempDir`
+//! (`std::mem::forget(dir)` was what filled the operator's temp quota).
 
-use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 use crate::sqlite::Database;
 use tempfile::TempDir;
-
-/// The schema-version pin shared by the fixtures below: the migration roster's
-/// own length rather than a literal, so appending a migration cannot quietly
-/// turn a contention test into a migration test.
-fn pin_to_latest_schema(conn: &rusqlite::Connection) {
-    conn.pragma_update(
-        None,
-        "user_version",
-        crate::sqlite::migrations::total_migrations(),
-    )
-    .unwrap();
-}
 
 /// Bring a store into the state the drop-and-recreate branch handles: the
 /// FTS table exists but was built without the `project_id` column, and
 /// `user_version` is at the latest so `Database::open` runs no migration of
 /// its own (a pending migration takes `BEGIN EXCLUSIVE` on open and would
 /// fail earlier, testing the open rather than the rebuild).
-///
-/// The legacy shape is written out here rather than derived from the current
-/// one: `Database::open` unconditionally re-runs `create_schema`, so a store
-/// left at *this* shape is exactly what a fixture has to build by hand. The
-/// rebuild that moves it to the current shape is what
-/// `a_lock_during_the_fts_schema_migration_stays_the_locked_verdict` drives.
-fn put_store_in_need_of_fts_rebuild(conn: &rusqlite::Connection, wal: bool) {
+fn put_store_in_need_of_fts_rebuild(path: &std::path::Path, wal: bool) {
+    let conn = rusqlite::Connection::open(path).unwrap();
     if wal {
         // vipune never sets `journal_mode`, so the default is `delete`; a
         // WAL store is what an operator who set it externally (or a future
         // change) produces. The two modes differ under contention — see
-        // `a_lock_on_the_precheck_read_errors_instead_of_looking_like_no_fts_table`,
-        // which drives the precheck in the default mode.
+        // `a_lock_before_the_fts_rebuild_now_errors_in_delete_journal_mode`.
         conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
     }
     conn.execute_batch("DROP TABLE IF EXISTS memories_fts;")
@@ -53,17 +38,18 @@ fn put_store_in_need_of_fts_rebuild(conn: &rusqlite::Connection, wal: bool) {
          );",
     )
     .unwrap();
-    pin_to_latest_schema(conn);
+    conn.pragma_update(None, "user_version", 6).unwrap();
 }
 
 /// Everything a contended test needs: the store handle, the connection holding
 /// the write lock, and the temp dir that owns the file both handles point at.
 struct Contended {
     /// Owned so the directory outlives both handles and is removed when the
-    /// test returns — the property #278 is about, and the reason this is a field
-    /// rather than a local the helper drops on the way out.
-    #[allow(dead_code)] // read by drop, not by code: the field exists for its Drop impl
-    dir: TempDir,
+    /// test returns — the property #278 is about, and the reason this is a
+    /// field rather than a local the seeding helper drops on the way out.
+    /// Read by `Drop`, never by code, hence the underscore: the lib target
+    /// denies warnings and would otherwise reject a field nothing reads.
+    _dir: TempDir,
     /// Handle over the store, ready for the contended statement.
     db: Database,
     /// The connection holding the write lock; release it with `release_writer`.
@@ -71,7 +57,7 @@ struct Contended {
 }
 
 /// Release the `BEGIN EXCLUSIVE` writer. Deliberately *not* folded into the
-/// assertion helper: when an assertion there fires, the panic unwinds, and a
+/// assertion helper: when an assertion there fires the panic unwinds, and a
 /// temp dir dropped under a live writer is a second, unrelated failure that
 /// buries the real one. Every caller calls this before it asserts.
 fn release_writer(contended: &Contended) {
@@ -82,8 +68,8 @@ fn release_writer(contended: &Contended) {
 }
 
 /// How many `memories_fts` columns are named `project_id` — zero means the
-/// drop-and-recreate never ran, which is the positive evidence a precheck
-/// failure has to be told apart from a rebuild that hit the lock partway.
+/// drop-and-recreate never completed, which is the evidence a precheck failure
+/// has to be told apart from a rebuild that hit the lock partway.
 fn project_id_columns(db: &Database) -> i64 {
     db.conn()
         .query_row(
@@ -94,24 +80,22 @@ fn project_id_columns(db: &Database) -> i64 {
         .expect("read the memories_fts column roster after releasing the writer")
 }
 
-/// Seed a store that is in need of the FTS rebuild, then put it under a real
+/// Seed a store that needs the FTS rebuild, then put it under a real
 /// `BEGIN EXCLUSIVE` writer that holds the write lock (the shape a running MCP
 /// server produces), and return everything the caller needs to contend
 /// `initialize_fts` against it and to gather evidence afterwards.
 ///
 /// The lock is *live* on return: the contended statement is what the caller
 /// runs, and `release_writer` has to run before anything reads the file (a read
-/// through the lock reports the lock, not the schema shape). Each caller drops
-/// `dir` after releasing it.
+/// through the lock reports the lock, not the schema shape).
 ///
-/// `a_lock_before_the_fts_rebuild_now_errors_in_delete_journal_mode` and
-/// `a_lock_on_the_precheck_read_errors_instead_of_looking_like_no_fts_table`
-/// shared this setup byte for byte; what differs between them is why each one
-/// exists (see their own comments), so the mechanics live here and the history
-/// stays with the tests.
+/// The WAL test and the two `delete`-mode tests shared this setup byte for
+/// byte; what differs between them is why each one exists (see their own
+/// comments), so the mechanics live here and the history stays with the tests.
 fn seed_store_under_exclusive_writer(filename: &str, wal: bool) -> Contended {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join(filename);
+
     // Open once to create the schema, then drop the handle so the only handle
     // into the store is the contended one below.
     {
@@ -121,96 +105,43 @@ fn seed_store_under_exclusive_writer(filename: &str, wal: bool) -> Contended {
             "needs the rebuild",
             &vec![0.1f32; 384],
             None,
-            MemoryType::Fact.as_str(),
-            MemoryStatus::Active.as_str(),
+            "fact",
+            "active",
         )
         .unwrap();
     }
-    {
-        let conn = rusqlite::Connection::open(&path).unwrap();
-        put_store_in_need_of_fts_rebuild(&conn, wal);
-    }
+    put_store_in_need_of_fts_rebuild(&path, wal);
 
     let db = Database::open(&path).unwrap();
     let lock_conn = rusqlite::Connection::open(&path).unwrap();
     lock_conn.execute("BEGIN EXCLUSIVE", []).unwrap();
-    // A bare `BEGIN EXCLUSIVE` takes no lock until the writer's first statement;
-    // the write is what makes the lock real.
+    // A bare `BEGIN EXCLUSIVE` takes no lock until the writer's first
+    // statement; the write is what makes the lock real.
     lock_conn
         .execute(
             "INSERT INTO memories_fts(rowid, content) VALUES (9999, 'hold')",
             [],
         )
         .unwrap();
-    // Zero timeout: without it SQLite waits out the default 5s busy handler and
-    // the test measures latency rather than the verdict.
+    // Zero timeout: without it SQLite waits out the default 5s busy handler
+    // and the test measures latency rather than the verdict.
     db.set_busy_timeout(std::time::Duration::ZERO).unwrap();
 
-    Contended { dir, db, lock_conn }
+    Contended {
+        _dir: dir,
+        db,
+        lock_conn,
+    }
 }
 
-/// The journal mode a store was opened in, read *before* any writer steps (after
-/// one, every read reports the lock rather than the mode).
-///
-/// vipune never sets `journal_mode`, so `delete` is both SQLite's default and the
-/// premise the two `delete`-mode tests rest on. Reading it from the store rather
-/// than trusting the seeding helper's `wal: false` argument is what keeps those
-/// tests honest if `Database::open` ever starts setting the mode itself; the
-/// closed set they care about is `delete` vs `wal`, so the comparison is against
-/// the constants below rather than a bare literal at the call site.
-fn journal_mode(db: &Database) -> String {
-    db.conn()
-        .query_row("PRAGMA journal_mode;", [], |r| r.get(0))
-        .expect("read the journal-mode premise")
-}
-
-/// vipune's journal mode: what `Database::open` leaves the store in, and the
-/// premise the `delete`-mode precheck tests assert.
-const DELETE_JOURNAL_MODE: &str = "delete";
-
-/// The three statements a contended `initialize_fts` must produce: run it against
-/// the live writer, release the writer, then assert the verdict. Split into
-/// release-then-assert (rather than one helper that does both) so a failing
-/// assertion can never leave the temp dir dropped under an unreleased writer.
-fn contend_and_release(db: &Database, contended: &Contended, why: &str) -> crate::sqlite::Error {
-    let err = db.initialize_fts().expect_err(why);
+/// Run the contended `initialize_fts`, then release the writer, and hand back
+/// the error. Split into release-then-assert (rather than one helper doing
+/// both) so a failing assertion can never leave the dir dropped under an
+/// unreleased writer.
+fn contend_and_release(contended: &Contended, why: &str) -> crate::sqlite::Error {
+    let err = contended.db.initialize_fts().expect_err(why);
     release_writer(contended);
     err
-}
-
-/// Assert the two halves of a locked-`initialize_fts` verdict that every
-/// contended test needs: the error *is* the lock (checked through the public
-/// conversion, which is where #255 lost it), and the rebuild did *not* run.
-///
-/// `a_lock_before_the_fts_rebuild_now_errors_in_delete_journal_mode` and
-/// `a_lock_on_the_precheck_read_errors_…` assert exactly this pair and call
-/// this helper. The WAL test drives the rebuild rather than the precheck, so it
-/// asserts the first half here and its own opposite about the second — it uses
-/// `assert_locked_verdict` directly instead of the pair.
-///
-/// The caller has already released the writer — see `release_writer` for why the
-/// release is not done here.
-fn assert_locked_verdict(err: crate::sqlite::Error) {
-    assert!(
-        matches!(err, crate::sqlite::Error::Locked),
-        "a busy precheck must keep the storage Locked verdict, got {err:?}",
-    );
-    let public: crate::errors::Error = err.into();
-    assert!(
-        public.is_locked(),
-        "the verdict must survive the public conversion, got {public:?}",
-    );
-}
-
-fn assert_locked_verdict_and_unrun_rebuild(err: crate::sqlite::Error, contended: &Contended) {
-    assert_locked_verdict(err);
-
-    assert_eq!(
-        project_id_columns(&contended.db),
-        0,
-        "the rebuild never ran — the error came from the precheck, not from a \
-         half-completed migration",
-    );
 }
 
 #[test]
@@ -225,29 +156,32 @@ fn a_lock_during_the_fts_schema_migration_stays_the_locked_verdict() {
     // WAL is required for the rebuild to be the statement that notices the
     // lock: in the default `delete` journal mode the read that precedes it
     // fails first (pinned by
-    // `a_lock_on_the_precheck_read_errors_instead_of_looking_like_no_fts_table`),
+    // `a_lock_before_the_fts_rebuild_now_errors_in_delete_journal_mode`),
     // which would test the precheck rather than the classifier. After #278
     // that earlier read *errors* rather than returning Ok, so this test still
     // needs WAL to reach the rebuild at all — do not "simplify" it away.
     let contended = seed_store_under_exclusive_writer("locked-migration.db", true);
 
-    let err = contend_and_release(
-        &contended.db,
-        &contended,
-        "the rebuild cannot take the write lock",
+    let err = contend_and_release(&contended, "the rebuild cannot take the write lock");
+    assert!(
+        matches!(err, crate::sqlite::Error::Locked),
+        "a busy rebuild must keep the storage Locked verdict, got {err:?}",
     );
-    assert_locked_verdict(err);
+    let public: crate::errors::Error = err.into();
+    assert!(
+        public.is_locked(),
+        "the verdict must survive the public conversion, got {public:?}",
+    );
     // The rebuild, not the precheck, is the contended statement here, so the
-    // opposite of the other two tests: reaching `project_id` is what the
-    // migration would have produced and the writer kept it from happening.
+    // same zero from the precheck tests carries the opposite meaning: the
+    // migration was reached and the writer kept it from completing.
     assert_eq!(
         project_id_columns(&contended.db),
         0,
         "the rebuild was reached and blocked — it did not complete",
     );
-    // `contended.dir` is dropped here rather than forgotten: the lock has been
-    // released and the two handles closed, so the temp dir can go with them
-    // (issue #278).
+    // `contended._dir` is dropped here rather than forgotten (issue #278): the lock
+    // has been released and both handles close with the test.
 }
 
 #[test]
@@ -258,11 +192,10 @@ fn a_lock_before_the_fts_rebuild_now_errors_in_delete_journal_mode() {
     // `unwrap_or(false)`, and so a lock looked like "no FTS table at all" —
     // `initialize_fts` returned `Ok(())` on a store that still needed the
     // migration. Issue #278 propagates the precheck, so the assertion is
-    // inverted: the same setup must now produce the locked verdict. Kept as its
-    // own test (rather than folded into
-    // `a_lock_on_the_precheck_read_errors_…`) so the history of the pinned
-    // behaviour stays in the file, and so the WAL test above keeps its
-    // motivation visible: without WAL the rebuild is never the contended
+    // inverted: the same setup must now produce the locked verdict. Kept as
+    // its own test rather than folded into the WAL case above, so the history
+    // of the pinned behaviour stays in the file and the WAL test keeps its
+    // motivation visible — without WAL the rebuild is never the contended
     // statement, and that test would pass on a store that was never contended.
     //
     // The premise this test rests on is vipune's *default* journal mode, so it
@@ -270,50 +203,44 @@ fn a_lock_before_the_fts_rebuild_now_errors_in_delete_journal_mode() {
     // argument (and read before contending, since after the writer steps every
     // read reports the lock instead).
     let contended = seed_store_under_exclusive_writer("locked-migration-delete.db", false);
+    // vipune never sets `journal_mode`, so `delete` is both SQLite's default and
+    // the premise of this test; read it from the store rather than trusting the
+    // seeding helper's `wal: false` argument, and read it *before* contending
+    // (after the writer steps, every read reports the lock instead of the mode).
+    let mode: String = contended
+        .db
+        .conn()
+        .query_row("PRAGMA journal_mode;", [], |r| r.get(0))
+        .expect("read the journal-mode premise");
     assert_eq!(
-        journal_mode(&contended.db),
-        DELETE_JOURNAL_MODE,
-        "the premise of this test is vipune's default journal mode"
+        mode, "delete",
+        "the premise of this test is vipune's default journal mode",
     );
 
     // The observable fix: where the pinned version of this test expected
     // `Ok(())`, the locked precheck now returns the locked verdict.
     let err = contend_and_release(
-        &contended.db,
         &contended,
         "#278: a locked sqlite_master read must surface as an error, not 'no FTS table'",
     );
-    assert_locked_verdict_and_unrun_rebuild(err, &contended);
-}
-
-#[test]
-fn a_lock_on_the_precheck_read_errors_instead_of_looking_like_no_fts_table() {
-    // The counterpart to `a_lock_during_the_fts_schema_migration_stays_the_locked_verdict`:
-    // the WAL test drives the *rebuild*; this one drives the read that precedes
-    // it, which is the statement that actually fails first in vipune's default
-    // `delete` journal mode.
-    //
-    // In vipune's default `delete` mode a `BEGIN EXCLUSIVE` writer blocks the
-    // `sqlite_master` read that opens `initialize_fts`. That read used to be
-    // `unwrap_or(false)`, so a *lock* was reported as "no FTS table at all":
-    // the rebuild branch was skipped and `initialize_fts` returned `Ok(())` on
-    // a store that still needed it — no error, nothing classified, no log line.
-    // Issue #278 propagates the precheck instead, so the same contention is now
-    // the locked verdict. Two things are asserted, because "an error came back"
-    // alone could be true for the wrong reason (a lock noticed later, or a
-    // rebuild that half-ran): the verdict *is* the lock, and the rebuild did
-    // *not* run. Both live in `assert_locked_verdict_and_unrun_rebuild`, which
-    // is shared with `a_lock_before_the_fts_rebuild_now_errors_…` — the two
-    // differ only in why they exist, not in what they measure. That test pins
-    // the shared journal-mode premise, so this one does not re-read it.
-    let contended = seed_store_under_exclusive_writer("locked-precheck.db", false);
-
-    let err = contend_and_release(
-        &contended.db,
-        &contended,
-        "a locked precheck must no longer look like 'no FTS table'",
+    // Two things are asserted, because "an error came back" alone could be true
+    // for the wrong reason (a lock noticed later, or a rebuild that half-ran):
+    // the verdict *is* the lock, and the rebuild did *not* run.
+    assert!(
+        matches!(err, crate::sqlite::Error::Locked),
+        "a busy precheck must keep the storage Locked verdict, got {err:?}",
     );
-    assert_locked_verdict_and_unrun_rebuild(err, &contended);
+    let public: crate::errors::Error = err.into();
+    assert!(
+        public.is_locked(),
+        "the verdict must survive the public conversion, got {public:?}",
+    );
+    assert_eq!(
+        project_id_columns(&contended.db),
+        0,
+        "the rebuild never ran — the error came from the precheck, not from a \
+         half-completed migration",
+    );
 }
 
 #[test]
@@ -321,26 +248,25 @@ fn initialize_fts_reports_ok_when_the_fts_table_legitimately_does_not_exist() {
     // The counterpart to the fix: propagating the precheck must not turn the
     // ordinary "no `memories_fts` table" case into an error. `Database::open`
     // always creates the table, so the absence is built by hand here — the
-    // table *and* its triggers dropped, and `user_version` pinned to the latest
-    // so nothing is pending: the reopen below would otherwise run a migration,
-    // which takes `BEGIN EXCLUSIVE` and would make this measure the open rather
-    // than the precheck. Same premise `put_store_in_need_of_fts_rebuild`
-    // establishes, and for the same reason — derived from the migration roster,
-    // not a literal, so appending a migration moves it automatically.
+    // table *and* its triggers dropped, and `user_version` pinned to the
+    // latest so nothing is pending: a reopen would otherwise run a migration,
+    // which takes `BEGIN EXCLUSIVE` and would make this measure the open
+    // rather than the precheck.
     //
     // With nothing to migrate, `initialize_fts` takes the `fts_exists == false`
     // branch and returns `Ok(())` without touching the rebuild.
     //
-    // The table is dropped through a raw connection rather than `Database::open`:
-    // `open` re-runs `create_schema`, which would re-create with `IF NOT EXISTS`
-    // whatever this test just removed (and `put_store_in_need_of_fts_rebuild`
-    // above relies on the same asymmetry). The triggers have to go with the
-    // table — an INSERT trigger pointing at a dropped FTS table makes the next
-    // write to `memories` fail outright — so they are enumerated from
-    // `sqlite_master` rather than named by hand: a trigger added to
-    // `create_schema` or to the rebuild batch is dropped here too, and the
-    // completeness claim stays mechanical rather than prose. `memories` keeps
-    // one row so the empty precheck is reached with real data behind it.
+    // The table is dropped through a raw connection rather than
+    // `Database::open`: `open` re-runs `create_schema`, whose
+    // `CREATE VIRTUAL TABLE IF NOT EXISTS` resurrects whatever this test just
+    // removed (`put_store_in_need_of_fts_rebuild` relies on the same
+    // asymmetry). The triggers have to go with the table — an INSERT trigger
+    // pointing at a dropped FTS table makes the next write to `memories` fail
+    // outright — so they are enumerated from `sqlite_master` rather than named
+    // by hand: a trigger added to `create_schema` or to the rebuild batch is
+    // dropped here too, which keeps the completeness claim mechanical rather
+    // than prose. `memories` keeps one row so the empty precheck is reached
+    // with real data behind it.
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("no-fts.db");
     {
@@ -350,8 +276,8 @@ fn initialize_fts_reports_ok_when_the_fts_table_legitimately_does_not_exist() {
             "a row with no fts index",
             &vec![0.1f32; 384],
             None,
-            MemoryType::Fact.as_str(),
-            MemoryStatus::Active.as_str(),
+            "fact",
+            "active",
         )
         .unwrap();
     }
@@ -377,13 +303,13 @@ fn initialize_fts_reports_ok_when_the_fts_table_legitimately_does_not_exist() {
         conn.execute_batch(&format!("DROP TRIGGER IF EXISTS {name};"))
             .unwrap();
     }
-    pin_to_latest_schema(&conn);
+    conn.pragma_update(None, "user_version", 6).unwrap();
 
-    // The precheck has to run on a handle that did not re-bootstrap the schema:
-    // every `Database::open` re-runs `create_schema`, whose
+    // The precheck has to run on a handle that did not re-bootstrap the
+    // schema: every `Database::open` re-runs `create_schema`, whose
     // `CREATE VIRTUAL TABLE IF NOT EXISTS` resurrects the table this test just
-    // removed. `Database::from_conn` wraps the very connection that did
-    // the drop, so the assertion is about `initialize_fts` and not about which
+    // removed. `Database::from_conn` wraps the very connection that did the
+    // drop, so the assertion is about `initialize_fts` and not about which
     // handle type the test happened to use.
     let db = Database::from_conn(conn);
     let absent: i64 = db

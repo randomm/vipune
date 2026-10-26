@@ -4,7 +4,7 @@
 //! (#256, the MCP twin of the CLI defect #238).
 //!
 //! Wired from `src/mcp/mod.rs` as its own module so `tests.rs` stays inside the
-//! per-file size cap. The shared fixtures (`create_test_store`, `tool_result_id`
+//! per-file size cap. The shared fixtures (`tool_result_id`
 //! and the seed/argument builders) live in `tests.rs` behind `pub(super)` so
 //! there is exactly one copy of each.
 #[cfg(all(test, feature = "mcp"))]
@@ -13,12 +13,10 @@ mod store_memory_importance {
     use crate::mcp::store_wrapper::StoreWrapper;
     // Shared fixtures: defined at the top of `tests.rs` and re-exported there
     // for this module, so they are not duplicated here.
-    use crate::mcp::tests::{
-        create_test_store, seed_row, store_memory_args, store_memory_args_full, tool_result_id,
-    };
+    use crate::mcp::tests::{seed_row, store_memory_args, store_memory_args_full, tool_result_id};
     use crate::mcp::tools::ToolHandler;
-    use crate::memory::NewMemory;
     use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
+    use crate::memory::{MemoryStore, NewMemory};
     use std::sync::{Arc, Mutex};
 
     /// Issue #256: `store_memory` exposed no `importance`, so every row an agent
@@ -30,7 +28,7 @@ mod store_memory_importance {
     /// applies no status or importance filter.
     #[tokio::test]
     async fn store_memory_writes_the_importance_the_agent_named() {
-        let (_dir, store) = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "imp-proj".to_string(), Config::default());
@@ -64,7 +62,7 @@ mod store_memory_importance {
     /// is case-insensitive on the way in and canonical lowercase on the way out.
     #[tokio::test]
     async fn store_memory_importance_defaults_to_medium_and_stores_lowercase() {
-        let (_dir, store) = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "imp-default-proj".to_string(), Config::default());
@@ -111,7 +109,7 @@ mod store_memory_importance {
     /// nothing is inserted, on the plain path or the `supersedes` path.
     #[tokio::test]
     async fn store_memory_rejects_an_invalid_importance_without_writing() {
-        let (_dir, store) = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "imp-bad-proj".to_string(), Config::default());
@@ -158,7 +156,7 @@ mod store_memory_importance {
     /// keeps its own level and its superseded lifecycle.
     #[tokio::test]
     async fn store_memory_supersedes_applies_the_importance_to_the_new_row() {
-        let (_dir, store) = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "imp-sup-proj".to_string(), Config::default());
@@ -251,7 +249,7 @@ mod store_memory_importance {
     /// before any write, with the CLI's own wording (#279 round 1).
     #[tokio::test]
     async fn store_memory_rejects_supersedes_together_with_force() {
-        let (_dir, store) = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "sup-force-proj".to_string(), Config::default());
@@ -309,7 +307,7 @@ mod store_memory_importance {
     /// string.
     #[tokio::test]
     async fn supersede_with_row_refuses_a_status_that_is_not_insertable() {
-        let (_dir, store) = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
 

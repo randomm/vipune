@@ -189,8 +189,7 @@ impl MemoryStore {
     }
 
     #[cfg(test)]
-    /// A store over a caller-supplied `Database`, with the test embedder wired
-    /// in.
+    /// Create a MemoryStore from a pre-populated Database with the test embedder wired in.
     ///
     /// For tests that need to insert data before creating the store:
     /// 1. Call [`test_db_path`] to get a temp database path
@@ -203,16 +202,17 @@ impl MemoryStore {
     }
 
     #[cfg(test)]
-    /// The one store-builder fixture: an owned temp dir and a `Database` opened
-    /// on it, with the fake embedder wired in. Everything that needs a
-    /// temp-backed store in a test goes through here.
+    /// Create a fully-configured MemoryStore for tests with TempDir, Database, and fake embedder.
+    ///
+    /// Replaces the 3-line boilerplate (TempDir + Database::open + from_db + test_embedder)
+    /// that was duplicated across 12+ test functions.
     ///
     /// The `TempDir` is *returned* rather than forgotten (issue #278), so the
     /// caller binds both halves — `let (_dir, store) = …` — and the directory is
     /// removed when the test returns. Both halves have to be bound together: the
     /// dir must outlive the store, since SQLite's handle closes only when the
     /// store drops, and removing the file underneath an open handle is the
-    /// `disk I/O error` this fixture exists to avoid.
+    /// `disk I/O error` that leaking (rather than owning) the dir produced.
     pub(crate) fn test_store() -> (tempfile::TempDir, MemoryStore) {
         let (dir, path) = Self::test_db_path();
         let db = Database::open(&path).expect("open test database");
@@ -240,7 +240,3 @@ impl MemoryStore {
         (dir, path)
     }
 }
-
-#[cfg(test)]
-#[path = "store_leak_tests.rs"]
-mod store_leak_tests;

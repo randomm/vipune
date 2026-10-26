@@ -186,18 +186,7 @@ fn migrations() -> Vec<MigrationFn> {
     ]
 }
 
-/// The size of the append-only migration roster — the schema version a freshly
-/// opened database ends up at. Single spelling of that fact: `run_migrations`
-/// compares against it, and tests that need a store *already* at the latest
-/// version pin `user_version` to it rather than to a literal (a test that
-/// hard-codes the old value would run a real migration inside its contended
-/// window — `run_migrations` takes `BEGIN EXCLUSIVE` — and measure the open
-/// instead of the statement it means to test). `migrations.rs`'s own roster pin
-/// (`assert_eq!(total_migrations(), 6)`) is what fails loudly if the two ever
-/// disagree about which version that is.
-///
-/// `pub(crate)` (not `#[cfg(test)]`) because `run_migrations` is its caller too.
-pub(crate) fn total_migrations() -> i32 {
+fn total_migrations() -> i32 {
     migrations().len() as i32
 }
 

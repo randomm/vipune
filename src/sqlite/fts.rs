@@ -30,7 +30,7 @@ impl Error {
     /// exactly what loses the classification.
     ///
     /// Crate-visible rather than private only so
-    /// `sqlite::tests::fts_error_shape::an_unclassified_fts_migration_failure_keeps_its_context_and_its_message`
+    /// `sqlite::tests::fts::an_unclassified_fts_migration_failure_keeps_its_context_and_its_message`
     /// can drive both arms directly; it is not part of the public surface.
     pub(crate) fn with_context(self, context: &str) -> Self {
         match self {
@@ -102,11 +102,12 @@ impl Database {
         // `query_row` yields `OptionalExtension::None` for a table that
         // genuinely does not exist and an `Err` for anything else, so a
         // contended read in vipune's default `delete` journal mode used to be
-        // swallowed here as `fts_exists == false` — the rebuild below was then
-        // skipped and this returned `Ok(())` on a store still on the legacy
-        // schema. `is_fts_initialized` is the in-file precedent for propagating
-        // instead of defaulting; `optional()` is what keeps the legitimate
-        // "no such table" case an `Ok(false)` rather than an error.
+        // swallowed here as `fts_exists == false` (`.unwrap_or(false)`) — the
+        // rebuild below was then skipped and this returned `Ok(())` on a store
+        // still on the legacy schema, with no error and nothing classified.
+        // `is_fts_initialized` is the in-file precedent for propagating rather
+        // than defaulting; `optional()` is what keeps the legitimate "no such
+        // table" case an `Ok(false)` rather than an error.
         let fts_exists: bool = self
             .conn
             .query_row(
@@ -114,6 +115,12 @@ impl Database {
                 [],
                 |_| Ok(true),
             )
+            // The `?` is the fix: a `SQLITE_BUSY` from this read used to be
+            // `unwrap_or(false)`'d away, so a locked store was indistinguishable
+            // from a fresh one. It now propagates through the storage boundary's
+            // classifier (`From<rusqlite::Error>`), which is what makes the
+            // public `Error::is_locked()` — the predicate callers use instead of
+            // matching Display text — read `true`.
             .optional()?
             .is_some();
 

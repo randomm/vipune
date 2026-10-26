@@ -5,18 +5,19 @@ mod tests {
     use tempfile::TempDir;
 
     /// An empty temp dir and a database path inside it, for tests that reopen
-    /// the same file through several `Database::open` calls.
+    /// the same file through several `Database::open` calls. The dir is
+    /// *returned* rather than forgotten (issue #278) so the caller's binding
+    /// owns it and the file is removed when the test returns.
     fn create_test_db_path() -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.db");
         (dir, path)
     }
 
-    /// Open a store on an owned temp dir; the dir is returned so the caller
-    /// keeps it alive (and removes it) instead of leaking it (issue #278).
+    /// Open a store on an owned temp dir; see [`create_test_db_path`] for why
+    /// the dir is returned rather than forgotten.
     fn create_test_db() -> (TempDir, Database) {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
+        let (dir, path) = create_test_db_path();
         let db = Database::open(&path).unwrap();
         (dir, db)
     }

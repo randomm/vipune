@@ -93,10 +93,18 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::sqlite::embedding::{blob_to_vec, vec_to_blob};
     use crate::sqlite::query_mod::map_row_to_memory;
-    use crate::sqlite::test_fixtures::create_test_db;
     use rusqlite::{Connection, params};
+    use tempfile::TempDir;
+
+    fn create_test_db() -> (TempDir, Database) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let db = Database::open(&path).unwrap();
+        (dir, db)
+    }
 
     /// Insert a raw row with full column control, bypassing `insert()`.
     fn seed_raw(

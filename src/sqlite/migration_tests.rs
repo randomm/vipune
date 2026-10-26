@@ -9,19 +9,13 @@ mod migration_tests {
     // --- Migration v6: model identity table (issue #217) ---
 
     #[test]
-    fn test_fresh_db_has_latest_user_version() {
+    fn test_fresh_db_has_user_version_6() {
         let (_dir, db) = create_test_db();
         let version: i32 = db
             .conn()
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        // The roster-derived value, so the assertion tracks the migration roster
-        // instead of a literal that has to be remembered on every append.
-        assert_eq!(
-            version,
-            crate::sqlite::migrations::total_migrations(),
-            "fresh databases must be at the latest schema version"
-        );
+        assert_eq!(version, 6, "fresh databases must be at schema v6");
     }
 
     #[test]
@@ -84,9 +78,6 @@ mod migration_tests {
         drop(conn);
 
         // Open via Database: migrations must run v6 and preserve the row.
-        // The row is seeded at v5 deliberately, so this test pins the v5→v6 step
-        // itself and the target stays the literal the roster pin in
-        // `migrations.rs` guards.
         let db = Database::open(&path).unwrap();
         let version: i32 = db
             .conn()
