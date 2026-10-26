@@ -175,7 +175,8 @@ Do NOT:
     never a full copy of the repo, which compiles a fresh target directory of
     its own. Concurrent builds on the shared target directory wait on cargo's
     build lock; that wait is acceptable and far cheaper than duplicate target
-    directories.
+    directories. The shared target directory belongs to the main checkout and
+    is never deleted by task or post-merge cleanup.
   - **Reviewers: don't rebuild what CI already verified.** When CI is green on
     the exact head under review, do not re-run full builds or test suites. If
     the review question genuinely needs a build (a reproducer, a
@@ -183,10 +184,13 @@ Do NOT:
     This is a reviewer-side rule only: the author of a change still runs the
     whole Pre-Push Quality Gates chain locally before pushing.
   - **A task cleans up after itself.** Any scratch a task creates — worktrees,
-    repo copies, probe files, temp directories — is removed by that task
-    before it reports; do not leave it for someone else's disk.
+    repo copies, probe files, temp directories, private build directories — is
+    removed by that task before it reports, and only paths it created itself:
+    never a shared or pre-existing directory it merely used.
 - **After a PR lands**: delete its branch (remote and local) and remove its
-  worktree **including its build directory**, along with any stash created for
+  worktree **including its build directory** — meaning a build directory
+  private to that worktree, which exists only if the worktree did not use the
+  shared target directory, never the shared one — along with any stash created for
   that branch — drop them one at a time only after confirming the stash message
   names the branch, because `git stash list` shares one stack across branches
   and renumbers on every drop. Never leave stale branches, worktrees or their
