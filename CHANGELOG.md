@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-10-26
+
+### Bug Fixes
+
+- Propagate initialize_fts precheck errors and stop tests leaking temp directories ([#287](https://github.com/randomm/vipune/pull/287))
+- Put breaking commits in their own changelog section ([#286](https://github.com/randomm/vipune/pull/286))
+
+
 ## [0.17.0] - 2026-10-25
 
 ### ⚠ Breaking Changes
