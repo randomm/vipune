@@ -445,12 +445,12 @@ impl ToolHandler {
         )]))
     }
 
-    /// Update an existing memory's content, metadata, type, or status.
+    /// Update an existing memory's content, metadata, type, status, or importance.
     ///
     /// At least one field must be provided.
     #[tool(
         name = "update_memory",
-        description = "Update an existing memory's content, metadata, type, or status. At least one field must be provided."
+        description = "Update an existing memory's content, metadata, type, status, or importance. At least one field must be provided."
     )]
     async fn update_memory(
         &self,
@@ -466,9 +466,10 @@ impl ToolHandler {
             && params.metadata.is_none()
             && params.memory_type.is_none()
             && params.status.is_none()
+            && params.importance.is_none()
         {
             return Err(McpError::invalid_input(
-                "At least one of text, metadata, memory_type, or status must be provided",
+                "At least one of text, metadata, memory_type, status, or importance must be provided",
             ));
         }
 
@@ -494,6 +495,17 @@ impl ToolHandler {
             None
         };
 
+        // Parse importance if provided. Parsed before the write so an invalid
+        // level answers with an MCP invalid_input and the row keeps the level it
+        // had: the column has no CHECK constraint, so this frame is the only
+        // thing between a client typo and an unparsable level (#280).
+        let importance_val = params
+            .importance
+            .as_deref()
+            .map(MemoryImportance::from_str)
+            .transpose()
+            .map_err(|e| McpError::invalid_input(&format!("Invalid importance: {e}")))?;
+
         // Serialize metadata if provided
         let metadata_str = if let Some(ref meta) = params.metadata {
             Some(
@@ -516,7 +528,7 @@ impl ToolHandler {
                 metadata: metadata_str.as_deref(),
                 memory_type: memory_type_val,
                 status: status_val,
-                importance: None,
+                importance: importance_val,
             },
         )?;
 

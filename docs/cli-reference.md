@@ -473,7 +473,7 @@ vipune mcp
 | `supersede_memory` | Replace an existing memory with new content |
 | `get_memory` | Retrieve a specific memory by ID |
 | `delete_memory` | Delete a memory permanently by ID |
-| `update_memory` | Update an existing memory's content, metadata, type, or status |
+| `update_memory` | Update an existing memory's content, metadata, type, status, or importance |
 
 **Exit codes:**
 - `0` - Success
@@ -486,7 +486,7 @@ vipune mcp
 - `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
 - `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
 - `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes` (see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for what a hidden `candidate` replacement means and how to activate it)
-- `importance` — initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive; the tool schema advertises the four canonical spellings as an `enum`, and the handler accepts any casing). `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row. The level also affects search ranking: `critical` never recency-decays and `high` decays slowly, so they keep their recency score longer than `medium` and `low`. Stored on the new row, including the row created by `supersedes`. Importance is set at store time — `update_memory` does not change it yet. `supersedes` and `force` are mutually exclusive, as on the CLI: sending both is rejected with no row written
+- `importance` — initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive; the tool schema advertises the four canonical spellings as an `enum`, and the handler accepts any casing). `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row. The level also affects search ranking: `critical` never recency-decays and `high` decays slowly, so they keep their recency score longer than `medium` and `low`. Stored on the new row, including the row created by `supersedes`. Importance can be changed later with `update_memory`. `supersedes` and `force` are mutually exclusive, as on the CLI: sending both is rejected with no row written
 - `supersedes` — ID of memory to supersede (atomically replaces old memory; mutually exclusive with `force`)
 - `force` — force store even if conflicts detected (default: `false`)
 
@@ -511,6 +511,7 @@ It has no `status` parameter, so the row it creates is always `active`. Stage a 
 - `metadata` — optional new metadata as JSON object
 - `memory_type` — optional new memory type
 - `status` — optional new status: `active` or `candidate`
+- `importance` — new importance: `low`, `medium`, `high`, or `critical` (case-insensitive; the tool schema advertises the four canonical spellings as an `enum`, and the handler accepts any casing). Omitting it leaves the row's level unchanged; an invalid value is rejected before any write. This is the only MCP demotion path: `prune` never demotes `high`/`critical`, so an over-rated row stays prune-exempt until it is demoted here
   (At least one optional field must be provided)
 
 `search_memories` and `list_memories` accept optional:

@@ -36,6 +36,10 @@ mod tests;
 #[path = "store_memory_importance_tests.rs"]
 mod store_memory_importance_tests;
 
+#[cfg(all(test, feature = "mcp"))]
+#[path = "update_memory_importance_tests.rs"]
+mod update_memory_importance_tests;
+
 /// Cross-surface error-rendering parity (issue #255 review). Kept beside the
 /// mapping it exercises rather than in `errors.rs`: `main.rs` compiles its own
 /// copy of `errors.rs`, so only here are the CLI's `Error` and the one

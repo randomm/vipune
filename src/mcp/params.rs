@@ -34,7 +34,7 @@ pub struct StoreMemoryParams {
     /// `critical` are protected from prune.
     #[serde(default)]
     #[schemars(
-        description = "Importance: low, medium, high, critical (default: medium). Case-insensitive. The level affects search ranking: critical never recency-decays and high decays slowly. high and critical are never demoted by prune. Set at store time - update_memory does not change it.",
+        description = "Importance: low, medium, high, critical (default: medium). Case-insensitive. The level affects search ranking: critical never recency-decays and high decays slowly. high and critical are never demoted by prune. Set at store time; update_memory can change it later.",
         extend("enum" = &["low", "medium", "high", "critical"])
     )]
     pub importance: Option<String>,
@@ -184,6 +184,13 @@ pub struct UpdateMemoryParams {
     #[serde(default)]
     #[schemars(description = "New memory status: active, candidate.")]
     pub status: Option<String>,
+    /// New importance: low, medium, high, critical.
+    #[serde(default)]
+    #[schemars(
+        description = "New importance: low, medium, high, critical. Case-insensitive. The level affects search ranking: critical never recency-decays and high decays slowly. high and critical are never demoted by prune, so demote an over-rated row back to low or medium to make it prunable again.",
+        extend("enum" = &["low", "medium", "high", "critical"])
+    )]
+    pub importance: Option<String>,
 }
 
 /// A conflicting memory.
