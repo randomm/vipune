@@ -141,17 +141,13 @@ fn search_refuses_while_migration_marker_present() {
 fn update_refuses_on_mismatch_when_content_changes() {
     // Update with content must embed (passage role) → refuses on mismatch.
     let (_dir, mut store) = prepared_store(e5_model_id(), |_| {});
-    let db_path = crate::memory::store::MemoryStore::test_db_path();
-    let db = Database::open(&db_path).unwrap();
     let emb = crate::memory::crud::test_fake_embedder("orig").unwrap();
-    let id = db
-        .insert("p", "orig", &emb, None, "fact", "active")
-        .unwrap();
-    // Seed a row into this store's own db so the update targets a real row.
-    let emb2 = crate::memory::crud::test_fake_embedder("orig2").unwrap();
-    store
+    // The store's own handle is the one the update runs against, so the row
+    // has to be seeded there — the target id must exist in this store's db or
+    // the call fails on "not found" rather than on the identity gate.
+    let id = store
         .db
-        .insert("p", "orig2", &emb2, None, "fact", "active")
+        .insert("p", "orig", &emb, None, "fact", "active")
         .unwrap();
     let result = store.update(
         &id,
@@ -163,7 +159,6 @@ fn update_refuses_on_mismatch_when_content_changes() {
     );
     let err = result.expect_err("update with content must refuse");
     assert!(err.to_string().contains("model identity mismatch"));
-    let _ = db;
 }
 
 #[test]

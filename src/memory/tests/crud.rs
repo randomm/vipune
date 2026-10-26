@@ -14,10 +14,7 @@ fn test_memory_store_new() {
 
 #[test]
 fn test_add_and_get() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
@@ -41,10 +38,7 @@ fn test_add_and_get() {
 
 #[test]
 fn test_update_memory() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding_old = vec![0.3f32; 384];
@@ -82,10 +76,7 @@ fn test_update_memory() {
 
 #[test]
 fn test_update_nonexistent() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
@@ -107,10 +98,7 @@ fn test_update_nonexistent() {
 
 #[test]
 fn test_update_cross_project_isolation() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
@@ -148,10 +136,7 @@ fn test_update_cross_project_isolation() {
 
 #[test]
 fn test_delete_memory() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
@@ -174,10 +159,7 @@ fn test_delete_memory() {
 
 #[test]
 fn test_delete_nonexistent() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let deleted = db.delete("does-not-exist", "test-project").unwrap();
@@ -186,10 +168,7 @@ fn test_delete_nonexistent() {
 
 #[test]
 fn test_get_nonexistent() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let memory = db.get("does-not-exist", "test-project").unwrap();
@@ -198,10 +177,7 @@ fn test_get_nonexistent() {
 
 #[test]
 fn test_list_by_project() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
@@ -338,7 +314,7 @@ fn add(
 
 #[test]
 fn add_persists_the_importance_it_was_given() {
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     // `medium` twice on purpose: once through the defaulting entry point, once
     // through the level-carrying one, which is how the CLI's omitted-flag
     // default reaches the column.
@@ -369,7 +345,7 @@ fn add_superseding_persists_the_status_on_the_new_row() {
     // Issue #258: the supersede body hardcoded `status: "active"` into the row
     // it built, so a caller that named `candidate` got `active` and no warning
     // — the same class of drop #238 fixed for `importance`.
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     let old_id = add(&mut store, "status-proj", "original fact", None);
 
     let candidate_id = supersede_with_status(
@@ -409,7 +385,7 @@ fn add_superseding_wrappers_bind_the_lifecycle_defaults_by_name() {
     // The one level-less public wrapper must keep pinning both defaults by
     // name rather than inheriting the column DEFAULT or the new variant's value
     // (the #238/#258 class of silent drop).
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     let old_id = add(&mut store, "sup-defaults", "original fact", None);
     let plain_id = store
         .supersede(
@@ -433,7 +409,7 @@ fn superseding_candidate_stays_out_of_the_default_reads() {
     // A candidate replacement is invisible to the active-only default reads, so
     // the row must be found by id or an explicit candidate filter — never by
     // accident of the default list.
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     let old_id = add(&mut store, "status-visible", "original fact", None);
     let control_id = add(&mut store, "status-visible", "unrelated active fact", None);
     let candidate_id = supersede_with_status(
@@ -472,7 +448,7 @@ fn add_superseding_refuses_a_status_that_is_not_insertable() {
     // The store is the last line of defence: a library caller that skips the
     // CLI/MCP precheck must not get a `superseded` row inserted as the
     // replacement (that lifecycle belongs to the old row's UPDATE only).
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     let old_id = add(&mut store, "status-bad", "original fact", None);
     for status in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {
         let err = store
@@ -515,7 +491,7 @@ fn add_superseding_refuses_a_status_that_is_not_insertable() {
 fn add_superseding_persists_the_importance_on_the_new_row() {
     // `--supersedes` is a second, independent add path: it inserts the new row
     // inside the supersede transaction, so that INSERT needs the binding too.
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     let old_id = add(&mut store, "sup-proj", "original fact", None);
     let new_id = supersede_with_importance(
         &mut store,
@@ -554,7 +530,7 @@ fn add_superseding_persists_the_importance_on_the_new_row() {
 /// it rather than trusting its caller.
 #[test]
 fn every_row_creating_entry_point_refuses_a_non_insertable_status() {
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     let old_id = add(&mut store, "guard-proj", "original fact", None);
 
     for status in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {

@@ -7,15 +7,12 @@ use crate::config::Config;
 use crate::memory::MemoryStore;
 use crate::memory::store::MAX_INPUT_LENGTH;
 use crate::memory_types::IngestPolicy;
-use tempfile::TempDir;
 
 /// Test that ingest accepts input at exactly MAX_INPUT_LENGTH - 1 characters.
 #[ignore]
 #[test]
 fn test_ingest_at_max_input_length_minus_one_succeeds() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", Config::default()).unwrap();
 
@@ -33,9 +30,7 @@ fn test_ingest_at_max_input_length_minus_one_succeeds() {
 #[ignore]
 #[test]
 fn test_ingest_at_max_input_length_succeeds() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", Config::default()).unwrap();
 
@@ -53,7 +48,7 @@ fn test_ingest_at_max_input_length_succeeds() {
 #[test]
 fn test_ingest_at_max_input_length_plus_one_fails() {
     // Validation happens before embedding, so no model needed
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
 
     // Create input one character over MAX_INPUT_LENGTH
     let text = "x".repeat(MAX_INPUT_LENGTH + 1);
@@ -73,7 +68,7 @@ fn test_ingest_at_max_input_length_plus_one_fails() {
 #[test]
 fn test_ingest_whitespace_only_rejected_with_explicit_error() {
     // Validation happens before embedding, so no model needed
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
 
     let whitespace_inputs = vec!["   ", "\t\n", " \t \n "];
 
@@ -99,9 +94,7 @@ fn test_ingest_whitespace_only_rejected_with_explicit_error() {
 #[ignore]
 #[test]
 fn test_ingest_metadata_with_special_json_characters_succeeds() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", Config::default()).unwrap();
 
@@ -141,9 +134,7 @@ fn test_ingest_metadata_with_special_json_characters_succeeds() {
 #[ignore]
 #[test]
 fn test_ingest_metadata_with_unicode_succeeds() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", Config::default()).unwrap();
 
@@ -183,9 +174,7 @@ fn test_ingest_metadata_with_unicode_succeeds() {
 #[ignore]
 #[test]
 fn test_ingest_content_with_combining_characters_succeeds() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", Config::default()).unwrap();
 
@@ -221,9 +210,7 @@ fn test_ingest_content_with_combining_characters_succeeds() {
 #[ignore]
 #[test]
 fn test_ingest_content_with_emoji_succeeds() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", Config::default()).unwrap();
 
@@ -259,9 +246,7 @@ fn test_ingest_content_with_emoji_succeeds() {
 #[ignore]
 #[test]
 fn test_ingest_content_with_bom_succeeds() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", Config::default()).unwrap();
 
@@ -292,9 +277,7 @@ fn test_ingest_content_with_bom_succeeds() {
 #[ignore]
 #[test]
 fn test_ingest_accepts_any_project_id_string() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let mut store = MemoryStore::new(&path, "BAAI/bge-small-en-v1.5", Config::default()).unwrap();
 

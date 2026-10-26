@@ -6,7 +6,7 @@ use crate::memory_types::{AddResult, IngestPolicy};
 
 #[test]
 fn test_ingest_invalid_input_empty() {
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
 
     // Empty content should error
     let result = store.ingest("test-project", "", None, IngestPolicy::Force);

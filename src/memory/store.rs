@@ -207,17 +207,16 @@ impl MemoryStore {
     /// Replaces the 3-line boilerplate (TempDir + Database::open + from_db + test_embedder)
     /// that was duplicated across 12+ test functions.
     ///
-    /// ⚠️ The returned TempDir is forgotten (not cleaned up on drop) to keep the database
-    /// file alive for the duration of the test. Temp files are cleaned up by the OS.
-    pub(crate) fn test_store() -> Self {
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().expect("create temp dir");
-        let path = dir.path().join("test.db");
-        std::mem::forget(dir);
-
+    /// The `TempDir` is *returned* rather than forgotten (issue #278), so the
+    /// caller binds both halves — `let (_dir, store) = …` — and the directory is
+    /// removed when the test returns. Both halves have to be bound together: the
+    /// dir must outlive the store, since SQLite's handle closes only when the
+    /// store drops, and removing the file underneath an open handle is the
+    /// `disk I/O error` that leaking (rather than owning) the dir produced.
+    pub(crate) fn test_store() -> (tempfile::TempDir, MemoryStore) {
+        let (dir, path) = Self::test_db_path();
         let db = Database::open(&path).expect("open test database");
-        Self::from_db_with_test_embedder(db)
+        (dir, Self::from_db_with_test_embedder(db))
     }
 
     /// Replace the test-only embedder (test builds only) with a new one.
@@ -227,18 +226,17 @@ impl MemoryStore {
     }
 
     #[cfg(test)]
-    /// Return a temp database path for tests that need to pre-populate data.
+    /// Return an owned temp directory and a database path inside it, for tests
+    /// that need to pre-populate data before building a store.
     ///
     /// Callers open a `Database` on the returned path, insert data, then
     /// create a `MemoryStore` via `from_db` + `test_embedder`.
     ///
-    /// ⚠️ The TempDir is forgotten, same as [`test_store`].
-    pub(crate) fn test_db_path() -> std::path::PathBuf {
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().expect("create temp dir");
+    /// The `TempDir` is returned rather than forgotten (issue #278), so the
+    /// directory is removed when the caller's binding drops.
+    pub(crate) fn test_db_path() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
         let path = dir.path().join("test.db");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 }

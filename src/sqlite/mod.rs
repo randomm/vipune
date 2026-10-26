@@ -25,6 +25,9 @@ pub mod update;
 pub use migration_types::MigrationReport;
 
 #[cfg(test)]
+pub(crate) mod test_fixtures;
+
+#[cfg(test)]
 mod tests;
 
 use chrono::Utc;

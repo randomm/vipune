@@ -183,15 +183,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
-    fn create_test_db() -> Database {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        let db = Database::open(&path).unwrap();
-        std::mem::forget(dir);
-        db
-    }
+    use crate::sqlite::test_fixtures::create_test_db;
 
     #[test]
     fn test_validate_limit_zero() {
@@ -211,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_search_basic() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert(
             "proj1",
@@ -239,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_search_limit() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         for i in 0..5 {
             db.insert(
@@ -259,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_search_project_isolation() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert(
             "proj1",
@@ -287,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_search_empty_corpus_degenerate_queries() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
 
         // Zero rows for "proj1": the per-row validation inside cosine_similarity
         // never runs, so degenerate query vectors must return Ok(empty), not Err.
@@ -307,7 +299,7 @@ mod tests {
 
     #[test]
     fn test_search_corrupt_embedding_names_memory_id() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let conn = db.conn();
         // Insert a row whose embedding BLOB is not a valid f32 buffer:
         // 3 bytes cannot be reinterpreted as f32 values.
@@ -339,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_find_similar_with_threshold() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding1 = vec![1.0f32; 384];
         let mut embedding2 = vec![1.0f32; 384];
         embedding2[0] = 0.0; // Slightly different

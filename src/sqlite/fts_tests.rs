@@ -1,20 +1,12 @@
 //! FTS5 tests.
 #[cfg(test)]
 mod tests {
+    use crate::sqlite::test_fixtures::{create_test_db, create_test_db_path};
     use crate::sqlite::{Database, UpdateOptions};
-    use tempfile::TempDir;
-
-    fn create_test_db() -> Database {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        let db = Database::open(&path).unwrap();
-        std::mem::forget(dir);
-        db
-    }
 
     #[test]
     fn test_fts5_search() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert(
             "proj1",
@@ -35,7 +27,7 @@ mod tests {
 
     #[test]
     fn test_fts5_triggers() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         let id = db
             .insert("proj1", "original text", &embedding, None, "fact", "active")
@@ -79,7 +71,7 @@ mod tests {
 
     #[test]
     fn test_fts5_limit_validation() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         assert!(db.search_bm25("test", "proj1", 0, None, None).is_err());
         assert!(
             db.search_bm25("test", "proj1", 100_000, None, None)
@@ -89,7 +81,7 @@ mod tests {
 
     #[test]
     fn test_fts5_special_characters() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert(
             "proj1",
@@ -137,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_fts5_empty_query() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert("proj1", "test content", &embedding, None, "fact", "active")
             .unwrap();
@@ -149,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_fts5_phrase_search() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert(
             "proj1",
@@ -180,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_fts5_unicode_text() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert(
             "proj1",
@@ -200,9 +192,10 @@ mod tests {
 
     #[test]
     fn test_initialize_fts_migration() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        std::mem::forget(dir);
+        // The dir is held by `_dir` for the whole test instead of being
+        // forgotten, so the reopened handles below all see the same file and
+        // nothing is left behind in TMPDIR (issue #278).
+        let (_dir, path) = create_test_db_path();
 
         {
             let db = Database::open(&path).unwrap();
@@ -231,9 +224,10 @@ mod tests {
 
     #[test]
     fn test_initialize_fts_consistency_handling() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        std::mem::forget(dir);
+        // The dir is held by `_dir` for the whole test instead of being
+        // forgotten, so the reopened handles below all see the same file and
+        // nothing is left behind in TMPDIR (issue #278).
+        let (_dir, path) = create_test_db_path();
 
         // Initial data with 3 rows
         {
@@ -293,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_bm25_search_filters_by_status() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert("proj1", "test content", &embedding, None, "fact", "active")
             .unwrap();
@@ -331,7 +325,7 @@ mod tests {
 
     #[test]
     fn test_bm25_search_default_excludes_non_active() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert("proj1", "active memory", &embedding, None, "fact", "active")
             .unwrap();
@@ -362,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_bm25_search_filters_by_type() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert(
             "proj1",
@@ -413,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_detect_fts_desync_fresh_zero_row_db_is_healthy() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let report = db.detect_fts_desync().unwrap();
         assert!(report.underpopulated_by_project.is_empty());
         assert_eq!(report.underpopulated_global, 0);
@@ -423,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_detect_fts_desync_healthy_trigger_synced_db_is_in_sync() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         for content in ["first memory", "second memory", "third memory"] {
             db.insert("proj1", content, &embedding, None, "fact", "active")
@@ -456,7 +450,7 @@ mod tests {
     #[test]
     fn test_detect_fts_desync_report_is_read_only() {
         // Verify that detection does not modify the database.
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         db.insert("proj1", "row one", &embedding, None, "fact", "active")
             .unwrap();

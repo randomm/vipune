@@ -7,26 +7,6 @@ use crate::mcp::tools::ToolHandler;
 use crate::memory::lifecycle::MemoryImportance;
 use crate::memory::{MemoryStore, NewMemory, UpdateParams};
 use std::sync::{Arc, Mutex};
-use tempfile::TempDir;
-
-/// Create a test MemoryStore with a fake embedder (no ONNX model load).
-///
-/// Uses `from_db_with_test_embedder` so the shared `test_embedder` field is wired in,
-/// avoiding the real ONNX session that caused race-condition flakes when multiple
-/// async tests loaded the model concurrently.
-///
-/// ⚠️ The TempDir is forgotten to keep the database file alive for the test duration.
-/// This matches the pattern used by `MemoryStore::test_store()`.
-pub(super) fn create_test_store() -> MemoryStore {
-    use crate::sqlite::Database;
-
-    let dir = TempDir::new().expect("create temp dir");
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
-
-    let db = Database::open(&path).expect("open test database");
-    MemoryStore::from_db_with_test_embedder(db)
-}
 
 /// Seed an active row at a chosen level through the wrapper, so a
 /// handler-driven test starts from a known row without going through the
@@ -113,7 +93,7 @@ mod tool_handler_tests {
     /// Test that MCP server can be initialized.
     #[test]
     fn test_mcp_server_initialization() {
-        let store = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let config = Config::default();
         let _handler = ToolHandler::new(
             Arc::new(Mutex::new(store)),
@@ -129,7 +109,7 @@ mod tool_handler_tests {
     /// somewhere upstream of construction) is observable on the handler.
     #[test]
     fn test_tool_handler_retains_non_default_config() {
-        let store = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let config = Config {
             recency_weight: 0.91,
             hybrid: true,
@@ -358,7 +338,7 @@ mod tool_handler_tests {
     /// Tests ToolHandler data path: ingest, search, and list operations through StoreWrapper.
     #[tokio::test]
     async fn test_store_and_search_integration() {
-        let store = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let project_id = "test-project";
@@ -395,7 +375,7 @@ mod tool_handler_tests {
     /// Test that search results include metadata, project_id, and updated_at fields.
     #[tokio::test]
     async fn test_search_results_include_metadata_and_project_id() {
-        let store = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let project_id = "test-project";
@@ -451,7 +431,7 @@ mod tool_handler_tests {
     /// Test that search results serialize correctly when metadata is None.
     #[tokio::test]
     async fn test_search_results_with_null_metadata() {
-        let store = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let project_id = "test-project";
@@ -483,7 +463,7 @@ mod tool_handler_tests {
     /// Test get_memory integration: store a memory and retrieve it by ID.
     #[tokio::test]
     async fn test_get_memory_integration() {
-        let store = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let project_id = "test-project";
@@ -520,7 +500,7 @@ mod tool_handler_tests {
     /// Test delete_memory integration: store, delete, and verify deletion.
     #[tokio::test]
     async fn test_delete_memory_integration() {
-        let store = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let project_id = "test-project";
@@ -560,7 +540,7 @@ mod tool_handler_tests {
     async fn test_update_memory_integration() {
         use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 
-        let store = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let project_id = "test-project";
@@ -668,7 +648,7 @@ mod tool_handler_tests {
     async fn store_memory_supersedes_honours_the_requested_status() {
         use crate::memory::lifecycle::{MemoryStatus, MemoryType};
 
-        let store = create_test_store();
+        let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "status-proj".to_string(), Config::default());

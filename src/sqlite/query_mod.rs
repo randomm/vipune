@@ -151,20 +151,12 @@ pub fn build_filters<'p>(
 mod tests {
     use super::*;
     use crate::embedding::EMBEDDING_DIMS;
+    use crate::sqlite::test_fixtures::create_test_db;
     use rusqlite::params;
-    use tempfile::TempDir;
-
-    fn create_test_db() -> super::super::Database {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        let db = super::super::Database::open(&path).unwrap();
-        std::mem::forget(dir);
-        db
-    }
 
     #[test]
     fn test_map_row_to_memory() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; EMBEDDING_DIMS];
         let id = db
             .insert(
@@ -202,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_map_row_to_memory_without_metadata() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; EMBEDDING_DIMS];
         let id = db
             .insert("proj1", "test content", &embedding, None, "fact", "active")
@@ -225,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_map_row_to_memory_invalid_embedding() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let conn = db.conn();
 
         // Insert a valid embedding but test that the mapping function works correctly
