@@ -24,6 +24,7 @@
 mod helpers;
 mod params;
 pub mod server;
+mod store_lock;
 pub mod store_wrapper;
 #[cfg(test)]
 mod test_transport;

@@ -416,24 +416,23 @@ impl Database {
         Self { conn }
     }
 
-    /// Get a reference to the internal connection (read-only access, for the
-    /// Online Backup API and other read-only consumer commands).
-    ///
-    /// The connection is exposed read-only (no mutation through this handle)
-    /// so callers can build `rusqlite::backup::Backup` or run `PRAGMA` reads
-    /// without being able to corrupt the underlying state. Commands that
-    /// need to mutate state (e.g. `insert_with_id`, `merge_project_ids`) use
-    /// their own `&mut self` methods instead.
+    /// Borrow the connection — the escape hatch for *connection-level* work
+    /// like `rusqlite::backup::Backup` (`commands/backup.rs`) or `PRAGMA`s, not
+    /// for queries. `&Connection` is write-capable: rusqlite's `execute` takes
+    /// `&self`, so a statement through it bypasses `Database`'s error mapping
+    /// and transaction discipline. New queries belong on a `Database` method;
+    /// `rg '\.conn\(\)' src/` lists today's escape-hatch users.
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
 
     /// Open a write transaction on the connection.
     ///
-    /// `&mut self` because rusqlite's `Connection::transaction` (0.38) takes
-    /// `&mut self`: a transaction takes an exclusive write lock, so the
-    /// caller must own the connection for its duration. Callers that only
-    /// share a read `&Connection` (via `conn()`) must not use this.
+    /// `&mut self` because rusqlite's `Connection::transaction` takes `&mut
+    /// self`: it uses that borrow to exclude every other statement for the
+    /// transaction's duration. A constraint on other handles, not on writes —
+    /// [`Self::conn`] hands out a write-capable `&Connection`, and a statement
+    /// through it is atomic only if its caller opened a transaction first.
     ///
     /// # Errors
     ///
