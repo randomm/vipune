@@ -82,7 +82,10 @@ fn test_backup_explicit_output_path() {
     let emb = test_fake_embedder("beta").unwrap();
     let _id = insert_row(&db, "proj", "beta", &emb);
 
-    let out = _dir.keep().join("explicit-backup.db");
+    // The backup lands in the same tempdir as the source: `_dir` is owned
+    // here and drops at the end of the test, so the directory is cleaned up
+    // along with the destination file (`keep()` would leak the dir per run).
+    let out = _dir.path().join("explicit-backup.db");
     let exit = handle_backup(&src, Some(Path::new(out.to_str().unwrap())), true)
         .expect("handle_backup should succeed");
     assert_eq!(exit, std::process::ExitCode::SUCCESS);
