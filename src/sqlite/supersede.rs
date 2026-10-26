@@ -8,9 +8,6 @@ use crate::memory::lifecycle::{MemoryImportance, MemoryStatus};
 
 use super::{Error, NewRow, Result, vec_to_blob};
 
-/// The rejected spellings, read off the enum rather than restated as literals.
-const RETIRED_STATUSES: [MemoryStatus; 2] = [MemoryStatus::Superseded, MemoryStatus::Deprecated];
-
 impl super::Database {
     /// Atomically supersede an old memory with a new one at the `medium`
     /// importance and `active` status defaults.
@@ -68,9 +65,10 @@ impl super::Database {
     /// last thing that can refuse: re-superseding an already-`superseded` row
     /// overwrites its `superseded_by` and forks the chain into a row nothing
     /// points at, and superseding a `deprecated` row resurrects one `prune`
-    /// retired. The rejected statuses are [`MemoryStatus::Superseded`] and
-    /// [`MemoryStatus::Deprecated`] read off the enum rather than restated as
-    /// literals, so a rename moves the guard and the column together.
+    /// retired. The rejected statuses come from [`MemoryStatus::stored_is_retired`],
+    /// the one list the insert rule shares, so a rename moves the guard and the
+    /// column together and a differently-cased spelling of a retired status
+    /// cannot slip past a raw string comparison.
     ///
     /// # Errors
     ///
@@ -78,20 +76,26 @@ impl super::Database {
     /// [`Error::InvalidInput`] when it belongs to another project or is already
     /// `superseded`/`deprecated` (naming its current status, and its
     /// `superseded_by` when set), and a storage error if the write itself fails.
-    /// The guard runs before the transaction opens, so a refusal writes nothing.
+    /// The guard runs inside the write transaction, which is opened before the
+    /// read it checks, so a refusal writes nothing and no other process can
+    /// retire the row between that read and the UPDATE.
     pub(crate) fn supersede_with_importance(
         &self,
         row: &NewRow<'_>,
         embedding: &[f32],
         old_id: &str,
     ) -> Result<String> {
-        // Opened before the read below and held to the commit: SQLite's
-        // deferred transaction promotes on the first write, so reading the old
-        // row's status and then writing inside one snapshot is what makes the
-        // guard atomic rather than a check another process can slip between.
+        // Opened before the read below, which is issued *through* `tx`: the first
+        // statement of a deferred transaction that writes takes the RESERVED lock
+        // and holds it to the commit, so this read and the two writes below are
+        // one unit no other writer interleaves with. Issuing the read through
+        // `self.conn` instead would take no write lock before the guard checked,
+        // and two processes superseding the same row would both pass it and fork
+        // the chain.
         let tx = self.conn.unchecked_transaction()?;
 
-        // Verify old memory exists and belongs to this project (scoped get enforces it)
+        // Verify old memory exists, belongs to this project (the scoped WHERE
+        // enforces it), and has not already been retired.
         let old = {
             let mut stmt = tx.prepare(
                 "SELECT status, superseded_by FROM memories WHERE id = ?1 AND project_id = ?2",
@@ -103,16 +107,13 @@ impl super::Database {
                 Error::NotFound(format!("memory to supersede not found: {}", old_id))
             })?
         };
-        // The re-supersede guard. The status column has no CHECK constraint, and
-        // the store's validating edges are the only thing that normally keeps a
-        // retired spelling out of it, so the comparison is against the enum's
-        // canonical spellings rather than a parse: a row whose status came from
-        // anywhere else is not one of the two retired states and stays
-        // supersedeable (failing closed would make such a row unreplaceable).
-        if RETIRED_STATUSES
-            .iter()
-            .any(|retired| old.0 == retired.as_str())
-        {
+        // The re-supersede guard. Parsed through the enum rather than compared to
+        // string literals: `MemoryStatus::from_str` matches case-insensitively,
+        // so a retired row written below the store's validating edges (`import`,
+        // `Database::update`) is refused here whatever its casing. A status
+        // outside the vocabulary is not a retired one and stays supersedeable —
+        // failing closed would make such a row impossible to replace.
+        if MemoryStatus::stored_is_retired(&old.0) {
             return Err(Error::InvalidInput(match old.1 {
                 Some(by) => format!(
                     "cannot supersede memory {old_id}: status is already '{}' (superseded_by {by})",

@@ -4,6 +4,9 @@
 //! Split out of `memory/tests/crud.rs` for issue #271 so both files stay under
 //! the project's 500-line cap; the add-path helpers the tests below drive are
 //! shared from there (`super::crud::add`), the read helpers included.
+//!
+//! The re-supersede guard — refusing to retire a row that is already retired —
+//! is covered in [`resupersede_guard_tests`], beside the storage body it guards.
 
 use super::tests::crud::{add, added_importance, added_status, supersede_with_importance};
 use crate::memory::NewMemory;
@@ -41,7 +44,7 @@ fn supersede_with_status(
 /// Every row in `project`, read across all four statuses so a refusal cannot
 /// satisfy a "nothing was written" assertion by having written a row the default
 /// active-only list would have hidden.
-fn all_statuses(store: &MemoryStore, project: &str) -> Vec<crate::sqlite::Memory> {
+pub(super) fn all_statuses(store: &MemoryStore, project: &str) -> Vec<crate::sqlite::Memory> {
     store
         .list(
             project,
@@ -335,141 +338,4 @@ fn every_row_creating_entry_point_refuses_a_non_insertable_status() {
         1,
         "a refused row creation must insert nothing"
     );
-}
-
-/// The re-supersede guard: a row the supersede transaction already retired is
-/// not a supersede target. Re-marking a `superseded` row would overwrite its
-/// `superseded_by` and fork the chain into a replacement nothing points at, and
-/// a `deprecated` one was retired by `prune`. `deprecated` is reachable as a
-/// target today (only inserts are blocked, and `update --status deprecated`
-/// writes it), so the guard names both.
-///
-/// The retired row is written directly through the public `Database::update`,
-/// because the retired status has to be in the column first and no store entry
-/// point can put it there — that is what `ensure_valid_for_insert` exists for.
-#[test]
-fn superseding_a_superseded_row_is_refused_and_writes_nothing() {
-    let (_dir, mut store) = MemoryStore::test_store();
-    let project = "retired-superseded";
-    let old_id = add(&mut store, project, "original fact", None);
-    let first_replacement = add(&mut store, project, "first replacement", None);
-    seed_retired(
-        &mut store,
-        &old_id,
-        project,
-        MemoryStatus::Superseded,
-        Some(&first_replacement),
-    );
-
-    let msg = refuse_retired_supersede(&mut store, project, &old_id);
-    assert!(
-        msg.contains("Invalid input") && msg.contains("'superseded'"),
-        "the refusal must be InvalidInput and name the current status: {msg}"
-    );
-    assert!(
-        msg.contains(&first_replacement),
-        "the refusal must name the existing superseded_by: {msg}"
-    );
-
-    let row = retired_row(&store, project, &old_id);
-    assert_eq!(row.status, "superseded", "the refusal rewrote the status");
-    assert_eq!(
-        row.superseded_by.as_deref(),
-        Some(first_replacement.as_str()),
-        "the refusal must not fork the supersede chain"
-    );
-    assert_eq!(
-        all_statuses(&store, project).len(),
-        2,
-        "a refused supersede must insert no replacement row"
-    );
-}
-
-/// The `deprecated` twin: `prune` demotes candidates through this status, so a
-/// supersede that resurrected one would undo an operator decision.
-#[test]
-fn superseding_a_deprecated_row_is_refused_and_writes_nothing() {
-    let (_dir, mut store) = MemoryStore::test_store();
-    let project = "retired-deprecated";
-    let old_id = add(&mut store, project, "pruned fact", None);
-    seed_retired(&mut store, &old_id, project, MemoryStatus::Deprecated, None);
-
-    let msg = refuse_retired_supersede(&mut store, project, &old_id);
-    assert!(
-        msg.contains("Invalid input") && msg.contains("'deprecated'"),
-        "the refusal must be InvalidInput and name the current status: {msg}"
-    );
-
-    let row = retired_row(&store, project, &old_id);
-    assert_eq!(row.status, "deprecated", "the refusal rewrote the status");
-    assert_eq!(row.superseded_by, None, "the refusal wrote a link");
-    assert_eq!(
-        all_statuses(&store, project).len(),
-        1,
-        "a refused supersede must insert no replacement row"
-    );
-}
-
-/// Move `id` into a retired lifecycle status through the storage tier. The store
-/// refuses to *insert* either status (`ensure_valid_for_insert`) and `update`
-/// refuses `superseded`, so the retired row a guard test starts from can only be
-/// seeded below the store — which is also how such a row arises in practice: the
-/// storage tier takes the status column as an unvalidated `&str`.
-fn seed_retired(
-    store: &mut MemoryStore,
-    id: &str,
-    project: &str,
-    status: MemoryStatus,
-    superseded_by: Option<&str>,
-) {
-    store
-        .db
-        .update(
-            id,
-            project,
-            crate::sqlite::UpdateOptions {
-                content: None,
-                embedding: None,
-                metadata: None,
-                memory_type: None,
-                status: Some(status.as_str()),
-                importance: None,
-            },
-        )
-        .expect("seed the retired status");
-    if let Some(by) = superseded_by {
-        store
-            .db
-            .conn()
-            .execute(
-                "UPDATE memories SET superseded_by = ?1 WHERE id = ?2",
-                rusqlite::params![by, id],
-            )
-            .expect("seed the superseded_by link");
-    }
-}
-
-/// Attempt to supersede `old_id` with a fresh row and return the rendered error.
-fn refuse_retired_supersede(store: &mut MemoryStore, project: &str, old_id: &str) -> String {
-    match store.supersede_with(&crate::memory::NewSupersedingMemory {
-        row: NewMemory {
-            project_id: project,
-            content: "second replacement",
-            metadata: None,
-            memory_type: MemoryType::Fact,
-            status: MemoryStatus::Active,
-        },
-        old_id,
-        importance: MemoryImportance::Medium,
-    }) {
-        Err(err) => err.to_string(),
-        Ok(new_id) => panic!("superseding a retired row was accepted: {new_id}"),
-    }
-}
-
-fn retired_row(store: &MemoryStore, project: &str, id: &str) -> crate::sqlite::Memory {
-    store
-        .get(id, project)
-        .expect("get")
-        .expect("retired row still readable")
 }

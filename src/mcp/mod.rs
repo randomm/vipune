@@ -45,6 +45,13 @@ mod store_memory_importance_tests;
 #[path = "supersede_tests.rs"]
 mod supersede_tests;
 
+/// The get/update MCP surfaces, split out of `tests.rs` for #271 so that file
+/// stays inside the per-file cap. Same `feature = "mcp"` reasoning as
+/// `supersede_tests` above.
+#[cfg(all(test, feature = "mcp"))]
+#[path = "update_tests.rs"]
+mod update_tests;
+
 #[cfg(all(test, feature = "mcp"))]
 #[path = "update_memory_importance_tests.rs"]
 mod update_memory_importance_tests;

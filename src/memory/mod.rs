@@ -30,3 +30,9 @@ mod batch_tests;
 #[cfg(test)]
 #[path = "supersede_tests.rs"]
 mod supersede_tests;
+
+/// The re-supersede guard, split from `supersede_tests` for #271 so both stay
+/// inside the per-file cap. Same wiring reason as above.
+#[cfg(test)]
+#[path = "resupersede_guard_tests.rs"]
+mod resupersede_guard_tests;

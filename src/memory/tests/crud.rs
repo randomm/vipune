@@ -268,6 +268,10 @@ pub(in crate::memory) fn add(
     }
 }
 
+/// Add a row through the released, level-only public entry point
+/// [`MemoryStore::supersede_with_importance`] — the one `vipune add --supersedes
+/// --importance` drove before #258 replaced it internally with
+/// [`MemoryStore::supersede_with`]; it stays in the public API (additive-only,
 /// shipped in v0.15.4), so its behaviour is pinned here rather than assumed.
 pub(in crate::memory) fn supersede_with_importance(
     store: &mut MemoryStore,

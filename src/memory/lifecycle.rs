@@ -155,22 +155,36 @@ impl MemoryStatus {
     }
 
     /// The two lifecycle states an existing row is moved *into* and a fresh row
-    /// may never be born as — the vocabulary both the insert rule
-    /// ([`Self::ensure_valid_for_insert`]) and the re-supersede guard on the one
-    /// supersede INSERT
+    /// may never be born as — the single source of that vocabulary. Both the
+    /// insert rule ([`Self::ensure_valid_for_insert`]) and the re-supersede guard
+    /// on the one supersede INSERT
     /// ([`crate::sqlite::Database::supersede_with_importance`]) are written
-    /// against, so a fifth variant moves both rules together instead of silently
-    /// widening only one of them.
+    /// against it — the guard through [`Self::is_retired`], which it calls rather
+    /// than restating the two spellings — so a fifth variant moves both rules
+    /// together instead of silently widening only one of them.
     const RETIRED: [MemoryStatus; 2] = [MemoryStatus::Superseded, MemoryStatus::Deprecated];
 
     /// The verdict behind [`Self::ensure_valid_for_insert`]: `true` for the two
-    /// [`Self::RETIRED`] statuses. The storage guard compares the fetched column
-    /// against `RETIRED`'s own [`Self::as_str`] spellings rather than calling
-    /// this, because the storage layer keeps comparing strings (its convention
-    /// everywhere else) and must not pretend a stored row was ever validated.
+    /// [`Self::RETIRED`] statuses. The storage re-supersede guard calls this
+    /// rather than keeping its own list of status spellings: `MemoryStatus::
+    /// from_str` matches case-insensitively, so a row written below the store's
+    /// validating edges (`import`, or a `Database::update` caller) can carry a
+    /// spelling like `Superseded` that a raw `== "superseded"` comparison would
+    /// wave through and fork the chain over. A status that does not parse is not
+    /// a retired one and stays supersedeable — failing closed there would make
+    /// such a row unreplaceable. Note `from_str` lowercases but does not trim:
+    /// padded garbage parses as nothing, so the guard lets it through by design.
     #[must_use = "the verdict is the reason to call this"]
     pub(crate) fn is_retired(self) -> bool {
         Self::RETIRED.contains(&self)
+    }
+
+    /// [`Self::is_retired`] for the string a storage row carries. `Ok(true)`/
+    /// `Ok(false)` is the verdict for a status this enum can name; `Err` means
+    /// the column holds a spelling from outside the vocabulary, which the guard
+    /// treats as not retired.
+    pub(crate) fn stored_is_retired(stored: &str) -> bool {
+        Self::from_str(stored).is_ok_and(Self::is_retired)
     }
 
     /// # Errors
@@ -366,11 +380,22 @@ mod tests {
         assert!(MemoryStatus::Candidate.ensure_valid_for_insert().is_ok());
         for accepted in [MemoryStatus::Active, MemoryStatus::Candidate] {
             assert!(accepted.is_valid_for_insert(), "{accepted:?} is insertable");
+            // The insert rule and the re-supersede guard are the same predicate:
+            // whatever may not be inserted is exactly what may not be superseded.
+            assert!(!accepted.is_retired(), "{accepted:?} is not retired");
         }
         // The two states below belong to an existing row's UPDATE, never to an
         // INSERT: if either ever became insertable the supersede path would
         // accept a replacement row that is born already replaced.
         for rejected in [MemoryStatus::Superseded, MemoryStatus::Deprecated] {
+            assert!(rejected.is_retired(), "{rejected:?} is retired");
+            // The string form the storage guard actually reads: a retired status
+            // reaches it through the column, so the verdict has to survive the
+            // round trip (and the case tolerance `from_str` gives it).
+            assert!(
+                MemoryStatus::stored_is_retired(rejected.as_str()),
+                "storage guard misses {rejected:?}"
+            );
             let err = rejected
                 .ensure_valid_for_insert()
                 .expect_err("not insertable");
@@ -382,6 +407,47 @@ mod tests {
             assert!(
                 !rejected.is_valid_for_insert(),
                 "the predicate must refuse {rejected:?} for the same reason"
+            );
+        }
+        // A status outside the vocabulary is neither retired nor insertable; the
+        // guard treats it as not retired so such a row stays replaceable.
+        assert!(!MemoryStatus::stored_is_retired("weird"));
+        assert!(!MemoryStatus::stored_is_retired(""));
+    }
+
+    /// The guard's rejection set must be the enum's, not a second list: every
+    /// spelling `from_str` maps to a [`Self::RETIRED`] variant is refused, and a
+    /// non-canonical spelling is refused as firmly as the canonical one (issue
+    /// #271 — a raw `== "superseded"` comparison admitted `"Superseded"`, which
+    /// `Database::update` and `import` can both write).
+    #[test]
+    fn stored_status_verdict_follows_the_enum_including_tolerant_spellings() {
+        for spelling in [
+            "superseded",
+            "SUPERSEDED",
+            "Superseded",
+            "deprecated",
+            "Deprecated",
+            "DePrEcAtEd",
+        ] {
+            assert!(
+                MemoryStatus::stored_is_retired(spelling),
+                "guard misses {spelling:?}"
+            );
+        }
+        // `from_str` lowercases but does not trim, so padded spellings parse as
+        // nothing and are not retired — recorded here so the guard's tolerance is
+        // pinned to the parser's real behaviour rather than to an assumption.
+        for spelling in [
+            "active",
+            "Candidate",
+            "DEPRECATED_",
+            "unknown",
+            " Superseded ",
+        ] {
+            assert!(
+                !MemoryStatus::stored_is_retired(spelling),
+                "guard wrongly refuses {spelling:?}"
             );
         }
     }
