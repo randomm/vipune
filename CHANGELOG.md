@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-26
+
+### Miscellaneous
+
+- Harden the cargo-deny gate ([#294](https://github.com/randomm/vipune/pull/294))
+
+
 ## [0.18.0] - 2026-10-26
 
 ### Documentation
