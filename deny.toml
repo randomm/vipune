@@ -28,8 +28,8 @@ unused-ignored-advisory = "deny"
 # stdio-only (transport-io), which the advisory says is unaffected.
 #
 # A yanked release is allowlisted here too, but only in spec-string form
-# ("crate@x.y.z"): the `{ crate, version }` table form discards `version` for
-# the yanked allowlist, so it allows every release of that crate, and a row
+# ("crate@x.y.z"). NEVER { crate, version } — that table form discards `version`
+# for the yanked allowlist, so it allows every release of that crate, and a row
 # pinned to a version that is not the yanked one still mutes the yank.
 # docs/testing.md "Triaging a yanked release" has the details.
 ignore = []

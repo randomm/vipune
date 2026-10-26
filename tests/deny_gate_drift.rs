@@ -40,6 +40,9 @@ fn deny_command(line: &str) -> Option<String> {
     // Truncate at the nearest wrapper or trailing comment, not at the first
     // occurrence of each: cutting at a later `  #` than the closing backtick would
     // let a `run: cargo deny … # note` keep trailing text and hide dropped args.
+    // Note the `--` requirement above: a doc that prints the command without a
+    // flag (`cargo deny check advisories bans`) yields `None` here and escapes the
+    // per-line scan; only the `text.contains(GATE)` assertion can catch that.
     let end = ["`", " #", " |"]
         .iter()
         .filter_map(|stop| cmd.find(stop))
@@ -48,13 +51,45 @@ fn deny_command(line: &str) -> Option<String> {
     Some(cmd.trim().to_string())
 }
 
-/// The value of `key:` in a workflow step's `with:` map, e.g. `tool`.
-fn workflow_with_value(ci: &str, key: &str) -> Option<String> {
-    let prefix = format!("{key}: ");
+/// Lines after the `with:` map of the step starting at line `install` (its
+/// `uses: …` line): the contiguous block of `with:` and `tool`/`tools` keys.
+/// Anything else — the next `- name:`/`- run:` step, a job key — ends the map, so
+/// a later step's `tool:` cannot be attributed to this one. Blank lines and `#`
+/// comments do not (neither is YAML content), and a block scalar (`|`/`>`) body
+/// never matches a key prefix.
+fn step_with_map<'a>(ci: &'a str, install: usize) -> impl Iterator<Item = &'a str> + 'a {
+    ci.lines().skip(install + 1).map(str::trim).take_while(|l| {
+        l.is_empty()
+            || l.starts_with('#')
+            || l.starts_with("with:")
+            || (l.starts_with("tool") && l.contains(": "))
+    })
+}
+
+/// The cargo-deny pin: the `tool: cargo-deny@<version>` line of the
+/// `taiki-e/install-action` step that installs cargo-deny, e.g. `0.20.2`.
+///
+/// There can be several install steps in one workflow (`taiki-e/install-action`
+/// is the usual way to add `cargo-machete`, `cargo-audit`, …), so the scan is
+/// scoped to the step that actually names cargo-deny and to its own `with:` map:
+/// a bare first-`tool:` scan reads an unrelated step above the deny job and fails
+/// with "expected cargo-deny", and it reads a commented-out `# tool: …` too.
+fn ci_deny_pin(ci: &str) -> Option<String> {
+    const INSTALL: &str = "uses: taiki-e/install-action@";
+    const KEY: &str = "tool: cargo-deny@";
     ci.lines()
         .map(str::trim)
-        .find(|l| l.starts_with(&prefix))
-        .map(|l| l[prefix.len()..].trim().to_string())
+        .enumerate()
+        // Only a step whose own `with:` map names cargo-deny qualifies.
+        .find(|(n, line)| {
+            line.starts_with(INSTALL) && step_with_map(ci, *n).any(|t| t.starts_with(KEY))
+        })
+        .and_then(|(n, _)| {
+            step_with_map(ci, n)
+                .filter(|l| !l.starts_with('#'))
+                .find_map(|l| l.strip_prefix(KEY))
+        })
+        .map(|v| v.trim().to_string())
 }
 
 /// `major.minor` of the version in the `name = { version = "…"` line.
@@ -117,15 +152,14 @@ fn test_ci_deny_pin_matches_the_docs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ci = read(root, ".github/workflows/ci.yml");
 
-    let tool = workflow_with_value(&ci, "tool").expect("ci.yml: no `tool:` install step");
-    let mut parts = tool.split('@');
-    assert_eq!(parts.next(), Some("cargo-deny"), "ci.yml: {tool}");
-    let pin = parts
-        .next()
-        .unwrap_or_else(|| panic!("ci.yml: `{tool}` has no @version"));
+    let pin = ci_deny_pin(&ci)
+        .expect("ci.yml: no `tool: cargo-deny@<version>` under a taiki-e/install-action step");
     assert!(
-        parts.next().is_none(),
-        "ci.yml: `{tool}` is not name@version"
+        !pin.is_empty()
+            && pin
+                .split('.')
+                .all(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())),
+        "ci.yml: cargo-deny pin `{pin}` is not a dotted numeric version"
     );
 
     let docs = read(root, "docs/testing.md");
@@ -170,4 +204,100 @@ fn test_rmcp_floor_is_at_or_above_the_patched_release() {
         (major, minor) >= (1, 8),
         "Cargo.toml: rmcp {major}.{minor} permits versions before the 1.4.0 fix for RUSTSEC-2026-0189"
     );
+}
+
+#[cfg(test)]
+mod helper_probes {
+    use super::*;
+
+    /// The finding this lock exists for: a `with:`-less `taiki-e/install-action`
+    /// step added above the deny job. A naive "find the install action, then take
+    /// the next `tool:` anywhere below it" scan reads that step's tool (or finds
+    /// none) and the lock dies with a confusing "expected cargo-deny".
+    const FOREIGN_STEP: &str = "      - name: Install cargo-machete\n        uses: taiki-e/install-action@v2\n        with:\n          tool: cargo-machete@1\n";
+    const DENY_STEP: &str = "      - name: Install cargo-deny\n        uses: taiki-e/install-action@v2\n        with:\n          tool: cargo-deny@0.20.2\n";
+
+    #[test]
+    fn ci_deny_pin_skips_a_foreign_tool_line() {
+        let ci = format!("{FOREIGN_STEP}{DENY_STEP}");
+        assert_eq!(ci_deny_pin(&ci).as_deref(), Some("0.20.2"));
+    }
+
+    #[test]
+    fn ci_deny_pin_is_none_when_deny_is_installed_elsewhere() {
+        // No install action at all: fail the lock rather than borrow a pin.
+        let ci =
+            "      - name: Install cargo-deny\n        run: cargo install cargo-deny --locked\n";
+        assert_eq!(ci_deny_pin(ci), None);
+        // An install action whose only tool is not cargo-deny: also None, so a
+        // workflow that drops the deny install step cannot pass on a stale doc.
+        assert_eq!(ci_deny_pin(FOREIGN_STEP), None);
+    }
+
+    #[test]
+    fn ci_deny_pin_ignores_a_commented_tool_line() {
+        let ci = "uses: taiki-e/install-action@v2\n        # tool: cargo-deny@0.1\n        tool: cargo-deny@0.20.2\n";
+        assert_eq!(ci_deny_pin(ci).as_deref(), Some("0.20.2"));
+    }
+
+    #[test]
+    fn ci_deny_pin_stops_at_the_next_step() {
+        // A `tool:` belonging to a step after the deny install must not be taken.
+        let ci = "uses: taiki-e/install-action@v2\n        with:\n          tool: cargo-deny@0.20.2\n      - name: Next\n        uses: taiki-e/install-action@v2\n        with:\n          tool: cargo-deny@0.1.0\n";
+        assert_eq!(ci_deny_pin(ci).as_deref(), Some("0.20.2"));
+    }
+
+    #[test]
+    fn ci_deny_pin_requires_the_install_action() {
+        let ci =
+            "jobs:\n  deny:\n    steps:\n      - run: cargo deny --locked check advisories bans\n";
+        assert_eq!(ci_deny_pin(ci), None);
+    }
+
+    #[test]
+    fn ci_deny_pin_reads_the_real_workflow() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let ci = read(root, ".github/workflows/ci.yml");
+        assert!(ci_deny_pin(&ci).is_some(), "real ci.yml must yield a pin");
+    }
+
+    #[test]
+    fn deny_command_strips_wrappers() {
+        assert_eq!(
+            deny_command("        run: cargo deny --locked check advisories bans").as_deref(),
+            Some(GATE)
+        );
+        assert_eq!(
+            deny_command("run: cargo deny --locked check advisories bans # note").as_deref(),
+            Some(GATE)
+        );
+        assert_eq!(
+            deny_command("| `cargo deny --locked check advisories bans` |").as_deref(),
+            Some(GATE)
+        );
+        // A weakened copy is returned, not swallowed, so the assertion bites.
+        assert_eq!(
+            deny_command("run: cargo deny --locked check advisories").as_deref(),
+            Some("cargo deny --locked check advisories")
+        );
+        // A prose mention without flags yields None (see the note on `deny_command`).
+        assert_eq!(
+            deny_command("`cargo deny` needs cargo install").as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn declared_version_reads_major_minor() {
+        let manifest = "rmcp = { version = \"1.8\", features = [\"server\"] }\n";
+        assert_eq!(declared_version(manifest, "rmcp"), (1, 8));
+        let bumped = "rmcp = { version = \"2.11\", optional = true }\n";
+        assert_eq!(declared_version(bumped, "rmcp"), (2, 11));
+    }
+
+    #[test]
+    #[should_panic(expected = "no numeric major")]
+    fn declared_version_panics_on_a_non_numeric_major() {
+        declared_version("rmcp = { version = \"^1.8\" }\n", "rmcp");
+    }
 }

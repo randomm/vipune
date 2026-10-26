@@ -386,11 +386,15 @@ A yanked release is allowlisted by an `ignore` row in `deny.toml` written in **s
 `ignore` rows into advisory-id rows and yanked rows by shape (`advisories/cfg.rs:163-232`), and the
 string branch splits on `@` into a name plus an exact version requirement while the table branch
 reads `crate`, `name` and `reason` and drops `version` entirely (`cfg/package_spec.rs:66-96`), so a
-table row matches by name alone and mutes every release of that crate. Verified against 0.20.2: with
-`ppv-lite86 0.2.11` yanked in the lockfile, the spec string `"ppv-lite86@0.2.10"` still fails the
-gate (`error[yanked]`), while `{ crate = "ppv-lite86", version = "=0.2.10" }` passes it. The spec
-string also keeps `unused-ignored-advisory = "deny"` meaningful for yank rows — an unrelated pin is
-reported as `yanked-not-detected` — which the table form cannot do.
+table row matches by name alone and mutes every release of that crate. Reproduced on 0.20.2 in a
+scratch copy with `ppv-lite86 0.2.11` marked yanked in `Cargo.lock` — the yank has to exist for the
+comparison to mean anything, since on a graph with no yanked release *both* forms are reported as
+`yanked-not-detected` and fail: the table row `{ crate = "ppv-lite86", version = "=0.2.10", reason
+= ... }` silences the yank (the `version` key is discarded, so the row matches the yanked 0.2.11),
+while the spec string `"ppv-lite86@0.2.10"` leaves `error[yanked]` firing. The spec string also
+keeps `unused-ignored-advisory = "deny"` meaningful for yank rows: a pin that matches no yanked
+release is reported as `yanked-not-detected`, which a name-only table row cannot do — it matches
+whatever is yanked.
 
 ## See Also
 
