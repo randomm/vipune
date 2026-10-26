@@ -73,7 +73,9 @@ fn step_with_map<'a>(ci: &'a str, install: usize) -> impl Iterator<Item = &'a st
 /// is the usual way to add `cargo-machete`, `cargo-audit`, …), so the scan is
 /// scoped to the step that actually names cargo-deny and to its own `with:` map:
 /// a bare first-`tool:` scan reads an unrelated step above the deny job and fails
-/// with "expected cargo-deny", and it reads a commented-out `# tool: …` too.
+/// with "expected cargo-deny". Comment lines are handled in the reader: the scan
+/// for the install step is line-based, so a `# uses:` cannot name a step, and the
+/// pin lookup drops `#` lines so a commented-out `# tool:` cannot supply the pin.
 fn ci_deny_pin(ci: &str) -> Option<String> {
     const INSTALL: &str = "uses: taiki-e/install-action@";
     const KEY: &str = "tool: cargo-deny@";
@@ -90,6 +92,89 @@ fn ci_deny_pin(ci: &str) -> Option<String> {
                 .find_map(|l| l.strip_prefix(KEY))
         })
         .map(|v| v.trim().to_string())
+}
+
+/// Each row of the `[advisories]` `ignore = [ … ]` array, comment lines gone —
+/// single- or multi-line, both shapes deny.toml uses.
+///
+/// Hand-rolled, not parsed: a TOML parser accepts the `{ crate, version }` table
+/// form this must reject, so it would pass on the very row that drops `version`
+/// and mutes every release of a crate (deny.toml; docs/testing.md, yank triage).
+fn deny_ignore_rows(deny: &str) -> Vec<String> {
+    let mut rows = Vec::new();
+    // `open` tracks the array across lines: an `array` still empty after the
+    // opening line (a row-per-line array) must keep collecting, not read as closed.
+    let mut open = false;
+    let mut array = String::new();
+    for line in uncommented(deny) {
+        // Only the line carrying the key opens the array, so a `db-urls = ["…"]`
+        // elsewhere in `[advisories]` is not mistaken for it.
+        if let Some(rest) = line.strip_prefix("ignore = [") {
+            open = true;
+            array = rest.to_string();
+        } else if open {
+            array.push(' ');
+            array.push_str(&line);
+        } else {
+            continue;
+        }
+        // The array closes at the first `]`; `ignore = []` closes on its own
+        // opening line and yields no rows. A `{ … }` row would close early on the
+        // `]` of its own inline table, but any such fragment is rejected anyway —
+        // no valid row contains `]`, so the early close cannot let one through.
+        if let Some(end) = array.find(']') {
+            rows.extend(
+                array[..end]
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|r| !r.is_empty())
+                    .map(str::to_string),
+            );
+            open = false;
+            array.clear();
+        }
+    }
+    rows
+}
+
+/// Non-comment lines, trimmed.
+fn uncommented(text: &str) -> impl Iterator<Item = String> + '_ {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .map(str::to_string)
+}
+
+/// `Some(reason)` for an `ignore` row that is not a bare quoted spec string
+/// `"name@x.y.z"` with an exact dotted version, or an advisory id (`RUSTSEC-…`,
+/// the other shape cargo-deny accepts — docs/testing.md, yank triage).
+fn ignore_row_violation(row: &str) -> Option<String> {
+    // Brace check first: a `{ crate, version }` row split on its internal commas
+    // would otherwise report as a fragment missing its `@`.
+    if row.contains('{') {
+        return Some("a `{ crate, version }` table row".to_string());
+    }
+    let Some(spec) = row.strip_prefix('"').and_then(|r| r.strip_suffix('"')) else {
+        return Some("not a bare quoted spec string".to_string());
+    };
+    if spec.starts_with("RUSTSEC-") {
+        return None;
+    }
+    let Some((name, version)) = spec.rsplit_once('@') else {
+        return Some("no `@` — a bare crate name ignores every release".to_string());
+    };
+    let exact = !version.is_empty()
+        && !version.contains(['*', '?', '<', '>', '=', ' '])
+        && version
+            .split('.')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+    match (name.is_empty(), exact) {
+        (true, _) => Some("no crate name before `@`".to_string()),
+        (false, false) => Some(format!(
+            "version `{version}` is not an exact dotted version"
+        )),
+        (false, true) => None,
+    }
 }
 
 /// `major.minor` of the version in the `name = { version = "…"` line.
@@ -121,9 +206,12 @@ fn test_every_gate_copy_is_the_canonical_command() {
     let ci = read(root, ".github/workflows/ci.yml");
 
     // In ci.yml the command must be a run step, not just text inside a comment.
+    // A commented-out `# run: …` is not a step and must not satisfy the lock.
     let run = format!("run: {GATE}");
     assert!(
-        ci.lines().any(|l| l.trim() == run),
+        ci.lines()
+            .map(str::trim)
+            .any(|l| !l.starts_with('#') && l == run),
         "ci.yml has no step running the canonical gate; expected a line `{run}`"
     );
 
@@ -177,16 +265,42 @@ fn test_deny_config_keeps_its_load_bearing_rows() {
     let deny = read(root, "deny.toml");
     let manifest = read(root, "Cargo.toml");
 
-    assert!(
-        deny.contains("multiple-versions = \"warn\""),
-        "deny.toml: duplicate crate versions are not reported as warnings"
-    );
-    // A mistyped crate or feature in this row passes cargo-deny silently, so the
-    // literals are pinned here.
-    assert!(
-        deny.contains("base64@0.23") && deny.contains("deny = [\"simd-unsafe\"]"),
-        "deny.toml: the base64@0.23 simd-unsafe deny row is missing or mistyped"
-    );
+    // Comment lines repeat these literals as prose, so they cannot satisfy a pin —
+    // only a live row can.
+    let rows = uncommented(&deny).collect::<Vec<_>>().join("\n");
+
+    for (literal, why) in [
+        (
+            "multiple-versions = \"warn\"",
+            "duplicate crate versions are not reported",
+        ),
+        (
+            "yanked = \"deny\"",
+            "a yanked release a build still compiles passes the gate",
+        ),
+        (
+            "unused-ignored-advisory = \"deny\"",
+            "an ignore row that stops matching rots at the 0.20.2 default of warn",
+        ),
+        // Contiguous, not two substrings: a row keeping the crate but dropping the
+        // denied feature (or the reverse) satisfies a split pin.
+        (
+            "{ deny = [\"simd-unsafe\"], crate = \"base64@0.23\"",
+            "the base64@0.23 simd-unsafe deny row is missing or mistyped",
+        ),
+    ] {
+        assert!(
+            rows.contains(literal),
+            "deny.toml: {literal} missing — {why}"
+        );
+    }
+    for row in deny_ignore_rows(&rows) {
+        assert!(
+            ignore_row_violation(&row).is_none(),
+            "deny.toml: ignore row `{row}` is not a bare \"name@x.y.z\" spec — the \
+             table form and any non-exact version mute every release of the crate"
+        );
+    }
     assert!(
         manifest.contains("base64 = { version = \"0.23\", default-features = false"),
         "Cargo.toml: base64 must keep default-features = false, or simd-unsafe can be unified back in"
@@ -206,7 +320,6 @@ fn test_rmcp_floor_is_at_or_above_the_patched_release() {
     );
 }
 
-#[cfg(test)]
 mod helper_probes {
     use super::*;
 
@@ -248,6 +361,33 @@ mod helper_probes {
     }
 
     #[test]
+    fn commented_ci_lines_do_not_count_as_gate_or_install() {
+        // Both comment-skips in one probe. A commented-out `run:` is not a step, so
+        // it must leave the canonical-gate assertion unsatisfied — and a live line
+        // at a different indent must still satisfy it, so the first case is not
+        // passing by rejecting everything.
+        let run = format!("run: {GATE}");
+        let satisfied = |text: &str| uncommented(text).any(|l| l == run);
+        assert!(
+            !satisfied("      # run: cargo deny --locked check advisories bans\n"),
+            "a commented-out run line must not count"
+        );
+        assert!(
+            satisfied("run: cargo deny --locked check advisories bans\n"),
+            "a live run line must count"
+        );
+        // Same skip on the install side: a commented-out `# uses:` must not make a
+        // tool line look like it belongs to an install step.
+        let ci =
+            "# uses: taiki-e/install-action@v2\n        with:\n          tool: cargo-deny@0.1\n";
+        assert_eq!(
+            ci_deny_pin(ci),
+            None,
+            "a commented-out install line must not count"
+        );
+    }
+
+    #[test]
     fn ci_deny_pin_requires_the_install_action() {
         let ci =
             "jobs:\n  deny:\n    steps:\n      - run: cargo deny --locked check advisories bans\n";
@@ -285,6 +425,50 @@ mod helper_probes {
             deny_command("`cargo deny` needs cargo install").as_deref(),
             None
         );
+    }
+
+    #[test]
+    fn deny_ignore_rows_reads_both_array_shapes() {
+        // Both shapes deny.toml uses, with comment lines skipped: the commented
+        // `stale@9.9.9` row must not appear, and `ignore = []` must not stay open
+        // and swallow the `[bans]` key below it.
+        let single = "[advisories]\nignore = [\"a@1.2.3\", \"b@0.1.0\"]\n\n[bans]\n";
+        assert_eq!(
+            deny_ignore_rows(single),
+            ["\"a@1.2.3\"", "\"b@0.1.0\""],
+            "single-line array"
+        );
+        let multi = "[advisories]\n# ignore = [\"stale@9.9.9\"]\nignore = [\n    \"c@2.0.0\",\n]\n";
+        assert_eq!(deny_ignore_rows(multi), ["\"c@2.0.0\""], "multi-line");
+        assert!(
+            deny_ignore_rows("[advisories]\nignore = []\n\n[bans]\nyanked = \"deny\"\n").is_empty(),
+            "empty array"
+        );
+        assert!(
+            deny_ignore_rows("[bans]\nmultiple-versions = \"warn\"\n").is_empty(),
+            "no ignore key"
+        );
+    }
+
+    #[test]
+    fn ignore_row_violation_accepts_and_rejects_the_right_shapes() {
+        // Accept: an exact spec string, and the advisory-id shape cargo-deny also
+        // accepts. Reject: each form that lets a row match more than the one
+        // triaged release — the table form drops `version` for the yanked
+        // allowlist, an operator or wildcard widens the range, and a bare name
+        // matches every release of the crate.
+        for row in ["\"a@1.2.3\"", "\"base64@0.23.1\"", "\"RUSTSEC-2026-0189\""] {
+            assert_eq!(ignore_row_violation(row), None, "must accept {row}");
+        }
+        for row in [
+            "{ crate = \"a\", version = \"=1.2.3\" }",
+            "\"a@>=1.2\"",
+            "\"a@1.2.*\"",
+            "\"a\"",
+            "a",
+        ] {
+            assert!(ignore_row_violation(row).is_some(), "must reject {row}");
+        }
     }
 
     #[test]
