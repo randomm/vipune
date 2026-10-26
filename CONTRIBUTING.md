@@ -137,6 +137,8 @@ Previously accepted 1600-byte blobs. Now correctly validates 1536 bytes (384 × 
 
 **PR titles must follow the same rule.** This repo squash-merges, so the PR title becomes the commit subject — an issue-number scope in a PR title breaks the changelog the same way.
 
+**Breaking changes** mark the `!` in the PR title (e.g. `feat!: drop legacy import format`) and the squash body carries a `BREAKING CHANGE: <migration note>` footer. That footer text is rendered verbatim under the entry in the changelog's Breaking Changes section, so write it for users: say what broke and how to migrate.
+
 ## Branch Naming
 
 Use this convention for feature branches:

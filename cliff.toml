@@ -25,10 +25,14 @@ trim = true
 conventional_commits = true
 filter_unconventional = true
 split_commits = false
-# Must stay FIRST: git-cliff stops at the first matching parser, so a parser
-# below "^feat" would never claim a breaking commit.
+# Keeps breaking commits from being dropped by any skip parser below; it does
+# not choose their group.
 protect_breaking_commits = true
 commit_parsers = [
+    # Parser position is what routes a breaking commit: git-cliff stops at the
+    # first match, so this entry must stay first.
+    # `^true$` matches git-cliff's stringified boolean for `breaking`.
+    # The `<!-- 0 -->` prefix sorts the group first; striptags removes it.
     { field = "breaking", pattern = "^true$", group = "<!-- 0 -->⚠ Breaking Changes" },
     { message = "^feat", group = "Features" },
     { message = "^fix", group = "Bug Fixes" },
