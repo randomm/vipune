@@ -154,38 +154,55 @@ impl MemoryStatus {
         self.ensure_valid_for_insert().is_ok()
     }
 
-    /// The two lifecycle states an existing row is moved *into* and a fresh row
-    /// may never be born as — the single source of that vocabulary. Both the
-    /// insert rule ([`Self::ensure_valid_for_insert`]) and the re-supersede guard
-    /// on the one supersede INSERT
-    /// ([`crate::sqlite::Database::supersede_with_importance`]) are written
-    /// against it — the guard through [`Self::is_retired`], which it calls rather
-    /// than restating the two spellings — so a fifth variant moves both rules
-    /// together instead of silently widening only one of them.
-    const RETIRED: [MemoryStatus; 2] = [MemoryStatus::Superseded, MemoryStatus::Deprecated];
-
     /// The verdict behind [`Self::ensure_valid_for_insert`]: `true` for the two
-    /// [`Self::RETIRED`] statuses. The storage re-supersede guard calls this
-    /// rather than keeping its own list of status spellings: `MemoryStatus::
-    /// from_str` matches case-insensitively, so a row written below the store's
-    /// validating edges (`import`, or a `Database::update` caller) can carry a
-    /// spelling like `Superseded` that a raw `== "superseded"` comparison would
-    /// wave through and fork the chain over. A status that does not parse is not
-    /// a retired one and stays supersedeable — failing closed there would make
-    /// such a row unreplaceable. Note `from_str` lowercases but does not trim:
-    /// padded garbage parses as nothing, so the guard lets it through by design.
+    /// lifecycle states an existing row is moved *into* and a fresh row may never
+    /// be born as — `superseded` (set by the supersede transaction's own UPDATE)
+    /// and `deprecated` (set by `prune`). This `match` is the single source of
+    /// that vocabulary, exhaustive over the enum: a fifth variant is a compile
+    /// error here rather than a silent widening of one rule only. Both the insert
+    /// rule ([`Self::ensure_valid_for_insert`]) and the re-supersede guard on the
+    /// one supersede INSERT
+    /// ([`crate::sqlite::Database::supersede_with_importance`]) are written
+    /// against it — the guard through [`Self::stored_is_retired`], which calls
+    /// this rather than restating any spellings.
+    ///
+    /// The storage guard reaches it through the string form: `MemoryStatus::
+    /// from_str` matches case-insensitively and trims, so a row written below the
+    /// store's validating edges (`import`, or a `Database::update` caller) can
+    /// carry a spelling like `" Superseded "` that a raw `== "superseded"`
+    /// comparison would wave through and fork the chain over.
     #[must_use = "the verdict is the reason to call this"]
     pub(crate) fn is_retired(self) -> bool {
-        Self::RETIRED.contains(&self)
+        match self {
+            MemoryStatus::Active | MemoryStatus::Candidate => false,
+            MemoryStatus::Superseded | MemoryStatus::Deprecated => true,
+        }
     }
 
-    /// [`Self::is_retired`] for the string a storage row carries. `Ok(true)`/
-    /// `Ok(false)` is the verdict for a status this enum can name; `Err` means
-    /// the column holds a spelling from outside the vocabulary, which the guard
-    /// treats as not retired.
+    /// [`Self::is_retired`] for the string a storage row carries: `true` when the
+    /// column names a retired status, `false` for a live one and for a spelling
+    /// outside the vocabulary.
+    ///
+    /// Non-parseable is *not* retired by design: failing closed there would make
+    /// such a row impossible to replace. Trimming before the parse is what makes
+    /// that carve-out about the *word* rather than the padding around it — a
+    /// padded retired spelling is refused (fail-closed), matching how the write
+    /// side's own parser handles whitespace.
+    #[must_use = "the verdict is the reason to call this"]
     pub(crate) fn stored_is_retired(stored: &str) -> bool {
-        Self::from_str(stored).is_ok_and(Self::is_retired)
+        Self::from_str(stored.trim()).is_ok_and(Self::is_retired)
     }
+
+    /// The retired statuses, derived from [`Self::is_retired`] rather than listed
+    /// beside it — used only to assert in a test that the `match` still names
+    /// exactly the retired pair, which the compiler cannot see on its own.
+    #[cfg(test)]
+    const ALL: [MemoryStatus; 4] = [
+        MemoryStatus::Active,
+        MemoryStatus::Candidate,
+        MemoryStatus::Superseded,
+        MemoryStatus::Deprecated,
+    ];
 
     /// # Errors
     ///
@@ -416,10 +433,11 @@ mod tests {
     }
 
     /// The guard's rejection set must be the enum's, not a second list: every
-    /// spelling `from_str` maps to a [`Self::RETIRED`] variant is refused, and a
+    /// spelling `from_str` maps to a retired variant is refused, and a
     /// non-canonical spelling is refused as firmly as the canonical one (issue
     /// #271 — a raw `== "superseded"` comparison admitted `"Superseded"`, which
-    /// `Database::update` and `import` can both write).
+    /// `Database::update` and `import` can both write). Padding around a retired
+    /// spelling is refused too, because the guard trims before parsing.
     #[test]
     fn stored_status_verdict_follows_the_enum_including_tolerant_spellings() {
         for spelling in [
@@ -429,26 +447,54 @@ mod tests {
             "deprecated",
             "Deprecated",
             "DePrEcAtEd",
+            " Superseded ",
+            "\tdeprecated\n",
         ] {
             assert!(
                 MemoryStatus::stored_is_retired(spelling),
                 "guard misses {spelling:?}"
             );
         }
-        // `from_str` lowercases but does not trim, so padded spellings parse as
-        // nothing and are not retired — recorded here so the guard's tolerance is
-        // pinned to the parser's real behaviour rather than to an assumption.
-        for spelling in [
-            "active",
-            "Candidate",
-            "DEPRECATED_",
-            "unknown",
-            " Superseded ",
-        ] {
+        // `from_str` lowercases and trims, so anything padded with real garbage
+        // parses as nothing and is not retired — recorded here so the guard's
+        // tolerance is pinned to the parser's real behaviour.
+        for spelling in ["active", "Candidate", "DEPRECATED_", "unknown"] {
             assert!(
                 !MemoryStatus::stored_is_retired(spelling),
                 "guard wrongly refuses {spelling:?}"
             );
+        }
+    }
+
+    /// `is_retired` is an exhaustive `match`, not a hand-counted list: it must
+    /// name exactly the two statuses the insert rule refuses, and the roster
+    /// derived from it must agree with the enum variant by variant. A fifth
+    /// variant added to the enum breaks the `[MemoryStatus; 4]` literal and every
+    /// hand-written list in these tests at once, rather than being quietly
+    /// accepted as live.
+    #[test]
+    fn retired_predicate_names_exactly_the_two_lifecycle_end_states() {
+        let retired: Vec<&str> = MemoryStatus::ALL
+            .iter()
+            .filter(|status| status.is_retired())
+            .map(MemoryStatus::as_str)
+            .collect();
+        assert_eq!(retired, ["superseded", "deprecated"]);
+        // The storage guard's string entry point agrees with the enum for every
+        // variant, in either casing, and for padding around each spelling.
+        for status in MemoryStatus::ALL {
+            for spelling in [status.as_str(), &status.as_str().to_uppercase()] {
+                assert_eq!(
+                    MemoryStatus::stored_is_retired(spelling),
+                    status.is_retired(),
+                    "string and enum disagree on {spelling:?}"
+                );
+                assert_eq!(
+                    MemoryStatus::stored_is_retired(&format!("  {spelling} \n")),
+                    status.is_retired(),
+                    "padding must not change the verdict for {spelling:?}"
+                );
+            }
         }
     }
 }

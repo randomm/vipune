@@ -159,23 +159,33 @@ fn seed_retired(
 }
 
 /// The guard reads the column through the enum, so a retired status in a
-/// spelling the write-side parser also accepts — `MemoryStatus::from_str`
-/// matches case-insensitively, and the storage tier takes the column as an
+/// spelling the write-side parser also accepts — `MemoryStatus::from_str` matches
+/// case-insensitively and trims, and the storage tier takes the column as an
 /// unvalidated `&str` — is refused exactly like the canonical one. A raw
-/// `== "superseded"` comparison admitted these and forked the chain (#271).
+/// `== "superseded"` comparison admitted these and forked the chain (#271). The
+/// refusal names the *canonical* spelling, never whatever the column held.
 #[test]
 fn superseding_a_row_whose_retired_status_is_spelled_oddly_is_refused() {
     let (_dir, mut store) = MemoryStore::test_store();
     let project = "retired-spelling";
-    for spelling in ["Superseded", "DEPRECATED"] {
+    // (column spelling, the canonical spelling the refusal must quote)
+    for (spelling, canonical) in [
+        ("Superseded", "superseded"),
+        ("DEPRECATED", "deprecated"),
+        (" Superseded ", "superseded"),
+    ] {
         let old_id = add(&mut store, project, &format!("fact {spelling}"), None);
         seed_retired_spelled(&mut store, &old_id, project, spelling, None);
 
         let msg =
             refuse_retired_supersede(&mut store, project, &old_id, &format!("{spelling} twin"));
         assert!(
-            msg.contains("Invalid input") && msg.contains(spelling),
-            "a tolerant spelling must still be refused by name: {msg}"
+            msg.contains("Invalid input") && msg.contains(&format!("'{canonical}'")),
+            "a tolerant spelling must be refused by its canonical status name: {msg}"
+        );
+        assert!(
+            !msg.contains(spelling),
+            "the refusal must not echo the raw column spelling {spelling:?}: {msg}"
         );
         assert_eq!(
             retired_row(&store, project, &old_id).superseded_by,
@@ -205,20 +215,124 @@ fn refuse_retired_supersede(
     old_id: &str,
     content: &str,
 ) -> String {
-    match store.supersede_with(&crate::memory::NewSupersedingMemory {
-        row: NewMemory {
-            project_id: project,
-            content,
-            metadata: None,
-            memory_type: MemoryType::Fact,
-            status: MemoryStatus::Active,
-        },
-        old_id,
-        importance: MemoryImportance::Medium,
-    }) {
+    match supersede(store, project, content, old_id, MemoryStatus::Active, None) {
         Err(err) => err.to_string(),
         Ok(new_id) => panic!("superseding a retired row was accepted: {new_id}"),
     }
+}
+
+/// The one `supersede_with` call these tests make, with the row fields that do
+/// not vary pinned here so each test names only what it is about.
+fn supersede(
+    store: &mut MemoryStore,
+    project: &str,
+    content: &str,
+    old_id: &str,
+    status: MemoryStatus,
+    metadata: Option<&str>,
+) -> Result<String, crate::errors::Error> {
+    store.supersede_with(&crate::memory::NewSupersedingMemory {
+        row: NewMemory {
+            project_id: project,
+            content,
+            metadata,
+            memory_type: MemoryType::Fact,
+            status,
+        },
+        old_id,
+        importance: MemoryImportance::Medium,
+    })
+}
+
+/// A target that does not exist *in this project* is `NotFound` — the scoped
+/// `WHERE` cannot tell an absent id from one owned by another project, so both
+/// answer the same way — and the refusal writes no replacement row. Deleting the
+/// `ok_or_else` arm of the guard's read turns this into "no such row" being
+/// accepted and a replacement inserted for a target that was never there.
+#[test]
+fn superseding_an_unknown_id_is_not_found_and_writes_nothing() {
+    let (_dir, mut store) = MemoryStore::test_store();
+    let project = "not-found-target";
+    let live = add(&mut store, project, "live fact", None);
+    // A row that exists, but under a different project: the same scoped read that
+    // misses an absent id misses this one, so the two must not diverge.
+    let other = add(&mut store, "not-found-other-project", "foreign fact", None);
+
+    for (label, missing) in [
+        ("absent id", "no-such-memory-id"),
+        ("other project", &other),
+    ] {
+        let err = supersede(
+            &mut store,
+            project,
+            "replacement",
+            missing,
+            MemoryStatus::Active,
+            None,
+        )
+        .expect_err(&format!("{label} must be refused"));
+        assert!(
+            matches!(err, crate::errors::Error::NotFound(_)),
+            "{label} must be NotFound, got {err}"
+        );
+        assert!(
+            err.to_string().contains("not found"),
+            "{label} must render as a not-found: {err}"
+        );
+    }
+
+    // Nothing was written for either refusal: the project still holds only the
+    // row this test added to it, and that row is untouched.
+    let rows = all_statuses(&store, project);
+    assert_eq!(
+        rows.len(),
+        1,
+        "a not-found supersede must insert no replacement row"
+    );
+    assert_eq!(rows[0].id, live, "the only row is the one this test added");
+    assert_eq!(
+        rows[0].superseded_by, None,
+        "a not-found supersede wrote a link"
+    );
+    assert_eq!(
+        retired_row(&store, "not-found-other-project", &other).status,
+        "active",
+        "a not-found supersede must not touch the foreign row"
+    );
+}
+
+/// The metadata rule runs on the supersede path too, and runs *before* the
+/// write: `supersede_with` validates the payload ahead of the embedding call and
+/// the transaction, so `Some("{not json")` is `InvalidInput` and the target is
+/// still live with no replacement beside it.
+#[test]
+fn supersede_with_rejects_invalid_metadata_and_writes_nothing() {
+    let (_dir, mut store) = MemoryStore::test_store();
+    let project = "bad-metadata";
+    let old_id = add(&mut store, project, "original fact", None);
+
+    let err = supersede(
+        &mut store,
+        project,
+        "replacement with bad metadata",
+        &old_id,
+        MemoryStatus::Active,
+        Some("{not json"),
+    )
+    .expect_err("invalid metadata JSON must be refused");
+    assert!(
+        err.to_string().contains("metadata"),
+        "the refusal must name metadata: {err}"
+    );
+
+    assert_eq!(
+        all_statuses(&store, project).len(),
+        1,
+        "a refused supersede must insert no replacement row"
+    );
+    let row = retired_row(&store, project, &old_id);
+    assert_eq!(row.status, "active", "the refusal retired the target");
+    assert_eq!(row.superseded_by, None, "the refusal wrote a link");
 }
 
 fn retired_row(store: &MemoryStore, project: &str, id: &str) -> crate::sqlite::Memory {
