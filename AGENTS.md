@@ -8,7 +8,7 @@ reciprocal-rank fusion), and expose the same store through an MCP server.
 The human-facing workflow (setup, testing, release process, debugging tips)
 lives in `CONTRIBUTING.md` — this file is agent-only doctrine.
 
-Last updated: 2026-10-25
+Last updated: 2026-10-26
 
 ## Context7 Protocol
 
@@ -161,9 +161,41 @@ Do NOT:
   `chore/issue-N-short-slug` (issue numbers in branch names are fine — the
   rule is about commit subjects and PR titles only).
 - Squash-merge by default. No force-push to `main`.
+- **Disk hygiene** — scratch work is the disk-filling habit, so it has rules.
+  They are stated as principles (the 200-PR test): they hold on any host, and
+  this file names no host path, mount point or quota size for that reason.
+  - **Leave `TMPDIR` as the environment sets it.** Never redirect temp or
+    scratch output into a shared system directory to get around a full disk
+    or a full quota — those directories carry no per-user limit and age out
+    only slowly, so a runaway task fills a filesystem other people share.
+    Report the full disk instead of routing around it.
+  - **Work in a git worktree, not a copy.** A scratch or review build is a
+    worktree of this repo (`.worktrees/` is gitignored) sharing one
+    `CARGO_TARGET_DIR` — for example the main checkout's `target/` directory —
+    never a full copy of the repo, which compiles a fresh target directory of
+    its own. Concurrent builds on the shared target directory wait on cargo's
+    build lock; that wait is acceptable and far cheaper than duplicate target
+    directories. The shared target directory belongs to the main checkout and
+    is never deleted by task or post-merge cleanup.
+  - **Reviewers: don't rebuild what CI already verified.** When CI is green on
+    the exact head under review, do not re-run full builds or test suites. If
+    the review question genuinely needs a build (a reproducer, a
+    platform-specific failure), build once in the shared target directory.
+    This is a reviewer-side rule only: the author of a change still runs the
+    whole Pre-Push Quality Gates chain locally before pushing.
+  - **A task cleans up after itself.** Any scratch a task creates — worktrees,
+    repo copies, probe files, temp directories, private build directories — is
+    removed by that task before it reports, and only paths it created itself:
+    never a shared or pre-existing directory it merely used.
 - **After a PR lands**: delete its branch (remote and local) and remove its
-  worktree — never leave stale branches or worktrees behind, because a stale
-  branch is one careless merge away from main.
+  worktree **including its build directory** — meaning a build directory
+  private to that worktree, which exists only if the worktree did not use the
+  shared target directory, never the shared one — along with any stash created for
+  that branch — drop them one at a time only after confirming the stash message
+  names the branch, because `git stash list` shares one stack across branches
+  and renumbers on every drop. Never leave stale branches, worktrees or their
+  build output behind, because a stale branch is one careless merge away from
+  main and a stale worktree keeps a whole `target/` directory alive.
 - **Release PRs**: release-plz opens `chore: release vX.Y.Z` PRs via
   `.github/workflows/release-plz.yml`; a release PR is armed — merging it
   publishes to crates.io irreversibly. If one must be abandoned, close it via
