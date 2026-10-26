@@ -36,6 +36,15 @@ mod tests;
 #[path = "store_memory_importance_tests.rs"]
 mod store_memory_importance_tests;
 
+/// Supersede-path tests for the MCP surface, split out of `tests.rs` for #271
+/// so that file stays inside the per-file cap. The `feature = "mcp"` half of the
+/// gate is load-bearing: the tool handler these tests drive does not exist in
+/// the `--no-default-features` lane CI runs, and without it the file compiles to
+/// zero tests while the orphan guard in `lib.rs` still counts it as wired.
+#[cfg(all(test, feature = "mcp"))]
+#[path = "supersede_tests.rs"]
+mod supersede_tests;
+
 #[cfg(all(test, feature = "mcp"))]
 #[path = "update_memory_importance_tests.rs"]
 mod update_memory_importance_tests;

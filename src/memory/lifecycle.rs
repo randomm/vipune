@@ -110,9 +110,9 @@ impl MemoryStatus {
     /// the supersede transaction's own UPDATE, by `prune`, or by
     /// `vipune update --status` — never states a fresh INSERT may carry, and the
     /// column has no CHECK constraint, so a store method is the only thing that
-    /// can enforce it. There is exactly one call site per write path, in the
-    /// body that owns that path's vocabulary, so no entry point above it can
-    /// admit a status the INSERT must not name:
+    /// can enforce it. The rule has exactly one call site per store write path,
+    /// in the body that owns that path's vocabulary, so no entry point above it
+    /// can admit a status the INSERT must not name:
     ///
     /// - [`MemoryStore::supersede_with`](crate::memory::MemoryStore::supersede_with)
     ///   — the only supersede body: a superseding row is a *new* row, and the
@@ -132,10 +132,11 @@ impl MemoryStatus {
     /// legal target there (it is what `prune` writes), and it rejects only
     /// `superseded`, which no caller may set outside the supersede transaction.
     ///
-    /// The CLI and MCP layers call this method too, before reaching the store,
-    /// only so the rejection reaches their client in their own error shape;
-    /// hand-written variants of this message are how the two wordings drifted
-    /// apart (issue #258).
+    /// The CLI (`handle_add`) and MCP (`store_memory`) layers call this method
+    /// too, before reaching the store, only so the rejection reaches their client
+    /// in their own error shape; hand-written variants of this message are how the
+    /// two wordings drifted apart (issue #258). They are prechecks, not the
+    /// enforcement: a library caller that skips them is stopped by the store copy.
     ///
     /// The predicate form of [`Self::ensure_valid_for_insert`], kept for the
     /// released public API (shipped in v0.15.4 — issue #258 must not remove it).
@@ -153,17 +154,36 @@ impl MemoryStatus {
         self.ensure_valid_for_insert().is_ok()
     }
 
+    /// The two lifecycle states an existing row is moved *into* and a fresh row
+    /// may never be born as — the vocabulary both the insert rule
+    /// ([`Self::ensure_valid_for_insert`]) and the re-supersede guard on the one
+    /// supersede INSERT
+    /// ([`crate::sqlite::Database::supersede_with_importance`]) are written
+    /// against, so a fifth variant moves both rules together instead of silently
+    /// widening only one of them.
+    const RETIRED: [MemoryStatus; 2] = [MemoryStatus::Superseded, MemoryStatus::Deprecated];
+
+    /// The verdict behind [`Self::ensure_valid_for_insert`]: `true` for the two
+    /// [`Self::RETIRED`] statuses. The storage guard compares the fetched column
+    /// against `RETIRED`'s own [`Self::as_str`] spellings rather than calling
+    /// this, because the storage layer keeps comparing strings (its convention
+    /// everywhere else) and must not pretend a stored row was ever validated.
+    #[must_use = "the verdict is the reason to call this"]
+    pub(crate) fn is_retired(self) -> bool {
+        Self::RETIRED.contains(&self)
+    }
+
     /// # Errors
     ///
     /// Returns [`Error::InvalidInput`] if `self` is not insertable.
     pub fn ensure_valid_for_insert(self) -> Result<(), Error> {
-        match self {
-            MemoryStatus::Active | MemoryStatus::Candidate => Ok(()),
-            _ => Err(Error::InvalidInput(format!(
+        if self.is_retired() {
+            return Err(Error::InvalidInput(format!(
                 "Status '{}' is not valid for new memory insertion. Must be 'active' or 'candidate'.",
                 self.as_str()
-            ))),
+            )));
         }
+        Ok(())
     }
 }
 

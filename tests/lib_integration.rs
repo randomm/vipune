@@ -2050,3 +2050,153 @@ fn test_touch_memories_increments_retrieval_count() {
 
     std::fs::remove_file(db_path).ok();
 }
+
+/// Issue #271: the add path shares one metadata validator with the supersede and
+/// update paths. Before it, `update` refused a blank or non-JSON document while
+/// `add`/`ingest` stored it verbatim, so the same string was accepted on one
+/// entry point and rejected on another. `None` still means "no labels".
+#[test]
+fn test_add_with_invalid_metadata_is_rejected() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
+
+    for (meta, expected) in [
+        (Some("   "), "metadata cannot be empty"),
+        (Some("{this is not json"), "invalid metadata JSON"),
+    ] {
+        let err = store
+            .add_with_conflict(
+                &project_id,
+                "content with bad metadata",
+                meta,
+                true,
+                MemoryType::Fact,
+                MemoryStatus::Active,
+            )
+            .expect_err("a blank or non-JSON document must be refused on the add path");
+        match err {
+            Error::InvalidInput(msg) => assert!(
+                msg.contains(expected),
+                "refused for the wrong reason ({expected}): {msg}"
+            ),
+            other => panic!("Expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    // The accepted spelling is stored verbatim, byte for byte: the validator is a
+    // gate, not a codec, so the caller's own formatting reaches the column.
+    let stored_meta = r#"{"Spaced": "  value  ", "n": 1}"#;
+    let id = match store
+        .ingest(
+            &project_id,
+            "content with good metadata",
+            Some(stored_meta),
+            IngestPolicy::Force,
+        )
+        .expect("valid metadata must be accepted")
+    {
+        vipune::AddResult::Added { id } => id,
+        other => panic!("Expected Added, got {other:?}"),
+    };
+    let memory = store
+        .get(&id, &project_id)
+        .expect("Failed to get")
+        .expect("row stored");
+    assert_eq!(memory.metadata.as_deref(), Some(stored_meta));
+
+    std::fs::remove_file(db_path).ok();
+}
+
+/// Issue #271: `NewSupersedingMemory` is `#[non_exhaustive]` and re-exported, so
+/// before its constructor existed an external crate could not build one and
+/// `MemoryStore::supersede_with` was unreachable from outside vipune even though
+/// the method is public. This drives the whole path the way a consumer does:
+/// `::new` for the default `medium` level, `with_importance` to name another,
+/// then `supersede_with`, and reads both rows back through the public read API.
+#[test]
+fn test_supersede_with_through_the_constructor_from_outside_the_crate() {
+    let temp_dir = env::temp_dir();
+    let db_path = temp_dir.join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+
+    let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
+
+    let old_id = match store.add_with_conflict(
+        &project_id,
+        "original memory content",
+        None,
+        true,
+        MemoryType::Fact,
+        MemoryStatus::Active,
+    ) {
+        Ok(vipune::AddResult::Added { id }) => id,
+        Ok(other) => panic!("Expected Added, got {other:?}"),
+        Err(e) => panic!("Failed to add memory: {e}"),
+    };
+
+    let new_id = store
+        .supersede_with(&vipune::NewSupersedingMemory::new(
+            vipune::NewMemory {
+                project_id: &project_id,
+                content: "replacement via the constructor",
+                metadata: Some(r#"{"via": "new"}"#),
+                memory_type: MemoryType::Fact,
+                status: MemoryStatus::Candidate,
+            },
+            &old_id,
+        ))
+        .expect("the constructor must yield a row supersede_with accepts");
+
+    let replacement = store
+        .get(&new_id, &project_id)
+        .expect("Failed to get")
+        .expect("replacement stored");
+    assert_eq!(
+        replacement.status, "candidate",
+        "the row's own status is used"
+    );
+    assert_eq!(replacement.importance, "medium", "::new defaults the level");
+    assert_eq!(replacement.content, "replacement via the constructor");
+
+    // `with_importance` overrides the default rather than replacing the row.
+    let high_id = store
+        .supersede_with(
+            &vipune::NewSupersedingMemory::new(
+                vipune::NewMemory {
+                    project_id: &project_id,
+                    content: "replacement at a named level",
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status: MemoryStatus::Active,
+                },
+                &new_id,
+            )
+            .with_importance(vipune::MemoryImportance::High),
+        )
+        .expect("with_importance must carry the level through to the INSERT");
+    let named = store
+        .get(&high_id, &project_id)
+        .expect("Failed to get")
+        .expect("second replacement stored");
+    assert_eq!(named.importance, "high");
+    assert_eq!(named.status, "active");
+
+    // The chain the transaction owns: each old row points at its replacement.
+    let replaced = store
+        .get(&old_id, &project_id)
+        .expect("Failed to get")
+        .expect("superseded row readable");
+    assert_eq!(replaced.status, "superseded");
+    assert_eq!(replaced.superseded_by.as_ref(), Some(&new_id));
+
+    std::fs::remove_file(db_path).ok();
+}

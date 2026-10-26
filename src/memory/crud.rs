@@ -289,15 +289,9 @@ impl MemoryStore {
             ));
         }
 
-        // Validate metadata: reject empty strings and invalid JSON
-        if let Some(meta) = metadata {
-            if meta.trim().is_empty() {
-                return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
-            }
-            // Validate that metadata is valid JSON
-            serde_json::from_str::<serde_json::Value>(meta)
-                .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
-        }
+        // Metadata: the one body that owns the blank/JSON rule, shared with the
+        // add and supersede paths so the three cannot word the refusal apart.
+        Self::validate_metadata(metadata)?;
 
         // Validate status if provided - reject "superseded"
         if let Some(s) = status

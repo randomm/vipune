@@ -162,6 +162,39 @@ impl MemoryStore {
         self.embedder = Some(engine);
     }
 
+    /// The one body of the metadata rule: a *present* value must be non-blank
+    /// and parse as JSON.
+    ///
+    /// Called by every store-layer write that takes metadata — add, supersede
+    /// and update (`rg 'validate_metadata' src/`) — because three hand-written
+    /// copies were the alternative: supersede and update each had their own
+    /// wording and the add path had none, so the same string was accepted on one
+    /// entry point and refused on another (#271).
+    ///
+    /// `None` is accepted: metadata is an optional column, only a present value
+    /// has to be JSON. The accepted document is stored exactly as the caller
+    /// passed it — the parse is a gate, never a re-serialisation.
+    ///
+    /// The storage tier below this validates nothing: `Database::insert*`,
+    /// `Database::update` and `import` take the string as given, because their
+    /// input is a dump or an already-validated payload rather than a caller
+    /// argument.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for a blank string or a document that is not JSON.
+    pub(crate) fn validate_metadata(metadata: Option<&str>) -> Result<(), Error> {
+        let Some(meta) = metadata else {
+            return Ok(());
+        };
+        if meta.trim().is_empty() {
+            return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
+        }
+        serde_json::from_str::<serde_json::Value>(meta)
+            .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {e}")))?;
+        Ok(())
+    }
+
     /// Validate input length (rejects empty and whitespace-only inputs).
     pub(crate) fn validate_input_length(text: &str) -> Result<(), Error> {
         if text.trim().is_empty() {

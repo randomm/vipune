@@ -24,3 +24,9 @@ mod tests;
 
 #[cfg(test)]
 mod batch_tests;
+
+// Wired from `memory::tests` (it shares that module's `crud` test helpers), but
+// declared here: the orphan guard in `lib.rs` only reads this directory's files.
+#[cfg(test)]
+#[path = "supersede_tests.rs"]
+mod supersede_tests;
