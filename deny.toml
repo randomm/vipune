@@ -26,12 +26,20 @@ unused-ignored-advisory = "deny"
 # Nothing ignored: rmcp 1.8.0 is past the 1.4.0 fix for RUSTSEC-2026-0189
 # (Host-header validation, Streamable HTTP transport); vipune's MCP server is
 # stdio-only (transport-io), which the advisory says is unaffected.
+#
+# A yanked release is allowlisted here too, but only in spec-string form
+# ("crate@x.y.z"): the `{ crate, version }` table form discards `version` for
+# the yanked allowlist, so it allows every release of that crate, and a row
+# pinned to a version that is not the yanked one still mutes the yank.
+# docs/testing.md "Triaging a yanked release" has the details.
 ignore = []
 
 [bans]
-# Cargo.lock resolves several copies of base64 and webpki-roots through
-# independent upstream constraints; deduplicating needs upstream changes.
-multiple-versions = "allow"
+# Duplicates are reported, not muted: "allow" would silence the lint for the
+# whole graph. Cargo.lock resolves several copies of base64 and webpki-roots
+# through independent upstream constraints, so deduplicating needs upstream
+# changes and the gate stays green on the warning until then.
+multiple-versions = "warn"
 features = [
     # vipune decodes the `embedding` field of untrusted import files
     # (src/commands/import.rs) via base64 0.23, which Cargo.toml opts out of

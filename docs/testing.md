@@ -317,8 +317,11 @@ If any test fails, fix it locally. CI verifies, but does not discover.
 
 ## Dependency Advisory Gate
 
-CI also runs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) against the committed
-`Cargo.lock`, on pull requests, pushes to `main` and the nightly schedule. It is not a test suite
+CI also runs [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) **0.20.2** against the
+committed `Cargo.lock`, on pull requests, pushes to `main` and the nightly schedule. The version is
+pinned by the `tool: cargo-deny@0.20.2` line of the `deny` job in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) so the gate's verdict cannot change
+mid-PR; `test_ci_deny_pin_matches_the_docs` fails if the two disagree. It is not a test suite
 — it fails the build for a dependency that has a RustSec advisory, a yanked release, or a denied
 feature. Configuration lives in [`deny.toml`](../deny.toml) at the repo root.
 
@@ -375,6 +378,19 @@ it — then:
    (the only mode that reads `maximum-db-staleness`): delete the clone under
    `~/.cargo/advisory-dbs/`, rerun online, and let the fetch refresh it. An online run that cannot
    reach the database fails with a fetch error instead.
+
+### Triaging a yanked release
+
+A yanked release is allowlisted by an `ignore` row in `deny.toml` written in **spec-string** form,
+`"crate@x.y.z"`, never in the `{ crate, version }` table form. cargo-deny sorts `[advisories]`
+`ignore` rows into advisory-id rows and yanked rows by shape (`advisories/cfg.rs:163-232`), and the
+string branch splits on `@` into a name plus an exact version requirement while the table branch
+reads `crate`, `name` and `reason` and drops `version` entirely (`cfg/package_spec.rs:66-96`), so a
+table row matches by name alone and mutes every release of that crate. Verified against 0.20.2: with
+`ppv-lite86 0.2.11` yanked in the lockfile, the spec string `"ppv-lite86@0.2.10"` still fails the
+gate (`error[yanked]`), while `{ crate = "ppv-lite86", version = "=0.2.10" }` passes it. The spec
+string also keeps `unused-ignored-advisory = "deny"` meaningful for yank rows — an unrelated pin is
+reported as `yanked-not-detected` — which the table form cannot do.
 
 ## See Also
 
