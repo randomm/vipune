@@ -248,12 +248,17 @@ impl MemoryStore {
 
 /// Test-only: a [`MemoryStore`] and the temp directory its database file lives in.
 ///
-/// The store borrows nothing from the dir, so both could not be fields of one
-/// struct without an `unsafe` self-referential layout; owning them together is
-/// what makes the leak impossible while keeping the call sites of
-/// [`MemoryStore::test_store`] unchanged (`Deref`/`DerefMut` forward the store's
-/// methods). The dir is declared first so it drops *after* the store: SQLite's
-/// file handle must close before the directory is unlinked.
+/// The two are owned by one struct so the directory cannot be left behind: the
+/// only way to drop the store is to drop the dir with it, which is the property
+/// #278 needed — the earlier helpers returned the pair as a tuple and every
+/// call site had to bind both halves to get it.
+///
+/// `Deref`/`DerefMut` forward the store's methods so the ~26 existing
+/// `let store = MemoryStore::test_store();` call sites stay unchanged (the
+/// tuple form `test_db_path` uses would destructure at every one). The dir is
+/// declared first so it drops *after* the store: SQLite's file handle must
+/// close before the directory is unlinked, which is why the field order here is
+/// load-bearing and a `let (dir, store) = …` destructuring would not be.
 #[cfg(test)]
 pub(crate) struct TestStore {
     _dir: tempfile::TempDir,
