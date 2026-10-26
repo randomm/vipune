@@ -14,6 +14,8 @@ body = """
     {% for commit in commits %}
         - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
             {{ commit.message | upper_first }}\
+            {%- if commit.breaking_description | trim and commit.breaking_description != commit.message %}{{ "\n" }}    {{ commit.breaking_description | trim | indent(prefix="    ", first=false) }}\
+            {%- endif %}\
     {% endfor %}
 {% endfor %}\n
 """
@@ -23,7 +25,11 @@ trim = true
 conventional_commits = true
 filter_unconventional = true
 split_commits = false
+# Must stay FIRST: git-cliff stops at the first matching parser, so a parser
+# below "^feat" would never claim a breaking commit.
+protect_breaking_commits = true
 commit_parsers = [
+    { field = "breaking", pattern = "^true$", group = "<!-- 0 -->⚠ Breaking Changes" },
     { message = "^feat", group = "Features" },
     { message = "^fix", group = "Bug Fixes" },
     { message = "^doc", group = "Documentation" },
