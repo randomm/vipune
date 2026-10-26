@@ -94,7 +94,7 @@ fn supersede_pair(
 
 #[test]
 fn handle_add_writes_the_importance_the_operator_named() {
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     // `medium` is the CLI's own default (`#[arg(long, default_value = "medium")]`),
     // so the omitted-flag case is this same call — the level must reach the
     // column either way, never be dropped on the way down.
@@ -117,7 +117,7 @@ fn handle_add_superseding_writes_the_importance_on_the_new_row() {
     // `--supersedes` is a second, independent add path: it creates its row
     // inside the store's supersede transaction, so that INSERT needs the level
     // bound too.
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     assert_eq!(
         add(&mut store, "sup", "original fact", "medium", None),
         ExitCode::SUCCESS
@@ -157,7 +157,7 @@ fn handle_add_superseding_writes_the_status_the_operator_named() {
     // store call that hardcoded `active`, so `--status candidate` was accepted
     // and silently stored as `active`. The replacement row is read back through
     // `get` because `list`/`search` would filter a candidate out entirely.
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     assert_eq!(
         add(&mut store, "st", "original fact", "medium", None),
         ExitCode::SUCCESS
@@ -208,7 +208,7 @@ fn handle_add_superseding_defaults_the_new_row_to_active() {
     // same call the CLI makes for a plain `--supersedes`, so the superseding row
     // must still land `active` — and, unlike the candidate case above, stay
     // visible to the default read path.
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     assert_eq!(
         add(&mut store, "sup-active", "original fact", "medium", None),
         ExitCode::SUCCESS
@@ -246,7 +246,7 @@ fn handle_add_superseding_rejects_a_status_that_is_not_insertable() {
     // `superseded`/`deprecated` never reach the supersede path: the insert
     // precheck rejects them first, with or without --supersedes. The old row's
     // `superseded` is set by the supersede transaction, never asked for.
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
     assert_eq!(
         add(&mut store, "st-bad", "original fact", "medium", None),
         ExitCode::SUCCESS

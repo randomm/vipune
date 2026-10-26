@@ -3,27 +3,25 @@
 mod migration_tests {
     use crate::sqlite::Database;
     use crate::sqlite::identity;
+    use crate::sqlite::test_fixtures::create_test_db;
     use tempfile::TempDir;
-
-    /// Open a store on an owned temp dir; the dir is returned so the caller
-    /// keeps it alive (and removes it) instead of leaking it (issue #278).
-    fn create_test_db() -> (TempDir, Database) {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        let db = Database::open(&path).unwrap();
-        (dir, db)
-    }
 
     // --- Migration v6: model identity table (issue #217) ---
 
     #[test]
-    fn test_fresh_db_has_user_version_6() {
+    fn test_fresh_db_has_latest_user_version() {
         let (_dir, db) = create_test_db();
         let version: i32 = db
             .conn()
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6, "fresh databases must be at schema v6");
+        // The roster-derived value, so the assertion tracks the migration roster
+        // instead of a literal that has to be remembered on every append.
+        assert_eq!(
+            version,
+            crate::sqlite::migrations::total_migrations(),
+            "fresh databases must be at the latest schema version"
+        );
     }
 
     #[test]
@@ -86,6 +84,9 @@ mod migration_tests {
         drop(conn);
 
         // Open via Database: migrations must run v6 and preserve the row.
+        // The row is seeded at v5 deliberately, so this test pins the v5→v6 step
+        // itself and the target stays the literal the roster pin in
+        // `migrations.rs` guards.
         let db = Database::open(&path).unwrap();
         let version: i32 = db
             .conn()

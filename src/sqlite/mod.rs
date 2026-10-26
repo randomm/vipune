@@ -24,6 +24,19 @@ pub mod update;
 
 pub use migration_types::MigrationReport;
 
+/// Test-only storage fixtures: one declaration of the `(TempDir, …)` contract
+/// every test in this module needs. The directory is *returned* rather than
+/// forgotten, so the caller's binding owns it and the store's file is removed
+/// when the test returns (issue #278 — the leaked dirs were what exhausted the
+/// operator's temp quota and made unrelated runs fail with SQLite `disk I/O
+/// error`).
+///
+/// Call sites bind both halves — `let (_dir, db) = create_test_db();` — and the
+/// dir must outlive the handle, which is why the pair is returned together
+/// rather than the helper dropping the dir on the way out.
+#[cfg(test)]
+pub(crate) mod test_fixtures;
+
 #[cfg(test)]
 mod tests;
 
@@ -413,15 +426,18 @@ impl Database {
     /// bootstraps schema and migrations, and a `pub` variant of this one would
     /// hand library consumers a write-capable handle (via `conn()`) over a store
     /// whose shape nothing checked. Callers that need it are in-crate — the
-    /// doctor commands and, since #278, the missing-FTS-table precheck test in
-    /// `sqlite::fts_migration_tests`, which wraps the very connection that
-    /// dropped `memories_fts` by hand (`Database::open` would resurrect it).
+    /// doctor commands (`commands/doctor.rs`, `commands/doctor_fts.rs`) and, since
+    /// #278, the missing-FTS-table precheck test in
+    /// `sqlite::tests::fts_migration` (wired by `#[path]` from `sqlite/tests.rs`),
+    /// which wraps the very connection that dropped `memories_fts` by hand
+    /// (`Database::open` would resurrect it).
     ///
-    /// The doc attribute, not `pub`, is what keeps it off the shipped surface;
-    /// the `cfg_attr` is the repo's idiom for an item whose only callers are
-    /// `#[cfg(test)]` (`temporal.rs`, `memory/batch.rs`), so the non-test lib
-    /// build does not report it dead while the compiler still would if a real
-    /// caller disappeared from the test tree.
+    /// The doc attribute, not `pub`, is what keeps it off the shipped surface.
+    /// The `cfg_attr` is the same one `insert_with_time` above carries: the *lib*
+    /// target compiles `src/sqlite/` without `src/commands/` (the binary's module
+    /// tree is declared in `main.rs`), so a lib-only build — `--no-default-features`
+    /// clippy, or any `vipune` consumer — would otherwise report a constructor the
+    /// doctor commands do call.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn from_conn(conn: Connection) -> Self {
         Self { conn }

@@ -151,17 +151,8 @@ pub fn build_filters<'p>(
 mod tests {
     use super::*;
     use crate::embedding::EMBEDDING_DIMS;
+    use crate::sqlite::test_fixtures::create_test_db;
     use rusqlite::params;
-    use tempfile::TempDir;
-
-    /// Open a store on an owned temp dir; the dir is returned so the caller
-    /// keeps it alive (and removes it) instead of leaking it (issue #278).
-    fn create_test_db() -> (TempDir, super::super::Database) {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        let db = super::super::Database::open(&path).unwrap();
-        (dir, db)
-    }
 
     #[test]
     fn test_map_row_to_memory() {

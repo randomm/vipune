@@ -183,16 +183,7 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
-    /// Open a store on an owned temp dir; the dir is returned so the caller
-    /// keeps it alive (and removes it) instead of leaking it (issue #278).
-    fn create_test_db() -> (TempDir, Database) {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        let db = Database::open(&path).unwrap();
-        (dir, db)
-    }
+    use crate::sqlite::test_fixtures::create_test_db;
 
     #[test]
     fn test_validate_limit_zero() {

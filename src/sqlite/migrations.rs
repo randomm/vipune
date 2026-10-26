@@ -186,22 +186,19 @@ fn migrations() -> Vec<MigrationFn> {
     ]
 }
 
-fn total_migrations() -> i32 {
-    migrations().len() as i32
-}
-
-/// The schema version a freshly opened database ends up at — the length of the
-/// append-only roster above.
+/// The size of the append-only migration roster — the schema version a freshly
+/// opened database ends up at. Single spelling of that fact: `run_migrations`
+/// compares against it, and tests that need a store *already* at the latest
+/// version pin `user_version` to it rather than to a literal (a test that
+/// hard-codes the old value would run a real migration inside its contended
+/// window — `run_migrations` takes `BEGIN EXCLUSIVE` — and measure the open
+/// instead of the statement it means to test). `migrations.rs`'s own roster pin
+/// (`assert_eq!(total_migrations(), 6)`) is what fails loudly if the two ever
+/// disagree about which version that is.
 ///
-/// Tests that need a store *already* at the latest version pin `user_version`
-/// to this rather than to a literal: a migration appended to `migrations()`
-/// changes the value, and a test that hard-codes the old one would then run a
-/// real migration inside its contended window (`run_migrations` takes
-/// `BEGIN EXCLUSIVE`) and measure the open instead of the statement it means
-/// to test. A literal fails silently in that scenario; this fails loudly.
-#[cfg_attr(not(test), allow(dead_code))] // only test helpers read it
-pub(crate) fn latest_schema_version() -> i32 {
-    total_migrations()
+/// `pub(crate)` (not `#[cfg(test)]`) because `run_migrations` is its caller too.
+pub(crate) fn total_migrations() -> i32 {
+    migrations().len() as i32
 }
 
 /// Run pending migrations on every database open.

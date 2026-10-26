@@ -48,7 +48,7 @@ fn test_ingest_at_max_input_length_succeeds() {
 #[test]
 fn test_ingest_at_max_input_length_plus_one_fails() {
     // Validation happens before embedding, so no model needed
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
 
     // Create input one character over MAX_INPUT_LENGTH
     let text = "x".repeat(MAX_INPUT_LENGTH + 1);
@@ -68,7 +68,7 @@ fn test_ingest_at_max_input_length_plus_one_fails() {
 #[test]
 fn test_ingest_whitespace_only_rejected_with_explicit_error() {
     // Validation happens before embedding, so no model needed
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
 
     let whitespace_inputs = vec!["   ", "\t\n", " \t \n "];
 

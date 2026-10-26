@@ -189,7 +189,8 @@ impl MemoryStore {
     }
 
     #[cfg(test)]
-    /// Create a MemoryStore from a pre-populated Database with the test embedder wired in.
+    /// A store over a caller-supplied `Database`, with the test embedder wired
+    /// in.
     ///
     /// For tests that need to insert data before creating the store:
     /// 1. Call [`test_db_path`] to get a temp database path
@@ -202,25 +203,20 @@ impl MemoryStore {
     }
 
     #[cfg(test)]
-    /// Create a fully-configured MemoryStore for tests with TempDir, Database, and fake embedder.
+    /// The one store-builder fixture: an owned temp dir and a `Database` opened
+    /// on it, with the fake embedder wired in. Everything that needs a
+    /// temp-backed store in a test goes through here.
     ///
-    /// Replaces the 3-line boilerplate (TempDir + Database::open + from_db + test_embedder)
-    /// that was duplicated across 12+ test functions.
-    ///
-    /// The TempDir is *owned* by the returned [`TestStore`] and removed when it
-    /// drops, so a test run leaves nothing behind in `TMPDIR`. Earlier revisions
-    /// `std::mem::forget`'d the dir to keep the file alive past the helper —
-    /// which leaked one SQLite DB per call into the operator's temp quota.
-    /// Bind the whole return value (`let store = MemoryStore::test_store();`):
-    /// a `let (dir, store) = …` destructuring would drop the dir while the
-    /// store's connection is still open.
-    pub(crate) fn test_store() -> TestStore {
+    /// The `TempDir` is *returned* rather than forgotten (issue #278), so the
+    /// caller binds both halves — `let (_dir, store) = …` — and the directory is
+    /// removed when the test returns. Both halves have to be bound together: the
+    /// dir must outlive the store, since SQLite's handle closes only when the
+    /// store drops, and removing the file underneath an open handle is the
+    /// `disk I/O error` this fixture exists to avoid.
+    pub(crate) fn test_store() -> (tempfile::TempDir, MemoryStore) {
         let (dir, path) = Self::test_db_path();
         let db = Database::open(&path).expect("open test database");
-        TestStore {
-            _dir: dir,
-            store: Self::from_db_with_test_embedder(db),
-        }
+        (dir, Self::from_db_with_test_embedder(db))
     }
 
     /// Replace the test-only embedder (test builds only) with a new one.
@@ -236,64 +232,12 @@ impl MemoryStore {
     /// Callers open a `Database` on the returned path, insert data, then
     /// create a `MemoryStore` via `from_db` + `test_embedder`.
     ///
-    /// The `TempDir` is returned rather than forgotten (the shape the
-    /// `create_test_db()` helpers in `src/commands/*_tests.rs` already use), so
-    /// the directory is removed when the caller's binding drops.
+    /// The `TempDir` is returned rather than forgotten (issue #278), so the
+    /// directory is removed when the caller's binding drops.
     pub(crate) fn test_db_path() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::TempDir::new().expect("create temp dir");
         let path = dir.path().join("test.db");
         (dir, path)
-    }
-}
-
-/// Test-only: a [`MemoryStore`] and the temp directory its database file lives in.
-///
-/// The two are owned by one struct so the directory cannot be left behind: the
-/// only way to drop the store is to drop the dir with it, which is the property
-/// #278 needed — the earlier helpers returned the pair as a tuple and every
-/// call site had to bind both halves to get it.
-///
-/// `Deref`/`DerefMut` forward the store's methods so the ~26 existing
-/// `let store = MemoryStore::test_store();` call sites stay unchanged (the
-/// tuple form `test_db_path` uses would destructure at every one). The dir is
-/// declared first so it drops *after* the store: SQLite's file handle must
-/// close before the directory is unlinked, which is why the field order here is
-/// load-bearing and a `let (dir, store) = …` destructuring would not be.
-#[cfg(test)]
-pub(crate) struct TestStore {
-    _dir: tempfile::TempDir,
-    store: MemoryStore,
-}
-
-#[cfg(test)]
-impl TestStore {
-    /// The directory holding this store's database file.
-    ///
-    /// Leak tests need to observe the dir's *name* to prove it disappears on
-    /// drop; without an accessor they would have to guess at it from the shared
-    /// temp directory, where every other test's live dirs are indistinguishable
-    /// noise.
-    pub(crate) fn dir_path(&self) -> &std::path::Path {
-        self._dir.path()
-    }
-}
-
-// Both impls sit under `#[cfg(test)]` like the struct itself: a non-test build
-// of this file (e.g. `cargo check --no-default-features`) still compiles it,
-// and an un-gated impl would name a type that does not exist there.
-#[cfg(test)]
-impl std::ops::Deref for TestStore {
-    type Target = MemoryStore;
-
-    fn deref(&self) -> &MemoryStore {
-        &self.store
-    }
-}
-
-#[cfg(test)]
-impl std::ops::DerefMut for TestStore {
-    fn deref_mut(&mut self) -> &mut MemoryStore {
-        &mut self.store
     }
 }
 

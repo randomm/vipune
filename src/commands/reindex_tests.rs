@@ -250,7 +250,7 @@ fn test_counters_match_seeded_data() {
 
 #[test]
 fn test_database_update_embedding_does_not_touch_updated_at() {
-    let db = MemoryStore::test_store();
+    let (_dir, db) = MemoryStore::test_store();
     let emb = test_fake_embedder("orig").unwrap();
     let id = db
         .db

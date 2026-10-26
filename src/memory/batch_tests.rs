@@ -7,7 +7,7 @@ use super::crud::test_fake_embedder;
 
 #[test]
 fn test_batch_ingest_empty_batch() {
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
 
     let result = store
         .batch_ingest("test-project", vec![], IngestPolicy::ConflictAware)
@@ -214,7 +214,7 @@ fn test_batch_ingest_policy_force() {
 
 #[test]
 fn test_batch_ingest_invalid_inputs() {
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
 
     // Create oversized input (100,001 characters)
     let too_long = "a".repeat(100_001);
@@ -262,7 +262,7 @@ fn test_batch_ingest_invalid_inputs() {
 
 #[test]
 fn test_batch_ingest_all_errors() {
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
 
     // Create a batch where every item fails validation
     let items = vec![
@@ -288,7 +288,7 @@ fn test_batch_ingest_all_errors() {
 
 #[test]
 fn test_batch_ingest_metadata_preservation() {
-    let mut store = MemoryStore::test_store();
+    let (_dir, mut store) = MemoryStore::test_store();
 
     let items = vec![
         ("content with metadata", Some(r#"{"tag": "important"}"#)),

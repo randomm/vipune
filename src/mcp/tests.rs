@@ -9,26 +9,15 @@ use crate::memory::{MemoryStore, NewMemory, UpdateParams};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
-/// Create a test MemoryStore with a fake embedder (no ONNX model load), plus
-/// the temp dir its database lives in.
+/// Create a test store for the MCP tests: an owned temp dir plus the
+/// [`MemoryStore`] to wrap in an `Arc<Mutex<…>>`.
 ///
-/// Uses `from_db_with_test_embedder` so the shared `test_embedder` field is wired in,
-/// avoiding the real ONNX session that caused race-condition flakes when multiple
-/// async tests loaded the model concurrently.
-///
-/// The `TempDir` is returned rather than forgotten (the shape
-/// `MemoryStore::test_db_path` uses since #278), so callers bind it — usually
-/// as `let (_dir, store) = …` — and the directory is removed when they return.
-/// Earlier revisions `std::mem::forget`'d it, which leaked one SQLite DB per
-/// test into the operator's `TMPDIR`.
+/// A thin forward to [`MemoryStore::test_store`], the one store-builder fixture:
+/// there is a single place that decides how a temp-backed store is built and
+/// disposed, rather than two overlapping builders with opposite binding
+/// contracts (which is what made the #278 leak guard a two-file search).
 pub(super) fn create_test_store() -> (TempDir, MemoryStore) {
-    use crate::sqlite::Database;
-
-    let dir = TempDir::new().expect("create temp dir");
-    let path = dir.path().join("test.db");
-
-    let db = Database::open(&path).expect("open test database");
-    (dir, MemoryStore::from_db_with_test_embedder(db))
+    MemoryStore::test_store()
 }
 
 /// Seed an active row at a chosen level through the wrapper, so a

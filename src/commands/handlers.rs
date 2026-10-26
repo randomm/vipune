@@ -462,7 +462,7 @@ mod tests {
     /// and `--no-touch` leaves the counter untouched.
     #[test]
     fn test_get_json_surfaces_retrieval_telemetry() {
-        let mut store = MemoryStore::test_store();
+        let (_dir, mut store) = MemoryStore::test_store();
         let AddResult::Added { id } = store
             .ingest("proj", "a memory with telemetry", None, IngestPolicy::Force)
             .unwrap()

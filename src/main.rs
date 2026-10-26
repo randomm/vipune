@@ -622,7 +622,7 @@ mod tests {
     // Exercise MemoryStore::batch_ingest to eliminate dead_code warnings
     #[test]
     fn test_batch_ingest_integration_compiles() {
-        let mut store = MemoryStore::test_store();
+        let (_dir, mut store) = MemoryStore::test_store();
 
         // Test with empty batch
         let result = store.batch_ingest("test-project", vec![], IngestPolicy::Force);
