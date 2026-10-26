@@ -14,6 +14,8 @@ body = """
     {% for commit in commits %}
         - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
             {{ commit.message | upper_first }}\
+            {%- if commit.breaking_description | trim and commit.breaking_description != commit.message %}{{ "\n" }}    {{ commit.breaking_description | trim | indent(prefix="    ", first=false) }}\
+            {%- endif %}\
     {% endfor %}
 {% endfor %}\n
 """
@@ -23,7 +25,16 @@ trim = true
 conventional_commits = true
 filter_unconventional = true
 split_commits = false
+# Stops a matching skip parser from dropping a breaking commit, wherever that
+# parser sits; it does not route the commit — routing depends only on the
+# breaking parser staying first. On this config it guards future skip parsers.
+protect_breaking_commits = true
 commit_parsers = [
+    # Parser position is what routes a breaking commit: git-cliff stops at the
+    # first match, so this entry must stay first.
+    # `^true$` matches git-cliff's stringified boolean for `breaking`.
+    # The `<!-- 0 -->` prefix sorts the group first; striptags removes it.
+    { field = "breaking", pattern = "^true$", group = "<!-- 0 -->⚠ Breaking Changes" },
     { message = "^feat", group = "Features" },
     { message = "^fix", group = "Bug Fixes" },
     { message = "^doc", group = "Documentation" },
