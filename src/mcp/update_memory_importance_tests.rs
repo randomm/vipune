@@ -17,7 +17,7 @@ mod update_memory_importance {
     use crate::mcp::tests::{seed_row, seed_row_at, tool_result_id};
     use crate::mcp::tools::ToolHandler;
     use crate::memory::MemoryStore;
-    use crate::memory::lifecycle::MemoryImportance;
+    use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
     use serde_json::json;
     use std::sync::{Arc, Mutex};
 
@@ -240,5 +240,243 @@ mod update_memory_importance {
             serde_json::from_value(serde_json::to_value(&named).expect("serialize"))
                 .expect("round trip");
         assert_eq!(again.importance.as_deref(), Some("critical"));
+    }
+
+    /// The `set_clauses` builder in `sqlite/update.rs` is a chain of independent
+    /// `if let Some(..)` pushes, so a handler that drops one field's value on the
+    /// way down loses exactly one column and still reports `"status": "updated"`.
+    /// Single-field tests cannot see that; a call that sets three fields at once
+    /// and asserts all three columns can.
+    #[tokio::test]
+    async fn update_memory_with_text_metadata_and_importance_writes_all_three() {
+        let (_dir, handler, wrapper) = handler_for("upd-trio-proj");
+        let seed = seed_row(
+            &wrapper,
+            "upd-trio-proj",
+            "content before the combined call",
+        );
+
+        handler
+            .call_tool_for_test(
+                "update_memory",
+                json!({
+                    "id": seed.id,
+                    "text": "content after the combined call",
+                    "metadata": { "lens": "importance", "round": 2 },
+                    "importance": "critical",
+                }),
+            )
+            .await
+            .expect("a combined text + metadata + importance update must succeed");
+
+        let row = wrapper
+            .get(&seed.id, "upd-trio-proj")
+            .expect("get")
+            .expect("row readable");
+        assert_eq!(
+            row.content, "content after the combined call",
+            "the text of a combined call must reach the content column"
+        );
+        assert_eq!(
+            row.metadata.as_deref(),
+            Some(r#"{"lens":"importance","round":2}"#),
+            "the metadata of a combined call must reach the metadata column"
+        );
+        assert_eq!(
+            row.importance, "critical",
+            "the level of a combined call must reach the importance column"
+        );
+    }
+
+    /// The other half of the same mutation class: `importance` sharing a call
+    /// with the two enum-typed fields, where the handler parses three vocabularies
+    /// in sequence and one dropped parse would leave its column at the seed value.
+    #[tokio::test]
+    async fn update_memory_with_importance_status_and_type_writes_all_three() {
+        let (_dir, handler, wrapper) = handler_for("upd-enums-proj");
+        let seed = seed_row(
+            &wrapper,
+            "upd-enums-proj",
+            "row that gets three enum fields",
+        );
+
+        handler
+            .call_tool_for_test(
+                "update_memory",
+                json!({
+                    "id": seed.id,
+                    "importance": "low",
+                    "status": "candidate",
+                    "memory_type": "guard",
+                }),
+            )
+            .await
+            .expect("a combined importance + status + memory_type update must succeed");
+
+        let row = wrapper
+            .get(&seed.id, "upd-enums-proj")
+            .expect("get")
+            .expect("row readable");
+        assert_eq!(
+            row.importance, "low",
+            "the level of a combined enum call must reach the importance column"
+        );
+        assert_eq!(
+            row.status, "candidate",
+            "the status of a combined enum call must reach the status column"
+        );
+        assert_eq!(
+            row.memory_type, "guard",
+            "the memory_type of a combined enum call must reach the type column"
+        );
+        // The two fields this call does not name must stay exactly as seeded.
+        assert_eq!(row.content, "row that gets three enum fields");
+        assert_eq!(row.metadata, None);
+    }
+
+    /// The tool description advertises the level as case-insensitive because
+    /// `MemoryImportance::from_str` lowercases before it matches. That only helps
+    /// an agent if the *stored* text is the canonical lowercase spelling the
+    /// read-side parser (`temporal::ImportanceLevel::parse`) and prune's SQL
+    /// literals expect — `"HIGH"` in the column would match neither.
+    #[tokio::test]
+    async fn update_memory_stores_a_mixed_case_level_in_lowercase() {
+        let (_dir, handler, wrapper) = handler_for("upd-case-proj");
+        let seed = seed_row(&wrapper, "upd-case-proj", "row rated in the wrong case");
+
+        for (sent, expected) in [("HIGH", "high"), ("Critical", "critical")] {
+            handler
+                .call_tool_for_test(
+                    "update_memory",
+                    update_importance_args(&seed.id, Some(sent)),
+                )
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("a mixed-case level must be accepted ({sent:?}): {e:?}")
+                });
+
+            let stored = wrapper
+                .get(&seed.id, "upd-case-proj")
+                .expect("get")
+                .expect("row readable")
+                .importance;
+            assert_eq!(
+                stored, expected,
+                "the column must hold the canonical lowercase level, not what the client typed ({sent:?})"
+            );
+        }
+    }
+
+    /// `from_str` matches the lowercased input **without trimming**, so a level
+    /// copied out of a table with a stray space is not a level: it must be refused
+    /// as invalid input with the row left alone, exactly like `"urgent"`. If it
+    /// were trimmed instead, `" high"` and `"high"` would be two spellings of one
+    /// level written by two different paths.
+    #[tokio::test]
+    async fn update_memory_rejects_a_padded_level_without_writing() {
+        let (_dir, handler, wrapper) = handler_for("upd-pad-proj");
+        let seed = seed_row_at(
+            &wrapper,
+            "upd-pad-proj",
+            "row whose level padded calls must not move",
+            MemoryImportance::Medium,
+        );
+
+        for padded in [" high", "high ", "\thigh", "high\n"] {
+            let err = handler
+                .call_tool_for_test(
+                    "update_memory",
+                    update_importance_args(&seed.id, Some(padded)),
+                )
+                .await
+                .expect_err("a padded level must be refused");
+            assert!(
+                err.message.contains("Invalid importance"),
+                "the tool error must name the offending field ({padded:?}): {err:?}"
+            );
+            assert_eq!(
+                err.data
+                    .as_ref()
+                    .and_then(|d| d.get("type"))
+                    .and_then(|t| t.as_str()),
+                Some("invalid_input"),
+                "a padded level is caller error, not a server error ({padded:?})"
+            );
+            assert_eq!(
+                wrapper
+                    .get(&seed.id, "upd-pad-proj")
+                    .expect("get")
+                    .expect("row readable")
+                    .importance,
+                "medium",
+                "a rejected level must leave the column untouched ({padded:?})"
+            );
+        }
+    }
+
+    /// The last path where `importance` is the only thing that can answer: an id
+    /// that matches no row. Pinned from what main actually returns today —
+    /// `Error::NotFound` renders through the wrapper's mapping as an
+    /// `INVALID_REQUEST` whose `data.type` is `not_found` and whose message is the
+    /// id-stripped "memory not found" (#255 sanitisation), while the row a test
+    /// *did* seed stays untouched, proving the missing row is what failed the call
+    /// rather than the parse above it.
+    #[tokio::test]
+    async fn update_memory_with_an_unknown_id_reports_not_found() {
+        let (_dir, handler, wrapper) = handler_for("upd-missing-proj");
+        let bystander = seed_row_at(
+            &wrapper,
+            "upd-missing-proj",
+            "row that must survive a call addressed to another id",
+            MemoryImportance::High,
+        );
+        let unknown = uuid::Uuid::new_v4().to_string();
+
+        let err = handler
+            .call_tool_for_test(
+                "update_memory",
+                update_importance_args(&unknown, Some("high")),
+            )
+            .await
+            .expect_err("an id that matches no row must be an error");
+
+        assert_eq!(
+            err.data
+                .as_ref()
+                .and_then(|d| d.get("type"))
+                .and_then(|t| t.as_str()),
+            Some("not_found"),
+            "a missing row must surface as not_found, not invalid_input: {err:?}"
+        );
+        assert!(
+            err.message.to_lowercase().contains("not found"),
+            "the message must say the row was not found: {err:?}"
+        );
+        assert!(
+            !err.message.contains(&unknown),
+            "the not-found error must not echo the unknown id back to the client: {err:?}"
+        );
+        assert_eq!(
+            wrapper
+                .get(&bystander.id, "upd-missing-proj")
+                .expect("get")
+                .expect("row readable")
+                .importance,
+            "high",
+            "a call addressed to another id must leave existing rows alone"
+        );
+    }
+
+    /// Belt for the combined enum call: a seeded row really does start at
+    /// `fact`/`active`, so the assertions above compare against a level the call
+    /// moved rather than a column that already held the expected value.
+    #[test]
+    fn a_seeded_row_starts_at_the_levels_the_combined_call_moves() {
+        let (_dir, _handler, wrapper) = handler_for("upd-shape-proj");
+        let seed = seed_row(&wrapper, "upd-shape-proj", "shape probe");
+        assert_eq!(seed.memory_type, MemoryType::Fact.as_str());
+        assert_eq!(seed.status, MemoryStatus::Active.as_str());
+        assert_eq!(seed.importance, MemoryImportance::Medium.as_str());
+        assert_eq!(seed.metadata, None);
     }
 }

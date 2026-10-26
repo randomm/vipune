@@ -132,7 +132,7 @@ Replace `<you>` with your actual username. Do NOT use `~` in absolute paths — 
 - `supersede_memory` — replace an existing memory with new content
 - `get_memory` — retrieve a memory by ID
 - `delete_memory` — permanently delete a memory
-- `update_memory` — update a memory's content, metadata, type, or status
+- `update_memory` — update a memory's content, metadata, type, status, or importance
 
 **Environment variables** (set in the `env` block):
 - `VIPUNE_DATABASE_PATH` — SQLite database location (default: `~/.vipune/memories.db`)
