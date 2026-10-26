@@ -187,11 +187,13 @@ fn leak_guard_needle_matches_a_call_and_not_a_comment() {
         !normalise(&comment_after_a_url).contains(needle.as_str()),
         "comment prose must not read as a call, even one whose text contains `//`"
     );
-    // The pre-filter must agree with the needle: any line it skips could not
-    // have matched anyway, so a needle that outgrew it would silently drop
-    // coverage. Built from the same parts so this control is not itself a copy
-    // of the needle.
-    let pre_filter = ["for", "get(", ""].concat();
+    // The pre-filter must be no wider than the needle: any line it skips could
+    // not have matched anyway, so a needle that outgrew it would silently drop
+    // coverage. Wider than the needle is allowed — the sweep's needle test is
+    // what decides — but a pre-filter that excludes part of the needle turns
+    // the guard into a no-op that still reports green. Built from the same parts
+    // so this control is not itself a copy of the needle.
+    let pre_filter = ["for", "get", ""].concat();
     assert!(
         needle.contains(pre_filter.as_str()),
         "the sweep's `{pre_filter}` pre-filter must stay a substring of the needle, got {needle:?}"
@@ -220,9 +222,9 @@ fn no_helper_forgets_a_temp_dir_anywhere_in_the_tree() {
     // Its blind spots are the shapes a text scan cannot see, and the runtime
     // tests are the backstop for each: `use std::mem::forget;` plus a bare
     // `forget(dir)` (unqualified, indistinguishable from any other `forget`),
-    // `mem::forget (dir)` with a space before the paren, and a call on a line
-    // whose `//`-prefixed portion is inside a string literal — the `//` strip is
-    // not quote-aware, so such a line is not matched. A guard that reports clean
+    // and a call on a line whose `//`-prefixed portion is inside a string
+    // literal — the `//` strip is not quote-aware, so such a line is not
+    // matched. A guard that reports clean
     // on one of those is why the guarantee lives on the runtime side.
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
@@ -258,7 +260,7 @@ fn no_helper_forgets_a_temp_dir_anywhere_in_the_tree() {
         for (index, line) in src.lines().enumerate() {
             // Only lines that could carry the call are normalised: the rest of the
             // tree costs one substring scan, not two allocations.
-            if !line.contains("forget(") {
+            if !line.contains("forget") {
                 continue;
             }
             let code = line.split("//").next().unwrap_or("").replace("std::", "");

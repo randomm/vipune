@@ -178,11 +178,19 @@ fn contend_and_release(db: &Database, contended: &Contended, why: &str) -> crate
     err
 }
 
-/// Assert both halves of a locked-`initialize_fts` verdict: the error *is* the
-/// lock (checked through the public conversion, which is where #255 lost it),
-/// and the rebuild did *not* run. The caller has already released the writer —
-/// see `release_writer` for why the release is not done here.
-fn assert_locked_verdict_and_unrun_rebuild(err: crate::sqlite::Error, contended: &Contended) {
+/// Assert the two halves of a locked-`initialize_fts` verdict that every
+/// contended test needs: the error *is* the lock (checked through the public
+/// conversion, which is where #255 lost it), and the rebuild did *not* run.
+///
+/// `a_lock_before_the_fts_rebuild_now_errors_in_delete_journal_mode` and
+/// `a_lock_on_the_precheck_read_errors_…` assert exactly this pair and call
+/// this helper. The WAL test drives the rebuild rather than the precheck, so it
+/// asserts the first half here and its own opposite about the second — it uses
+/// `assert_locked_verdict` directly instead of the pair.
+///
+/// The caller has already released the writer — see `release_writer` for why the
+/// release is not done here.
+fn assert_locked_verdict(err: crate::sqlite::Error) {
     assert!(
         matches!(err, crate::sqlite::Error::Locked),
         "a busy precheck must keep the storage Locked verdict, got {err:?}",
@@ -192,6 +200,10 @@ fn assert_locked_verdict_and_unrun_rebuild(err: crate::sqlite::Error, contended:
         public.is_locked(),
         "the verdict must survive the public conversion, got {public:?}",
     );
+}
+
+fn assert_locked_verdict_and_unrun_rebuild(err: crate::sqlite::Error, contended: &Contended) {
+    assert_locked_verdict(err);
 
     assert_eq!(
         project_id_columns(&contended.db),
@@ -224,14 +236,14 @@ fn a_lock_during_the_fts_schema_migration_stays_the_locked_verdict() {
         &contended,
         "the rebuild cannot take the write lock",
     );
-    assert!(
-        matches!(err, crate::sqlite::Error::Locked),
-        "a busy rebuild must keep the storage Locked verdict, got {err:?}"
-    );
-    let public: crate::errors::Error = err.into();
-    assert!(
-        public.is_locked(),
-        "the verdict must survive the public conversion, got {public:?}"
+    assert_locked_verdict(err);
+    // The rebuild, not the precheck, is the contended statement here, so the
+    // opposite of the other two tests: reaching `project_id` is what the
+    // migration would have produced and the writer kept it from happening.
+    assert_eq!(
+        project_id_columns(&contended.db),
+        0,
+        "the rebuild was reached and blocked — it did not complete",
     );
     // `contended.dir` is dropped here rather than forgotten: the lock has been
     // released and the two handles closed, so the temp dir can go with them
