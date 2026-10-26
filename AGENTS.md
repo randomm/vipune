@@ -186,10 +186,12 @@ Do NOT:
     repo copies, probe files, temp directories — is removed by that task
     before it reports; do not leave it for someone else's disk.
 - **After a PR lands**: delete its branch (remote and local) and remove its
-  worktree **including its build directory**, along with any stashes tied to
-  that branch — never leave stale branches, worktrees or their build output
-  behind, because a stale branch is one careless merge away from main and a
-  stale worktree keeps a whole `target/` directory alive.
+  worktree **including its build directory**, along with any stash created for
+  that branch — drop them one at a time only after confirming the stash message
+  names the branch, because `git stash list` shares one stack across branches
+  and renumbers on every drop. Never leave stale branches, worktrees or their
+  build output behind, because a stale branch is one careless merge away from
+  main and a stale worktree keeps a whole `target/` directory alive.
 - **Release PRs**: release-plz opens `chore: release vX.Y.Z` PRs via
   `.github/workflows/release-plz.yml`; a release PR is armed — merging it
   publishes to crates.io irreversibly. If one must be abandoned, close it via
