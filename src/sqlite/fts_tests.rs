@@ -1,26 +1,8 @@
 //! FTS5 tests.
 #[cfg(test)]
 mod tests {
+    use crate::sqlite::test_fixtures::{create_test_db, create_test_db_path};
     use crate::sqlite::{Database, UpdateOptions};
-    use tempfile::TempDir;
-
-    /// An empty temp dir and a database path inside it, for tests that reopen
-    /// the same file through several `Database::open` calls. The dir is
-    /// *returned* rather than forgotten (issue #278) so the caller's binding
-    /// owns it and the file is removed when the test returns.
-    fn create_test_db_path() -> (TempDir, std::path::PathBuf) {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.db");
-        (dir, path)
-    }
-
-    /// Open a store on an owned temp dir; see [`create_test_db_path`] for why
-    /// the dir is returned rather than forgotten.
-    fn create_test_db() -> (TempDir, Database) {
-        let (dir, path) = create_test_db_path();
-        let db = Database::open(&path).unwrap();
-        (dir, db)
-    }
 
     #[test]
     fn test_fts5_search() {
