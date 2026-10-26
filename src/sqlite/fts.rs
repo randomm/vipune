@@ -1,6 +1,7 @@
 //! FTS5 full-text search and BM25 ranking (Issue #40).
 
 use super::{Database, EMBEDDING_COLUMN, Error, Memory};
+use rusqlite::OptionalExtension;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -88,17 +89,33 @@ impl Database {
     ///
     /// # Errors
     ///
-    /// Returns error if migration fails or consistency check detects data loss.
+    /// Returns error if the precheck fails, if migration fails, or if the
+    /// consistency check detects data loss. A `SQLITE_BUSY` from the precheck
+    /// is the case that used to read as "no FTS table" (issue #278): it now
+    /// propagates as `Error::Locked`, the same verdict the sibling reads in
+    /// `rebuild_fts`, `detect_fts_desync` and `is_fts_initialized` already
+    /// produce for their own probes.
     pub fn initialize_fts(&self) -> Result<()> {
-        // Check if FTS5 table exists with correct schema
+        // Check if FTS5 table exists with correct schema.
+        //
+        // Absence must be expressed as "no row", never as "the read failed":
+        // `query_row` yields `OptionalExtension::None` for a table that
+        // genuinely does not exist and an `Err` for anything else, so a
+        // contended read in vipune's default `delete` journal mode used to be
+        // swallowed here as `fts_exists == false` — the rebuild below was then
+        // skipped and this returned `Ok(())` on a store still on the legacy
+        // schema. `is_fts_initialized` is the in-file precedent for propagating
+        // instead of defaulting; `optional()` is what keeps the legitimate
+        // "no such table" case an `Ok(false)` rather than an error.
         let fts_exists: bool = self
             .conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='memories_fts'",
                 [],
-                |_row| Ok(true),
+                |_| Ok(true),
             )
-            .unwrap_or(false);
+            .optional()?
+            .is_some();
 
         if fts_exists {
             // Check if project_id column exists using PRAGMA table_info

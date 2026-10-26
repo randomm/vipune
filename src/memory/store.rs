@@ -207,17 +207,20 @@ impl MemoryStore {
     /// Replaces the 3-line boilerplate (TempDir + Database::open + from_db + test_embedder)
     /// that was duplicated across 12+ test functions.
     ///
-    /// ⚠️ The returned TempDir is forgotten (not cleaned up on drop) to keep the database
-    /// file alive for the duration of the test. Temp files are cleaned up by the OS.
-    pub(crate) fn test_store() -> Self {
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().expect("create temp dir");
-        let path = dir.path().join("test.db");
-        std::mem::forget(dir);
-
+    /// The TempDir is *owned* by the returned [`TestStore`] and removed when it
+    /// drops, so a test run leaves nothing behind in `TMPDIR`. Earlier revisions
+    /// `std::mem::forget`'d the dir to keep the file alive past the helper —
+    /// which leaked one SQLite DB per call into the operator's temp quota.
+    /// Bind the whole return value (`let store = MemoryStore::test_store();`):
+    /// a `let (dir, store) = …` destructuring would drop the dir while the
+    /// store's connection is still open.
+    pub(crate) fn test_store() -> TestStore {
+        let (dir, path) = Self::test_db_path();
         let db = Database::open(&path).expect("open test database");
-        Self::from_db_with_test_embedder(db)
+        TestStore {
+            _dir: dir,
+            store: Self::from_db_with_test_embedder(db),
+        }
     }
 
     /// Replace the test-only embedder (test builds only) with a new one.
@@ -227,18 +230,68 @@ impl MemoryStore {
     }
 
     #[cfg(test)]
-    /// Return a temp database path for tests that need to pre-populate data.
+    /// Return an owned temp directory and a database path inside it, for tests
+    /// that need to pre-populate data before building a store.
     ///
     /// Callers open a `Database` on the returned path, insert data, then
     /// create a `MemoryStore` via `from_db` + `test_embedder`.
     ///
-    /// ⚠️ The TempDir is forgotten, same as [`test_store`].
-    pub(crate) fn test_db_path() -> std::path::PathBuf {
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().expect("create temp dir");
+    /// The `TempDir` is returned rather than forgotten (the shape the
+    /// `create_test_db()` helpers in `src/commands/*_tests.rs` already use), so
+    /// the directory is removed when the caller's binding drops.
+    pub(crate) fn test_db_path() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
         let path = dir.path().join("test.db");
-        std::mem::forget(dir);
-        path
+        (dir, path)
     }
 }
+
+/// Test-only: a [`MemoryStore`] and the temp directory its database file lives in.
+///
+/// The store borrows nothing from the dir, so both could not be fields of one
+/// struct without an `unsafe` self-referential layout; owning them together is
+/// what makes the leak impossible while keeping the call sites of
+/// [`MemoryStore::test_store`] unchanged (`Deref`/`DerefMut` forward the store's
+/// methods). The dir is declared first so it drops *after* the store: SQLite's
+/// file handle must close before the directory is unlinked.
+#[cfg(test)]
+pub(crate) struct TestStore {
+    _dir: tempfile::TempDir,
+    store: MemoryStore,
+}
+
+#[cfg(test)]
+impl TestStore {
+    /// The directory holding this store's database file.
+    ///
+    /// Leak tests need to observe the dir's *name* to prove it disappears on
+    /// drop; without an accessor they would have to guess at it from the shared
+    /// temp directory, where every other test's live dirs are indistinguishable
+    /// noise.
+    pub(crate) fn dir_path(&self) -> &std::path::Path {
+        self._dir.path()
+    }
+}
+
+// Both impls sit under `#[cfg(test)]` like the struct itself: a non-test build
+// of this file (e.g. `cargo check --no-default-features`) still compiles it,
+// and an un-gated impl would name a type that does not exist there.
+#[cfg(test)]
+impl std::ops::Deref for TestStore {
+    type Target = MemoryStore;
+
+    fn deref(&self) -> &MemoryStore {
+        &self.store
+    }
+}
+
+#[cfg(test)]
+impl std::ops::DerefMut for TestStore {
+    fn deref_mut(&mut self) -> &mut MemoryStore {
+        &mut self.store
+    }
+}
+
+#[cfg(test)]
+#[path = "store_leak_tests.rs"]
+mod store_leak_tests;

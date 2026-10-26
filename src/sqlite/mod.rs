@@ -277,6 +277,32 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// Wrap an existing connection as a `Database` **without** running
+    /// `create_schema` or `run_migrations`.
+    ///
+    /// `Database::open` is the only supported way to get a store: its schema
+    /// bootstrap is `CREATE … IF NOT EXISTS`, so a normal open repairs exactly
+    /// the shapes a test may need to observe. This constructor exists for those
+    /// tests — today the missing-FTS-table precheck in
+    /// `sqlite::fts_migration_tests` (issue #278), which drives
+    /// `Database::initialize_fts` against a database whose `memories_fts` table
+    /// was dropped by hand. Nothing in the library calls it; it is reachable
+    /// from outside the crate because `Database` is public and a test target
+    /// that builds the crate as a dependency cannot reach a `pub(crate)` one.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if an opening statement cannot be prepared; the connection
+    /// itself is already open, so in practice this only reports SQLite-level
+    /// failures from that check.
+    #[allow(dead_code)] // consumed only by integration/test targets, never by the library itself
+    pub fn from_connection(conn: Connection) -> Result<Self> {
+        // Cheap liveness probe: handing a `Database` to a caller is only
+        // meaningful over a connection that can actually read a row.
+        conn.query_row("SELECT 1", [], |_| Ok(()))?;
+        Ok(Self { conn })
+    }
+
     /// Insert a memory with explicit timestamps.
     ///
     /// Production counterpart to [`insert`]: the lifecycle commands (prune,

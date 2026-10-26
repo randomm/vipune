@@ -141,7 +141,7 @@ fn search_refuses_while_migration_marker_present() {
 fn update_refuses_on_mismatch_when_content_changes() {
     // Update with content must embed (passage role) → refuses on mismatch.
     let (_dir, mut store) = prepared_store(e5_model_id(), |_| {});
-    let db_path = crate::memory::store::MemoryStore::test_db_path();
+    let (_db_dir, db_path) = crate::memory::store::MemoryStore::test_db_path();
     let db = Database::open(&db_path).unwrap();
     let emb = crate::memory::crud::test_fake_embedder("orig").unwrap();
     let id = db

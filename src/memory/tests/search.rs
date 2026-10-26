@@ -6,10 +6,7 @@ use crate::sqlite::Database;
 
 #[test]
 fn test_search_basic() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding_match = vec![1.0f32; 384];
@@ -45,10 +42,7 @@ fn test_search_basic() {
 
 #[test]
 fn test_search_sorting() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding_high = vec![1.0f32; 384];
@@ -92,10 +86,7 @@ fn test_search_sorting() {
 
 #[test]
 fn test_negative_similarity() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding_pos = vec![1.0f32; 384];
@@ -120,10 +111,7 @@ fn test_negative_similarity() {
 
 #[test]
 fn test_hybrid_search_basic() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     db.initialize_fts().unwrap();
@@ -203,10 +191,7 @@ fn test_hybrid_search_basic() {
 
 #[test]
 fn test_hybrid_search_empty_results() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     db.initialize_fts().unwrap();
@@ -238,10 +223,7 @@ fn test_hybrid_search_empty_results() {
 #[test]
 fn test_hybrid_search_with_recency() {
     use chrono::{Duration, Utc};
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     db.initialize_fts().unwrap();
@@ -395,11 +377,8 @@ fn a_corrupt_blob_reaches_the_public_error_with_its_id() {
     // classifier-shaped regression anywhere between the decoder and the caller
     // shows up here rather than only at the storage boundary.
     use crate::memory::SearchOptions;
-    use tempfile::TempDir;
 
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("corrupt.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let id = {
         let db = Database::open(&path).unwrap();

@@ -30,7 +30,7 @@ mod store_memory_importance {
     /// applies no status or importance filter.
     #[tokio::test]
     async fn store_memory_writes_the_importance_the_agent_named() {
-        let store = create_test_store();
+        let (_dir, store) = create_test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "imp-proj".to_string(), Config::default());
@@ -64,7 +64,7 @@ mod store_memory_importance {
     /// is case-insensitive on the way in and canonical lowercase on the way out.
     #[tokio::test]
     async fn store_memory_importance_defaults_to_medium_and_stores_lowercase() {
-        let store = create_test_store();
+        let (_dir, store) = create_test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "imp-default-proj".to_string(), Config::default());
@@ -111,7 +111,7 @@ mod store_memory_importance {
     /// nothing is inserted, on the plain path or the `supersedes` path.
     #[tokio::test]
     async fn store_memory_rejects_an_invalid_importance_without_writing() {
-        let store = create_test_store();
+        let (_dir, store) = create_test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "imp-bad-proj".to_string(), Config::default());
@@ -158,7 +158,7 @@ mod store_memory_importance {
     /// keeps its own level and its superseded lifecycle.
     #[tokio::test]
     async fn store_memory_supersedes_applies_the_importance_to_the_new_row() {
-        let store = create_test_store();
+        let (_dir, store) = create_test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "imp-sup-proj".to_string(), Config::default());
@@ -251,7 +251,7 @@ mod store_memory_importance {
     /// before any write, with the CLI's own wording (#279 round 1).
     #[tokio::test]
     async fn store_memory_rejects_supersedes_together_with_force() {
-        let store = create_test_store();
+        let (_dir, store) = create_test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
         let handler = ToolHandler::new(store, "sup-force-proj".to_string(), Config::default());
@@ -309,7 +309,7 @@ mod store_memory_importance {
     /// string.
     #[tokio::test]
     async fn supersede_with_row_refuses_a_status_that_is_not_insertable() {
-        let store = create_test_store();
+        let (_dir, store) = create_test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
 

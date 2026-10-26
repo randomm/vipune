@@ -154,17 +154,18 @@ mod tests {
     use rusqlite::params;
     use tempfile::TempDir;
 
-    fn create_test_db() -> super::super::Database {
+    /// Open a store on an owned temp dir; the dir is returned so the caller
+    /// keeps it alive (and removes it) instead of leaking it (issue #278).
+    fn create_test_db() -> (TempDir, super::super::Database) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.db");
         let db = super::super::Database::open(&path).unwrap();
-        std::mem::forget(dir);
-        db
+        (dir, db)
     }
 
     #[test]
     fn test_map_row_to_memory() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; EMBEDDING_DIMS];
         let id = db
             .insert(
@@ -202,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_map_row_to_memory_without_metadata() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; EMBEDDING_DIMS];
         let id = db
             .insert("proj1", "test content", &embedding, None, "fact", "active")
@@ -225,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_map_row_to_memory_invalid_embedding() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let conn = db.conn();
 
         // Insert a valid embedding but test that the mapping function works correctly

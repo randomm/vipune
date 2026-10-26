@@ -14,10 +14,7 @@ fn test_memory_store_new() {
 
 #[test]
 fn test_add_and_get() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
@@ -41,10 +38,7 @@ fn test_add_and_get() {
 
 #[test]
 fn test_update_memory() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding_old = vec![0.3f32; 384];
@@ -82,10 +76,7 @@ fn test_update_memory() {
 
 #[test]
 fn test_update_nonexistent() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
@@ -107,10 +98,7 @@ fn test_update_nonexistent() {
 
 #[test]
 fn test_update_cross_project_isolation() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
@@ -148,10 +136,7 @@ fn test_update_cross_project_isolation() {
 
 #[test]
 fn test_delete_memory() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];
@@ -174,10 +159,7 @@ fn test_delete_memory() {
 
 #[test]
 fn test_delete_nonexistent() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let deleted = db.delete("does-not-exist", "test-project").unwrap();
@@ -186,10 +168,7 @@ fn test_delete_nonexistent() {
 
 #[test]
 fn test_get_nonexistent() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let memory = db.get("does-not-exist", "test-project").unwrap();
@@ -198,10 +177,7 @@ fn test_get_nonexistent() {
 
 #[test]
 fn test_list_by_project() {
-    use tempfile::TempDir;
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("test.db");
-    std::mem::forget(dir);
+    let (_dir, path) = MemoryStore::test_db_path();
 
     let db = Database::open(&path).unwrap();
     let embedding = vec![0.5f32; 384];

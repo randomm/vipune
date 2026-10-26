@@ -5,19 +5,20 @@ mod migration_tests {
     use crate::sqlite::identity;
     use tempfile::TempDir;
 
-    fn create_test_db() -> Database {
+    /// Open a store on an owned temp dir; the dir is returned so the caller
+    /// keeps it alive (and removes it) instead of leaking it (issue #278).
+    fn create_test_db() -> (TempDir, Database) {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.db");
         let db = Database::open(&path).unwrap();
-        std::mem::forget(dir);
-        db
+        (dir, db)
     }
 
     // --- Migration v6: model identity table (issue #217) ---
 
     #[test]
     fn test_fresh_db_has_user_version_6() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let version: i32 = db
             .conn()
             .pragma_query_value(None, "user_version", |r| r.get(0))
@@ -27,7 +28,7 @@ mod migration_tests {
 
     #[test]
     fn test_fresh_db_identity_table_exists_and_is_empty() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let table_exists: bool = db
             .conn()
             .query_row(
@@ -46,7 +47,7 @@ mod migration_tests {
 
     #[test]
     fn test_fresh_db_no_marker() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         assert_eq!(
             identity::read_marker(db.conn()).unwrap(),
             None,
@@ -114,7 +115,7 @@ mod migration_tests {
 
     #[test]
     fn test_list_since_basic() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let _id1 = db
@@ -151,7 +152,7 @@ mod migration_tests {
 
     #[test]
     fn test_list_since_exclusive_boundary() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let id = db
@@ -181,7 +182,7 @@ mod migration_tests {
 
     #[test]
     fn test_list_since_invalid_timestamp() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let result = db.list_since("proj1", "invalid-timestamp", 10, None, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid RFC3339"));
@@ -189,7 +190,7 @@ mod migration_tests {
 
     #[test]
     fn test_list_since_limit() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         for i in 0..5 {
@@ -214,7 +215,7 @@ mod migration_tests {
 
     #[test]
     fn test_list_since_ordering() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let id1 = db
@@ -265,7 +266,7 @@ mod migration_tests {
 
     #[test]
     fn test_get_many_basic() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let id1 = db
@@ -285,7 +286,7 @@ mod migration_tests {
 
     #[test]
     fn test_get_many_preserves_ordering() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let id1 = db
@@ -306,7 +307,7 @@ mod migration_tests {
 
     #[test]
     fn test_get_many_with_missing_ids() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let id1 = db
@@ -330,7 +331,7 @@ mod migration_tests {
 
     #[test]
     fn test_get_many_all_missing() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
 
         let results = db.get_many(&["missing1", "missing2", "missing3"]).unwrap();
         assert_eq!(results.len(), 3);
@@ -339,7 +340,7 @@ mod migration_tests {
 
     #[test]
     fn test_get_many_empty_input() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
 
         let results = db.get_many(&[]).unwrap();
         assert_eq!(results.len(), 0);
@@ -347,7 +348,7 @@ mod migration_tests {
 
     #[test]
     fn test_get_many_single_id() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let id = db
@@ -362,7 +363,7 @@ mod migration_tests {
 
     #[test]
     fn test_get_many_with_duplicate_ids() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let id1 = db
@@ -382,7 +383,7 @@ mod migration_tests {
 
     #[test]
     fn test_list_since_with_timezone_offset() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let _id1 = db
@@ -430,7 +431,7 @@ mod migration_tests {
 
     #[test]
     fn test_list_since_timestamp_precision_equivalence() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let _id = db
@@ -466,7 +467,7 @@ mod migration_tests {
 
     #[test]
     fn test_list_regression_coverage() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
 
         let id1 = db
@@ -500,7 +501,7 @@ mod migration_tests {
 
     #[test]
     fn test_list_ordering() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         let id1 = db
             .insert_with_time(
@@ -535,7 +536,7 @@ mod migration_tests {
 
     #[test]
     fn test_list_limit() {
-        let db = create_test_db();
+        let (_dir, db) = create_test_db();
         let embedding = vec![0.1f32; 384];
         for i in 0..5 {
             db.insert(

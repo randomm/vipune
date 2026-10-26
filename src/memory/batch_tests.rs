@@ -18,7 +18,7 @@ fn test_batch_ingest_empty_batch() {
 
 #[test]
 fn test_batch_ingest_mixed_outcomes() {
-    let path = MemoryStore::test_db_path();
+    let (_dir, path) = MemoryStore::test_db_path();
     let db = crate::sqlite::Database::open(&path).unwrap();
 
     // Pre-populate with a memory that will cause conflicts
@@ -100,7 +100,7 @@ fn test_batch_ingest_mixed_outcomes() {
 
 #[test]
 fn test_batch_ingest_deterministic_index_mapping() {
-    let path = MemoryStore::test_db_path();
+    let (_dir, path) = MemoryStore::test_db_path();
     let db = crate::sqlite::Database::open(&path).unwrap();
 
     // Pre-populate with conflicting content
@@ -161,7 +161,7 @@ fn test_batch_ingest_deterministic_index_mapping() {
 
 #[test]
 fn test_batch_ingest_policy_force() {
-    let path = MemoryStore::test_db_path();
+    let (_dir, path) = MemoryStore::test_db_path();
     let db = crate::sqlite::Database::open(&path).unwrap();
 
     // Pre-populate with conflicting content
