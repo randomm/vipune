@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-26
+
+### Documentation
+
+- Add disk-hygiene rules for agent scratch, temp and build directories ([#291](https://github.com/randomm/vipune/pull/291))
+
+### Features
+
+- Let the MCP update_memory tool change a memory's importance ([#290](https://github.com/randomm/vipune/pull/290))
+
+
 ## [0.17.1] - 2026-10-26
 
 ### Bug Fixes
