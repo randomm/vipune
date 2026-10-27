@@ -8,7 +8,7 @@ reciprocal-rank fusion), and expose the same store through an MCP server.
 The human-facing workflow (setup, testing, release process, debugging tips)
 lives in `CONTRIBUTING.md` — this file is agent-only doctrine.
 
-Last updated: 2026-10-26
+Last updated: 2026-10-27
 
 ## Context7 Protocol
 
@@ -87,8 +87,9 @@ edge case, because `mcp` is a default feature (see the dependency list above).
 `cargo deny` needs `cargo install cargo-deny` once. It checks the committed `Cargo.lock`
 against RustSec (`--locked` is what makes the gate describe the graph we actually ship) and
 fails if `base64` 0.23 resolves with `simd-unsafe` — the feature Cargo.toml opts out of because
-import files are untrusted input. Config in `deny.toml`; triage policy in
-`docs/testing.md`.
+import files are untrusted input — or if `ort`/`ort-sys` resolve with the OpenSSL TLS features
+`tls-native`/`tls-native-vendored` (Cargo.toml picks `tls-rustls`). Config in `deny.toml`; triage
+policy in `docs/testing.md`.
 
 Do NOT:
 

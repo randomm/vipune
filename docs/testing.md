@@ -370,7 +370,10 @@ What it covers, and what it deliberately does not:
   the gate. (A row naming an id that is absent from the database *itself* is `unknown-advisory`,
   which is a warning and does not fail the run.)
 - **Denied features** — `base64` 0.23 may not resolve with `simd-unsafe`, because that crate
-  decodes untrusted import files and feature unification would otherwise re-enable it.
+  decodes untrusted import files and feature unification would otherwise re-enable it. `ort` and
+  `ort-sys` may not resolve with `tls-native` or `tls-native-vendored` (native-tls/OpenSSL);
+  `Cargo.toml` chooses `tls-rustls`, and `tests/deny_feature_ban_lock.rs` fails if such a row
+  names a crate@version the lockfile does not resolve — cargo-deny ignores a dead row silently.
 - **Not configured** — `[licenses]` and `[sources]` are intentionally absent; enabling them is a
   separate decision, and adding an empty section rejects every license in the graph.
 
