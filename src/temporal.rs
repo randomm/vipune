@@ -10,6 +10,7 @@ pub enum DecayFunction {
     /// Linear decay: 1 - λ × age_days (scaled to [0,1])
     /// Implemented and thoroughly tested. Currently unused in production paths,
     /// but available for future use or external library consumers.
+    #[cfg_attr(not(test), allow(dead_code))]
     Linear,
 }
 
@@ -139,7 +140,7 @@ impl DecayConfig {
     /// `DecayConfig::new()` which validates all parameters at construction time.
     /// Direct struct construction (only used in tests) bypassing validation may
     /// produce mathematically incorrect results.
-    #[cfg(test)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn calculate_decay(&self, created_at: &DateTime<Utc>) -> f64 {
         let now = Utc::now();
         let age = now.signed_duration_since(*created_at);
@@ -199,7 +200,7 @@ impl DecayConfig {
     }
 
     /// Apply the decay function to an already-computed effective age (no offset/refresh).
-    #[cfg(test)]
+    #[cfg_attr(not(test), allow(dead_code))]
     fn apply_function(&self, effective_age: f64) -> f64 {
         self.apply_function_scaled(effective_age, 1.0)
     }
