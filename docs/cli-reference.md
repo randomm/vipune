@@ -142,7 +142,7 @@ rather than failing the batch. There is no `vipune ingest`/`batch_ingest` comman
 library-only.
 The storage tier below the store validates nothing, so `vipune import` is unchanged — a dump is
 taken as given — and the hook insert path (`src/hook/run.rs` → `Database::insert_with_hash`)
-writes no metadata at all, so there is nothing for it to check.
+has nothing to check because it passes no metadata (`None`).
 
 (`update --status` is the route named above, and its own flag table notes the one asymmetry it
 has with `add --status`.)

@@ -191,7 +191,7 @@ mod mcp_supersede {
         let (_dir, store) = MemoryStore::test_store();
         let store = Arc::new(Mutex::new(store));
         let wrapper = StoreWrapper::new(store.clone());
-        let handler = ToolHandler::new(store, "meta-proj".to_string(), Config::default());
+        let handler = ToolHandler::new(store.clone(), "meta-proj".to_string(), Config::default());
 
         // Parity control: a `store_memory` row with the metadata key omitted.
         // Its column must equal every no-metadata row the tool loop stores below,
@@ -242,9 +242,10 @@ mod mcp_supersede {
                 .call_tool_for_test("supersede_memory", args)
                 .await
                 .unwrap_or_else(|err| panic!("{label}: supersede_memory must succeed: {err:?}"));
+            let new_id = tool_result_id(&result);
 
             let row = wrapper
-                .get(&tool_result_id(&result), "meta-proj")
+                .get(&new_id, "meta-proj")
                 .expect("get")
                 .unwrap_or_else(|| panic!("{label}: replacement row stored"));
             assert_eq!(
@@ -252,15 +253,25 @@ mod mcp_supersede {
                 expected,
                 "{label}: the metadata column must hold what the handler was given"
             );
-            if expected.is_none() {
-                // Parity with `store_memory` for the same omitted argument.
-                assert_eq!(
-                    row.metadata, stored_row.metadata,
-                    "{label}: must match a store_memory row with no metadata"
-                );
-            }
             assert_eq!(row.content, "replacement content");
             assert_eq!(row.status, "active");
+
+            // The retirement half of the same transaction: a handler that
+            // inserted the replacement without marking the old row would still
+            // pass every metadata assertion above.
+            let retired = wrapper
+                .get(&old.id, "meta-proj")
+                .expect("get")
+                .unwrap_or_else(|| panic!("{label}: superseded row still readable"));
+            assert_eq!(
+                retired.status, "superseded",
+                "{label}: the supersede call must retire the old row"
+            );
+            assert_eq!(
+                retired.superseded_by.as_deref(),
+                Some(new_id.as_str()),
+                "{label}: the old row must link to the row that replaced it"
+            );
         }
     }
 
