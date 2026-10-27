@@ -71,7 +71,7 @@ dirs = "7"
 # MCP server (optional, feature-gated)
 # Floor is 1.8, not the 1.2 that first resolved: RUSTSEC-2026-0189 is patched at
 # 1.4 and src/mcp is written against the 1.8 router API.
-rmcp = { version = "1.8", features = ["server", "transport-io", "macros"], optional = true }
+rmcp = { version = "3.7", features = ["server", "transport-io", "macros"], optional = true }
 tokio = { version = "1", features = ["rt", "macros"], optional = true }
 schemars = { version = "1", optional = true }
 
