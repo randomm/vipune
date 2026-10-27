@@ -30,7 +30,7 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 | `src/sqlite/fts.rs` | FTS5 full-text search, BM25, triggers, auto-migration |
 | `src/sqlite/search.rs` | Hybrid search coordination, semantic + BM25 |
 | `src/sqlite/project_queries.rs` | Project-level aggregate queries (`list_all_project_ids`, `row_counts_by_project`) split out of `sqlite/mod.rs` to keep it under the 500-line cap |
-| `src/embedding.rs` | ONNX model loading and text-to-vector conversion using bge-small-en-v1.5 and HuggingFace tokenizer |
+| `src/embedding/engine.rs` | ONNX model loading and text-to-vector conversion using bge-small-en-v1.5 and HuggingFace tokenizer (inference/pooling in `src/embedding/inference.rs`) |
 | `src/project.rs` | Project auto-detection from git remote, environment variable, or working directory |
 | `src/config/` | Configuration loading from TOML files, environment variables, and validation |
 | `src/errors.rs` | Unified, vipune-owned error types; no variant stores a third-party error type. Locked database is `Error::DatabaseLocked` (`Error::is_locked()`). |

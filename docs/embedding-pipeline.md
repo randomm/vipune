@@ -114,7 +114,7 @@ This affects `MemoryStore` methods that generate embeddings (`add`, `search`, `u
 
 ### `EMBEDDING_DIMS: 384`
 
-- **Where defined**: `src/embedding.rs`
+- **Where defined**: `src/embedding/engine.rs`
 - **Value**: 384 f32 values (model-specific)
 - **Used by**:
   - Database BLOB size validation

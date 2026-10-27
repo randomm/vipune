@@ -62,10 +62,10 @@ pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
 /// MCP server — cannot fail on the second build.
 ///
 /// The `OnceLock` holds the `Result`, not the `Environment`: `get_or_init` runs
-/// the build on exactly one thread and every other thread blocks until that
-/// attempt is decided, so there is no window in which two threads each call
-/// `build` (and a failed build is remembered rather than retried, since a
-/// second attempt cannot succeed while the first attempt's env may live on).
+/// the initializer on exactly one thread and every other caller blocks in
+/// `get_or_init` until that call returns, so `build` is never called twice
+/// concurrently (and a failed build is latched rather than retried — the
+/// message keeps the `ort` `ErrorCode`, which `Display` alone drops).
 fn ort_environment() -> Result<Environment, Error> {
     static ENVIRONMENT: OnceLock<Result<Environment, String>> = OnceLock::new();
     let environment = ENVIRONMENT.get_or_init(|| {
@@ -74,7 +74,7 @@ fn ort_environment() -> Result<Environment, Error> {
         ort::init()
             .with_telemetry(false)
             .build()
-            .map_err(|e| e.to_string())
+            .map_err(|e| format!("[{:?}] {}", e.code(), e))
     });
     match environment {
         Ok(environment) => Ok(environment.clone()),
@@ -154,6 +154,14 @@ impl EmbeddingEngine {
         // Resolve through the profile table: unknown ids are rejected here, and
         // every profile carries its exact pinned revision.
         let profile = profile_for(model_id)?;
+
+        // Build/latch the process-wide ORT environment (see
+        // [`ort_environment`]) BEFORE touching the Hub: an environment failure
+        // is deterministic (rc.15 refuses a second environment in a process
+        // that already has one), so it must surface first instead of behind a
+        // multi-megabyte model download that is pure waste on a doomed call.
+        let environment = ort_environment()?;
+
         // Same air-gapped remedy as the download sites below: a builder
         // failure is a Hub/network failure too, so it must not arrive as a
         // bare `HfHub` message that names no remedy.
@@ -194,10 +202,6 @@ impl EmbeddingEngine {
                 ..Default::default()
             }))
             .map_err(Error::from)?;
-
-        // Shared, process-wide environment (see [`ort_environment`]); built on
-        // the first engine this process creates.
-        let environment = ort_environment()?;
 
         let session = Session::builder(&environment)
             .map_err(Error::from)?

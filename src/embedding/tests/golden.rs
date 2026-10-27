@@ -124,6 +124,13 @@ fn decode_line(line: &str) -> Option<(String, Vec<f32>)> {
         .iter()
         .map(|token| token.parse::<f32>().ok())
         .collect::<Option<Vec<f32>>>()?;
+    // A non-finite float (`nan`, `inf` — each parses successfully) would
+    // poison every downstream comparison: `NaN.abs()` is NaN and `NaN <= tol`
+    // is false, so the drift test fails with a message that blames the
+    // runtime. Reject it at the parse boundary instead.
+    if !floats.iter().all(|v| v.is_finite()) {
+        return None;
+    }
     Some((fields[..split].join(" "), floats))
 }
 
@@ -197,13 +204,23 @@ fn test_golden_embeddings_match_fixture() {
     let lines = read_fixture_lines();
     assert_eq!(lines.len(), GOLDEN_TEXTS.len());
 
-    let mut engine = EmbeddingEngine::new(EMBED_MODEL_ID).expect("load model");
+    let mut engine = EmbeddingEngine::new(EMBED_MODEL_ID)
+        .unwrap_or_else(|e| panic!("load model {EMBED_MODEL_ID} for golden comparison: {e}"));
     let mut measured_max_diff = 0.0f32;
     let mut worst_text = String::new();
 
     for (index, line) in lines.iter().enumerate() {
-        let (text, expected) = decode_line(line).expect("fixture line parses");
+        let (text, expected) = decode_line(line)
+            .unwrap_or_else(|| panic!("fixture line {} does not parse", index + 1));
         assert_eq!(text, GOLDEN_TEXTS[index]);
+        // Zip is pairwise-truncating, so a short fixture vector would compare
+        // a prefix and report the drift of the record it silently dropped.
+        assert_eq!(
+            expected.len(),
+            EMBEDDING_DIMS,
+            "fixture line {} must hold exactly {EMBEDDING_DIMS} floats",
+            index + 1
+        );
 
         let actual = engine
             .embed_passage(&text)
@@ -265,7 +282,8 @@ fn golden_fixture_regenerate() {
         return;
     }
 
-    let mut engine = EmbeddingEngine::new(EMBED_MODEL_ID).expect("load model");
+    let mut engine = EmbeddingEngine::new(EMBED_MODEL_ID)
+        .unwrap_or_else(|e| panic!("load model {EMBED_MODEL_ID} for golden regeneration: {e}"));
 
     let mut out = String::new();
     for text in GOLDEN_TEXTS {
@@ -356,6 +374,20 @@ mod unit {
     fn decode_line_rejects_a_non_numeric_float_field() {
         let line = encode_line("some words", &[0.5f32; EMBEDDING_DIMS - 1]);
         assert!(decode_line(&format!("{line} notanumber")).is_none());
+    }
+
+    /// `"nan"`/`"inf"` parse as `f32`, so a corrupted fixture record would
+    /// otherwise survive the parse and fail the drift test with a message
+    /// blaming the runtime instead of the file (see `decode_line`).
+    #[test]
+    fn decode_line_rejects_non_finite_floats() {
+        for token in ["nan", "inf", "-inf"] {
+            let line = encode_line("some words", &[0.5f32; EMBEDDING_DIMS - 1]);
+            assert!(
+                decode_line(&format!("{line} {token}")).is_none(),
+                "{token} must not decode as a fixture float"
+            );
+        }
     }
 
     /// The positional split must keep a numeric-looking word inside the text:
