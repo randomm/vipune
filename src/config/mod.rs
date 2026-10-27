@@ -14,6 +14,8 @@ pub(crate) mod tests_utils;
 #[cfg(test)]
 use tests_utils::ConfigEnvGuard;
 
+pub(crate) use paths::home_dir;
+
 use crate::embedding::EMBED_MODEL_ID;
 use crate::errors::Error;
 use serde::Deserialize;
@@ -91,12 +93,9 @@ fn default_prune_min_age_days() -> f64 {
 
 impl Default for Config {
     fn default() -> Self {
-        // Use home directory with sensible fallback for systems without HOME
-        let home = dirs::home_dir().unwrap_or_else(|| {
-            std::env::var("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("."))
-        });
+        // Use the shared home lookup with a sensible fallback for systems
+        // without HOME
+        let home = home_dir();
         let vipune_dir = home.join(".vipune");
 
         Self {
@@ -166,9 +165,10 @@ impl Config {
 
     /// Ensure the parent directory of the database path exists.
     ///
-    /// Model files are cached in the HuggingFace Hub cache
-    /// (`~/.cache/huggingface/hub/` by default), which `hf-hub` creates on
-    /// demand — vipune does not pre-create any model directory.
+    /// Model files are cached in the HuggingFace Hub cache — by default
+    /// `~/.cache/huggingface/hub` (or `$HF_HOME/hub` when `HF_HOME` is set) —
+    /// which `hf-hub` creates on demand; vipune does not pre-create any model
+    /// directory.
     pub fn ensure_directories(&self) -> Result<(), Error> {
         if let Some(parent) = self.database_path.parent()
             && !parent.as_os_str().is_empty()

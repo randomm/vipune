@@ -53,22 +53,9 @@ pub const EMBED_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 /// the stable public re-export the library API and drift tests reference.
 pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
 
-/// The home directory used for default paths: `dirs::home_dir()` with an
-/// `env::var("HOME")` fallback, the same pattern `Config::default()` uses.
-fn home_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."))
-    })
-}
-
-/// Resolves the hf-hub cache directory: `$HF_HOME/hub` when `HF_HOME` is set
-/// to a non-empty value, `<home>/.cache/huggingface/hub` otherwise (hf-hub's
-/// own rule; an empty `HF_HOME` counts as unset, and the env value is appended
-/// to verbatim — no normalisation, so a relative value resolves against the
-/// process cwd). Pure: the env value and home dir are arguments, so the
-/// resolution is testable without a model or network.
+/// Resolves the hf-hub cache directory to `$HF_HOME/hub` when `HF_HOME` is
+/// non-empty, and `<home>/.cache/huggingface/hub` otherwise (hf-hub's rule).
+/// A relative `HF_HOME` is appended verbatim, so it resolves against the cwd.
 pub(crate) fn resolve_hf_cache_dir(hf_home: Option<&str>, home: &Path) -> PathBuf {
     match hf_home {
         Some(hf_home) if !hf_home.is_empty() => Path::new(hf_home).join("hub"),
@@ -170,11 +157,11 @@ impl EmbeddingEngine {
     /// loads a floating revision — each is pinned to an exact commit SHA.
     ///
     /// Files are cached locally in the HF Hub cache, only downloaded once:
-    /// `$HF_HOME/hub` when `HF_HOME` is set to a non-empty value, otherwise
-    /// `~/.cache/huggingface/hub` (see [`resolve_hf_cache_dir`], which is
-    /// vipune's own resolver — hf-hub's `ApiBuilder::new()` ignores `HF_HOME`).
-    /// Because the cache dir moves with `HF_HOME`, hf-hub then reads the
-    /// access token from `$HF_HOME/token` (its own convention).
+    /// by default `~/.cache/huggingface/hub`, or `$HF_HOME/hub` when `HF_HOME`
+    /// is set (see [`resolve_hf_cache_dir`], which is vipune's own resolver —
+    /// hf-hub's `ApiBuilder::new()` ignores `HF_HOME`). The client is built
+    /// with `ApiBuilder::from_cache` over that same directory so hf-hub reads
+    /// the access token from `$HF_HOME/token`, not from the default cache.
     pub fn new(model_id: &str) -> Result<Self, Error> {
         use crate::embedding_profiles::profile_for;
 
@@ -189,10 +176,16 @@ impl EmbeddingEngine {
         // multi-megabyte model download that is pure waste on a doomed call.
         let environment = ort_environment()?;
 
-        // hf-hub's ApiBuilder::new() ignores HF_HOME, so the cache directory
-        // is resolved here and handed to the client explicitly. The home
-        // directory is obtained the same way Config::default() does it.
-        let home = home_dir();
+        // hf-hub's ApiBuilder::new() reads the token from `Cache::default()`
+        // at construction and `with_cache_dir` afterwards replaces only the
+        // cache, never the token — so with `HF_HOME` set that pair would read
+        // the token from `~/.cache/huggingface/token` while downloading into
+        // `$HF_HOME/hub`. `from_cache` derives both from the one directory we
+        // resolved, keeping cache and token consistent.
+        //
+        // The home directory comes from the one shared lookup Config::default()
+        // uses.
+        let home = crate::config::home_dir();
         let cache_dir = resolve_hf_cache_dir(std::env::var("HF_HOME").ok().as_deref(), &home);
         let air_gapped_hint = format!(
             "If running in an air-gapped environment, pre-fetch the model before going offline:\n  huggingface-cli download {} --revision {} --cache-dir {}",
@@ -204,8 +197,7 @@ impl EmbeddingEngine {
         // Same air-gapped remedy as the download sites below: a builder
         // failure is a Hub/network failure too, so it must not arrive as a
         // bare `HfHub` message that names no remedy.
-        let api = ApiBuilder::new()
-            .with_cache_dir(cache_dir)
+        let api = ApiBuilder::from_cache(hf_hub::Cache::new(cache_dir))
             .build()
             .map_err(|e| {
                 Error::Config(format!(

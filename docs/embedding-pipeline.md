@@ -39,7 +39,7 @@ Text input → Tokenizer → ONNX session → Mean pooling → L2 normalization 
 
 ### Model Cache
 
-- **Location**: `~/.cache/huggingface/hub/`
+- **Location**: by default `~/.cache/huggingface/hub` (or `$HF_HOME/hub` when `HF_HOME` is set)
 - **Download**: First use only via `hf_hub` crate
 - **Reuse**: All subsequent operations use cached model
 - **Size**: ~66MB (ONNX model + tokenizer)
