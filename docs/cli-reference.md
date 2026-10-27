@@ -38,7 +38,7 @@ vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status
 - Checks for similar existing memories (similarity ≥ threshold)
 - If conflicts found: returns exit code 2, lists conflicting memories
 - If `--force` used: skips conflict check and adds memory
-- If `--supersedes` used: atomically adds new memory and marks target as `superseded`
+- If `--supersedes` used: atomically adds new memory and marks target as `superseded`. The target must still be `active` or `candidate`: superseding a row that is already `superseded` (which would fork the chain into a replacement nothing points at) or `deprecated` is rejected with an error and writes nothing — `prune` demotions stay final
 - `--importance` is stored on the new row (also on the row created by `--supersedes`), and `export` writes that value so `import` restores it
 - `--status` is stored on the new row too, including the row created by `--supersedes`. Only `active` and `candidate` are valid here: `--status superseded`/`deprecated` is rejected with or without `--supersedes`, since the old row's `superseded` is set by the supersede transaction itself. A `--status candidate` replacement is hidden from default `search`/`list` (which filter to `status = 'active'`) along with the `superseded` row it replaced — see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for how to read and activate it
 

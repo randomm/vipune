@@ -2,7 +2,7 @@
 
 #![cfg(test)]
 
-mod crud;
+pub(in crate::memory) mod crud;
 mod embedding_integrity;
 mod identity_refusal;
 mod ingest;

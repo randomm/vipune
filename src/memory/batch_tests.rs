@@ -120,9 +120,9 @@ fn test_batch_ingest_deterministic_index_mapping() {
     // Create batch with specific ordering
     let items = vec![
         ("unique item 0", None),
-        ("conflict with item 1", None), // Will conflict
-        ("", None),                     // Will error
-        ("unique item 3", Some("metadata")),
+        ("conflict with item 1", None),       // Will conflict
+        ("", None),                           // Will error
+        ("unique item 3", Some("{\"k\": }")), // Not JSON -> per-item Error (#271)
     ];
 
     let result = store
@@ -149,13 +149,18 @@ fn test_batch_ingest_deterministic_index_mapping() {
         BatchIngestItemResult::Error { .. }
     ));
 
-    // Verify index 3 is Added (unique with metadata)
-    if let BatchIngestItemResult::Added { id } = &result.results[3] {
-        let memory = store.get(id, "test-project").unwrap().unwrap();
-        assert_eq!(memory.content, "unique item 3");
-        assert_eq!(memory.metadata, Some("metadata".to_string()));
-    } else {
-        panic!("Expected Added for index 3");
+    // Issue #271: the add path now runs the one metadata validator the supersede
+    // and update paths already ran, so a non-JSON document is a per-item Error
+    // naming the rule instead of a string stored verbatim. Index mapping stays
+    // intact either way, which is what this test exists to pin.
+    match &result.results[3] {
+        BatchIngestItemResult::Error { message } => {
+            assert!(
+                message.contains("invalid metadata JSON"),
+                "unexpected rejection for non-JSON metadata: {message}"
+            );
+        }
+        other => panic!("Expected Error for non-JSON metadata at index 3, got {other:?}"),
     }
 }
 
@@ -329,4 +334,59 @@ fn test_batch_ingest_metadata_preservation() {
     } else {
         panic!("Expected Added for item 2");
     }
+}
+
+/// Issue #271: the add path shares one metadata validator with the supersede and
+/// update paths, so a document those two already refused is now refused here too
+/// — on `add`, `ingest` and `batch_ingest`, where the refusal is reported per
+/// item rather than failing the batch. A blank and a non-JSON document are both
+/// covered because the two branches of the rule were previously only partly
+/// reachable from this entry point.
+#[test]
+fn test_batch_ingest_rejects_invalid_metadata_per_item() {
+    let (_dir, mut store) = MemoryStore::test_store();
+
+    let items = vec![
+        ("blank metadata", Some("   ")),
+        ("non-json metadata", Some("{not json")),
+        ("valid metadata", Some(r#"{"k": "v"}"#)),
+    ];
+
+    let result = store
+        .batch_ingest("test-project", items, IngestPolicy::Force)
+        .expect("a bad item must not fail the batch");
+
+    for (idx, expected) in [
+        (0, "metadata cannot be empty"),
+        (1, "invalid metadata JSON"),
+    ] {
+        match &result.results[idx] {
+            BatchIngestItemResult::Error { message } => assert!(
+                message.contains(expected),
+                "item {idx} refused for the wrong reason: {message}"
+            ),
+            other => panic!("Expected Error at index {idx}, got {other:?}"),
+        }
+    }
+    assert!(
+        matches!(&result.results[2], BatchIngestItemResult::Added { .. }),
+        "the valid item must still be stored: {:?}",
+        result.results[2]
+    );
+
+    // The two refused items wrote nothing of their own — read across every
+    // status, so a row the default active-only list hides cannot inflate or
+    // deflate the count.
+    let stored: Vec<String> = store
+        .list(
+            "test-project",
+            20,
+            None,
+            Some(["active", "candidate", "superseded", "deprecated"].as_slice()),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|m| m.content)
+        .collect();
+    assert_eq!(stored, vec!["valid metadata".to_string()]);
 }

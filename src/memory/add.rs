@@ -61,6 +61,18 @@ impl MemoryStore {
     /// [`Self::ingest_with_importance`] both forward to — so no add entry point
     /// can insert a `superseded`/`deprecated` row whatever default it binds. See
     /// [`MemoryStatus::ensure_valid_for_insert`] for the map of call sites.
+    ///
+    /// Metadata is validated here too ([`Self::validate_metadata`]) — the rule
+    /// the supersede and update paths already ran — so before #271 the add path
+    /// stored a blank or non-JSON string verbatim while the other two refused it.
+    /// `batch_ingest` inherits the rule and reports the refusal per item.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for a non-insertable `row.status` or for blank /
+    /// non-JSON `row.metadata`; [`Error::EmptyInput`] and [`Error::InputTooLong`]
+    /// for the content. All are answered before the embedding call, so a refused
+    /// row costs no inference.
     pub(crate) fn add_impl(
         &mut self,
         row: &NewMemory<'_>,
@@ -75,6 +87,7 @@ impl MemoryStore {
         row.status.ensure_valid_for_insert()?;
 
         Self::validate_input_length(row.content)?;
+        Self::validate_metadata(row.metadata)?;
 
         let embedding = self.get_embedding(row.content, EmbeddingRole::Passage)?;
 

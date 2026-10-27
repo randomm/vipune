@@ -2050,3 +2050,84 @@ fn test_touch_memories_increments_retrieval_count() {
 
     std::fs::remove_file(db_path).ok();
 }
+
+/// Issue #271: `NewSupersedingMemory` is `#[non_exhaustive]` and re-exported, so
+/// before its constructor existed an external crate could not build one and
+/// `MemoryStore::supersede_with` was unreachable from outside vipune even though
+/// the method is public. This is that reachability proof, driven the way a
+/// consumer does: `::new` (which defaults the level to `medium`), then
+/// `with_importance` to name another. What those writes persist is pinned
+/// in-crate by `memory::supersede_tests`, so this asserts reachability only.
+#[test]
+fn test_supersede_with_through_the_constructor_from_outside_the_crate() {
+    let db_path = env::temp_dir().join(format!("vipune_test_{}.db", uuid::Uuid::new_v4()));
+    let config = Config::default();
+    let mut store = MemoryStore::new(db_path.as_path(), &config.embedding_model, config.clone())
+        .expect("Failed to create store");
+    let project_id = format!("test-project-{}", uuid::Uuid::new_v4());
+
+    let old_id = match store
+        .add_with_conflict(
+            &project_id,
+            "original memory content",
+            None,
+            true,
+            MemoryType::Fact,
+            MemoryStatus::Active,
+        )
+        .expect("Failed to add memory")
+    {
+        vipune::AddResult::Added { id } => id,
+        other => panic!("Expected Added, got {other:?}"),
+    };
+
+    // `::new` alone reaches `supersede_with`, and its level defaults to `medium`.
+    let new_id = store
+        .supersede_with(&vipune::NewSupersedingMemory::new(
+            vipune::NewMemory {
+                project_id: &project_id,
+                content: "replacement via the constructor",
+                metadata: None,
+                memory_type: MemoryType::Fact,
+                status: MemoryStatus::Active,
+            },
+            &old_id,
+        ))
+        .expect("the constructor must yield a row supersede_with accepts");
+    assert_eq!(
+        store
+            .get(&new_id, &project_id)
+            .expect("Failed to get")
+            .expect("replacement stored")
+            .importance,
+        "medium",
+        "::new defaults the level"
+    );
+
+    // `with_importance` overrides that default, still from outside the crate.
+    let high_id = store
+        .supersede_with(
+            &vipune::NewSupersedingMemory::new(
+                vipune::NewMemory {
+                    project_id: &project_id,
+                    content: "replacement at a named level",
+                    metadata: None,
+                    memory_type: MemoryType::Fact,
+                    status: MemoryStatus::Active,
+                },
+                &new_id,
+            )
+            .with_importance(vipune::MemoryImportance::High),
+        )
+        .expect("with_importance must carry the level through to the INSERT");
+    assert_eq!(
+        store
+            .get(&high_id, &project_id)
+            .expect("Failed to get")
+            .expect("second replacement stored")
+            .importance,
+        "high"
+    );
+
+    std::fs::remove_file(db_path).ok();
+}

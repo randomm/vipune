@@ -50,8 +50,50 @@ pub struct NewSupersedingMemory<'a> {
     /// Id of the memory this new row replaces; marked `superseded` in the same
     /// transaction.
     pub old_id: &'a str,
-    /// Operator-assigned importance of the new row.
+    /// Operator-assigned importance of the new row. [`NewSupersedingMemory::new`]
+    /// binds the default; [`NewSupersedingMemory::with_importance`] overrides it.
     pub importance: MemoryImportance,
+}
+
+impl<'a> NewSupersedingMemory<'a> {
+    /// Compose a superseding row from the [`NewMemory`] that replaces `old_id`.
+    ///
+    /// The constructor exists because the struct is `#[non_exhaustive]` and
+    /// re-exported from the crate root: outside this crate a field literal cannot
+    /// name a field set, so without it [`MemoryStore::supersede_with`] was
+    /// unreachable for an external consumer even though the method is public
+    /// (issue #271).
+    ///
+    /// `importance` defaults to [`MemoryImportance::default`] (`medium`) — the
+    /// same binding [`MemoryStore::supersede`] makes for the level it does not
+    /// take; [`Self::with_importance`] names another. `row.status` is whatever
+    /// the caller put in the [`NewMemory`]: the constructor does not default it,
+    /// because [`MemoryStatus::ensure_valid_for_insert`] is what decides it and a
+    /// constructor that quietly rewrote a `superseded` status to `active` would
+    /// hide the mistake that rule exists to catch.
+    #[must_use = "the composed row is the argument supersede_with takes"]
+    // No dead_code exemption: the two defaulting wrappers below compose through
+    // here, so the released constructor — not a field literal — is the way a
+    // superseding row is built in and out of the crate.
+    pub fn new(row: NewMemory<'a>, old_id: &'a str) -> Self {
+        Self {
+            row,
+            old_id,
+            importance: MemoryImportance::default(),
+        }
+    }
+
+    /// Override the level [`Self::new`] defaulted to `medium`.
+    ///
+    /// The level reaches the INSERT in its canonical `as_str` spelling: an
+    /// omitted column would reset it to the DEFAULT and cost the row the
+    /// `high`/`critical` prune exemption (issue #238), so this setter is the way
+    /// a caller built through [`Self::new`] changes it.
+    #[must_use = "the returned row carries the level; the setter does not mutate in place"]
+    pub fn with_importance(mut self, importance: MemoryImportance) -> Self {
+        self.importance = importance;
+        self
+    }
 }
 
 impl MemoryStore {
@@ -68,7 +110,9 @@ impl MemoryStore {
     /// # Arguments
     ///
     /// * `project_id` - Project identifier (e.g., git repo URL or user-defined)
-    /// * `items` - Vector of (content, optional_metadata) tuples to ingest
+    /// * `items` - Vector of (content, optional_metadata) tuples to ingest. A
+    ///   present metadata value must be non-blank valid JSON, like on every other
+    ///   write path (#271)
     /// * `policy` - Conflict handling policy (ConflictAware or Force)
     ///
     /// # Returns
@@ -79,7 +123,8 @@ impl MemoryStore {
     ///
     /// - **Added**: Item succeeded (Force policy always succeeds unless validation fails)
     /// - **Conflicts**: Similar memories found (only with ConflictAware policy)
-    /// - **Error**: Item failed validation (empty, too long, embedding error, database error)
+    /// - **Error**: Item failed validation (empty, too long, blank or invalid
+    ///   JSON metadata, embedding error, database error)
     ///
     /// All items are processed. No single item failure stops the batch.
     /// Result order matches input order for deterministic index-based mapping.
@@ -171,8 +216,8 @@ impl MemoryStore {
         memory_type: MemoryType,
         old_id: &str,
     ) -> Result<String, Error> {
-        self.supersede_with(&NewSupersedingMemory {
-            row: NewMemory {
+        self.supersede_with(&NewSupersedingMemory::new(
+            NewMemory {
                 project_id,
                 content,
                 metadata,
@@ -180,8 +225,7 @@ impl MemoryStore {
                 status: MemoryStatus::Active,
             },
             old_id,
-            importance: MemoryImportance::default(),
-        })
+        ))
     }
 
     #[must_use = "the new memory ID is needed for downstream operations"]
@@ -198,14 +242,14 @@ impl MemoryStore {
     ///
     /// Before issue #258 the supersede path hardcoded `active` into the row it
     /// built, so `--status candidate` was accepted, validated, and then dropped
-    /// two frames above the INSERT. Insertability is enforced here and nowhere
-    /// else in the store — [`MemoryStatus::ensure_valid_for_insert`] is the
-    /// rule, and this is the only call site that guards the write: a superseding
-    /// row is a *new* row, so `superseded`/`deprecated` are not insertable and
-    /// that lifecycle belongs to the old row's UPDATE, which this body issues
-    /// itself. The CLI and MCP layers call the same method before arriving here
-    /// only to answer with their own error shape; a library caller that skips
-    /// that precheck is stopped by this copy.
+    /// two frames above the INSERT. [`MemoryStatus::ensure_valid_for_insert`] is
+    /// the rule and names every frame that calls it — the two store bodies and
+    /// the CLI/MCP prechecks, which call it only to answer in their own error
+    /// shape — so this is not the only copy of the check, it is the one that
+    /// guards the write: a superseding row is a *new* row, so
+    /// `superseded`/`deprecated` are not insertable and that lifecycle belongs to
+    /// the old row's UPDATE, which this body issues itself. A library caller that
+    /// skips the prechecks is stopped by this copy.
     ///
     /// A `candidate` replacement is invisible to default search/list (which bind
     /// `status = 'active'`), and supersede does not touch its retrieval
@@ -217,25 +261,23 @@ impl MemoryStore {
     /// # Errors
     ///
     /// Returns [`Error::InvalidInput`] if `row.row.status` is not insertable, if
-    /// the content is empty or over the limit, or if `row.row.metadata` is blank
-    /// or invalid JSON; a storage-layer error if `row.old_id` does not exist in
-    /// `row.row.project_id`.
+    /// the content is empty or over the limit, if `row.row.metadata` is blank or
+    /// invalid JSON, or if the row named by `row.old_id` is already `superseded`
+    /// or `deprecated` — only `active` and `candidate` rows can be superseded, so
+    /// re-superseding one of the other two writes nothing and the message names
+    /// the row's current status (and its `superseded_by` when set). Returns a
+    /// storage-layer error if `row.old_id` does not exist in `row.row.project_id`.
     pub fn supersede_with(&mut self, row: &NewSupersedingMemory<'_>) -> Result<String, Error> {
-        // The insert-status rule, enforced on the one path every supersede
-        // takes — no entry point above this can admit a `superseded` or
-        // `deprecated` replacement.
+        // The insert-status rule, on the one body every supersede takes. Not the
+        // only call site — see `MemoryStatus::ensure_valid_for_insert` for the
+        // map — but the one a caller cannot get past.
         row.row.status.ensure_valid_for_insert()?;
 
+        // Both cheap rules run before the embedding call and before the store
+        // write, so a payload the caller must repair never pays for inference and
+        // is never confused with a lock or a disk fault.
         Self::validate_input_length(row.row.content)?;
-
-        // Validate metadata: reject empty strings and invalid JSON
-        if let Some(meta) = row.row.metadata {
-            if meta.trim().is_empty() {
-                return Err(Error::InvalidInput("metadata cannot be empty".to_string()));
-            }
-            serde_json::from_str::<serde_json::Value>(meta)
-                .map_err(|e| Error::InvalidInput(format!("invalid metadata JSON: {}", e)))?;
-        }
+        Self::validate_metadata(row.row.metadata)?;
 
         let embedding = self.get_embedding(row.row.content, EmbeddingRole::Passage)?;
 
@@ -290,16 +332,18 @@ impl MemoryStore {
         old_id: &str,
         importance: MemoryImportance,
     ) -> Result<String, Error> {
-        self.supersede_with(&NewSupersedingMemory {
-            row: NewMemory {
-                project_id,
-                content,
-                metadata,
-                memory_type,
-                status: MemoryStatus::Active,
-            },
-            old_id,
-            importance,
-        })
+        self.supersede_with(
+            &NewSupersedingMemory::new(
+                NewMemory {
+                    project_id,
+                    content,
+                    metadata,
+                    memory_type,
+                    status: MemoryStatus::Active,
+                },
+                old_id,
+            )
+            .with_importance(importance),
+        )
     }
 }
