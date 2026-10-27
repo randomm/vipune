@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-10-27
+
+### Bug Fixes
+
+- Store no metadata when supersede_memory omits it ([#308](https://github.com/randomm/vipune/pull/308))
+
+### Documentation
+
+- Document the v0.19.0 metadata and re-supersede refusals ([#301](https://github.com/randomm/vipune/pull/301))
+
+### Miscellaneous
+
+- Stop src/main.rs re-declaring the library module tree ([#302](https://github.com/randomm/vipune/pull/302))
+- Fix docs and dead_code reasons left stale by #302 ([#306](https://github.com/randomm/vipune/pull/306))
+
+
 ## [0.19.0] - 2026-10-27
 
 ### Bug Fixes
