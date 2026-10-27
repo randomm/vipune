@@ -33,7 +33,8 @@ struct MemoryCounts {
     by_project: HashMap<String, usize>,
 }
 
-/// Run the `doctor --fts` handler.
+/// Run the `doctor --fts` handler, dispatched from the `Commands::Doctor`
+/// branch in `commands/mod.rs`.
 ///
 /// # Arguments
 ///
@@ -47,7 +48,6 @@ struct MemoryCounts {
 ///
 /// Returns an error if the database cannot be opened or queried. A locked database
 /// yields the actionable MCP-server message.
-#[allow(dead_code)] // called from task-a's dispatch arm in commands/mod.rs (separate workstream)
 pub fn handle_doctor_fts(
     db_path: &Path,
     project_filter: Option<&str>,

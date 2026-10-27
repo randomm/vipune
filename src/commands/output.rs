@@ -277,8 +277,9 @@ pub struct MergeResponse {
 }
 
 /// Response for `export` operation (see `ExportRowLine` for the JSONL row shape).
+/// Constructed only by this module's tests; the export handler uses its own
+/// command-local struct.
 #[derive(Serialize)]
-#[allow(dead_code)] // Consumed by task-a (export handler) in the consolidated tree
 pub struct ExportResponse {
     /// Number of data rows exported (excluding the header line).
     pub rows: usize,
@@ -289,8 +290,8 @@ pub struct ExportResponse {
 /// One JSONL export row — the field set `vipune export` writes per line, which
 /// `vipune import` restores. DB `type` is renamed to `memory_type`; `embedding` is
 /// base64 of the stored BLOB (`""` for empty); `superseded_by`/`last_retrieved_at` nullable.
+/// Constructed only by this module's tests, which pin the wire shape.
 #[derive(Serialize, Clone, Debug)]
-#[allow(dead_code)] // Consumed by task-a (export handler) in the consolidated tree
 pub struct ExportRowLine {
     /// Memory id.
     pub id: String,
@@ -322,8 +323,9 @@ pub struct ExportRowLine {
 }
 
 /// Response for `import` operation (all-or-nothing; `skipped` = existing-id rows, not errors).
+/// Constructed only by this module's tests; the import handler uses the
+/// `commands::ImportResponse` shape.
 #[derive(Serialize)]
-#[allow(dead_code)] // Consumed by task-b (import handler) in the consolidated tree
 pub struct ImportResponse {
     /// Number of rows newly inserted into the destination DB.
     pub inserted: usize,

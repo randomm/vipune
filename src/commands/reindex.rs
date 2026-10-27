@@ -53,9 +53,9 @@ fn open_fast_fail(db_path: &Path) -> Result<Database, Error> {
 }
 
 /// The migration's config: the CLI's fully resolved config, with only the
-/// embedding model re-pointed at the model this command was invoked with —
-/// no field-by-field copy that could drift from `main.rs`'s
-/// `to_lib_config`.
+/// embedding model re-pointed at the model this command was invoked with.
+/// The bin and the library share one `Config` type (issue #267), so there is
+/// no field-by-field copy to drift.
 fn migration_config(model_id: &str) -> Result<crate::config::Config, Error> {
     let mut config = crate::config::Config::load().map_err(|e| Error::Config(e.to_string()))?;
     config.embedding_model = model_id.to_string();

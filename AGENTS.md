@@ -245,7 +245,7 @@ Orientation for agents new to the codebase (verify against the tree — the
 
 | Module | Responsibility |
 |--------|---------------|
-| `src/main.rs` | CLI entry; `to_lib_config()` maps the CLI `config::Config` onto the library `vipune::Config` and feeds **only** `run_mcp` (`#[cfg(feature = "mcp")]`), so an unmapped field silently takes its hand-written `Default` in MCP sessions while the CLI honours the configured value |
+| `src/main.rs` | CLI entry; declares **no** modules and shares the library's one `Config` type (issue #267), so it feeds the loaded `Config` straight to `run_mcp` (`#[cfg(feature = "mcp")]`) — there is no field-by-field mapping to drift |
 | `src/lib.rs` | Synchronous library core; public API surface (`MemoryStore`, the lifecycle enums, `Config`) |
 | `src/memory/` | Domain layer: store, the validating add edge that funnels every `vipune add`, the enum-typed update boundary, search, batch, and the lifecycle types |
 | `src/sqlite/` | Storage: `Database`, `Memory` struct, search, FTS5, migrations, and the supersede/insert/update/import paths |
