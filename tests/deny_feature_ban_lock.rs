@@ -22,11 +22,11 @@ fn read(rel: &str) -> String {
     std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("{rel}: unreadable: {e}"))
 }
 
-/// The `crate = "…"` spec of a `[bans] features` row, or `None` for a line that
-/// is not a live row. Brace before key: `{ deny = … }` is a row, a bare `crate
-/// = "…"` outside one is not, and a comment line is neither (`numbered`). The
-/// value is required to be quoted: an unquoted `crate = a@1.2.3` is invalid
-/// TOML, and reading it anyway would let a typo look like a live row.
+/// The `crate = "…"` spec of a `[bans] features` row, else `None`.
+///
+/// Requiring the leading brace keeps a bare `crate = "…"` outside a row from
+/// reading as one, and requiring quotes keeps an unquoted (so invalid-TOML)
+/// `crate = a@1.2.3` typo from looking live. Comments are already gone (`numbered`).
 fn banned_crate_spec(line: &str) -> Option<String> {
     if !line.trim_start().starts_with('{') {
         return None;
@@ -43,10 +43,11 @@ fn numbered(text: &str) -> impl Iterator<Item = String> + '_ {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
 }
 
-/// `[[package]]` blocks of Cargo.lock as (name, version) pairs. Each block runs
-/// from its header to the next, so the name/version are the block's own top-level
-/// keys: a `dependencies` entry sits inside a `[dependencies]`-style indented
-/// list and never decodes (they are quoted bare strings, not `name = "…"`).
+/// `[[package]]` blocks of Cargo.lock as (name, version) pairs.
+///
+/// Each block runs to the next header, so name/version are the block's own
+/// top-level keys: an entry in a `dependencies` list is a quoted bare string and
+/// never decodes as `name = "…"`.
 fn lockfile_packages(lock: &str) -> Vec<(String, String)> {
     const HEADER: &str = "[[package]]";
     let mut packages = Vec::new();
@@ -80,13 +81,14 @@ fn unquote(value: &str) -> Option<String> {
 }
 
 /// `Some(reason)` for a spec cargo-deny could read as matching more than the one
-/// release the row intends: no `@` at all (a bare crate name bans the crate at
-/// every version), no crate name, or a version carrying an operator or wildcard.
-/// A *version string* is deliberately not validated beyond that — cargo-deny
+/// release the row intends: no `@` at all, no crate name, or a version carrying
+/// an operator or wildcard.
+///
+/// A *version string* is deliberately not validated beyond that: cargo-deny
 /// accepts both an exact version (`ort@2.0.0-rc.15`, pre-release included) and a
-/// `major.minor` prefix (`base64@0.23`, which does bite: verified with 0.20.2 on
-/// a probe crate that enables ort's `tls-native`), and requiring `x.y.z` here
-/// would reject rows that work.
+/// `major.minor` prefix (`base64@0.23`, verified to bite with 0.20.2 on a probe
+/// crate enabling ort's `tls-native`), so requiring `x.y.z` here would reject
+/// rows that work.
 fn spec_violation(spec: &str) -> Option<String> {
     let Some((name, version)) = spec.rsplit_once('@') else {
         return Some("no `@` — a bare crate name matches every release".to_string());
@@ -111,6 +113,23 @@ fn version_matches(version: &str, spec_version: &str) -> bool {
             && version.get(spec_version.len()..spec_version.len() + 1) == Some("."))
 }
 
+/// The rows of `lock` for crate `name` that `spec_version` matches — the copies
+/// cargo-deny would apply the ban to.
+///
+/// Exposed as a name list rather than only as `covers_every_copy`'s all/none
+/// test because a `base64@0.13.1` row bites exactly one copy while a `base64@0.99`
+/// row bites none, and the row assertion must reject both for different reasons.
+fn matching_copies<'a>(
+    lock: &'a [(String, String)],
+    name: &str,
+    spec_version: &str,
+) -> Vec<&'a str> {
+    copies_of(lock, name)
+        .into_iter()
+        .filter(|v| version_matches(v, spec_version))
+        .collect()
+}
+
 /// The crate name of a `name@version` spec: the part before the last `@` (a
 /// pre-release keeps its own hyphens, so this is not a plain `split_once`).
 fn spec_crate(spec: &str) -> &str {
@@ -125,10 +144,39 @@ fn copies_of<'a>(lock: &'a [(String, String)], name: &str) -> Vec<&'a str> {
         .collect()
 }
 
+/// The two halves the row assertion demands, spelled out because an `assert!` on
+/// their conjunction cannot say which one a row failed: `resolves_in` and
+/// `covers_every_copy`.
+///
+/// `covers` reports the **ungarnished** coverage — no roster exemption — because
+/// a roster row is the common case and saying `ok` for it would hide which copies
+/// the ban does not reach. The caller ORs the exemption in, so pass is
+/// `resolves && (covers || exempt)`, never this `covers` alone.
+fn row_verdict(lock: &[(String, String)], spec: &str) -> (&'static str, bool, bool) {
+    let resolves = resolves_in(lock, spec);
+    let covers = covers_every_copy(lock, spec);
+    let why = match (resolves, covers) {
+        (true, true) => "ok",
+        (false, false) => "resolves in no copy of its crate and leaves an extra copy unbanned",
+        (false, true) => "resolves in no copy of its crate that Cargo.lock resolves",
+        (true, false) => "does not cover every copy of its crate that Cargo.lock resolves",
+    };
+    (why, resolves, covers)
+}
+
+/// Whether the row assertion passes `spec`: both halves of `row_verdict`, with the
+/// declared roster exemption ORed into the coverage half only.
+fn row_passes(lock: &[(String, String)], spec: &str) -> bool {
+    let (_, resolves, covers) = row_verdict(lock, spec);
+    resolves && (covers || MULTI_COPY_EXCEPTIONS.contains(&spec_crate(spec)))
+}
+
 /// Whether `spec` resolves at all: its crate has at least one copy in the lock
 /// (otherwise cargo-deny ignores the row silently) and its version matches one of
-/// them with `version_matches`. Pure "any copy" — the row test asserts the
-/// stricter `covers_every_copy`, so this predicate stays probeable on its own.
+/// them with `version_matches`.
+///
+/// Pure "any copy": the row test asserts the stricter `covers_every_copy`, so this
+/// predicate stays probeable on its own.
 fn resolves_in(lock: &[(String, String)], spec: &str) -> bool {
     let Some((name, version)) = spec.rsplit_once('@') else {
         return false;
@@ -139,18 +187,18 @@ fn resolves_in(lock: &[(String, String)], spec: &str) -> bool {
 }
 
 /// Whether `spec` bans **every** copy of its crate that Cargo.lock resolves: at
-/// least one copy exists and each resolved version matches with
-/// `version_matches`.
+/// least one copy exists and each matches with `version_matches`.
 ///
 /// Per release, not "any copy matches": cargo-deny matches a `name@version` row
 /// against every package of that name, so a second copy the row does not name
-/// keeps its banned features while the gate prints `bans ok`. `multiple-versions
-/// = "warn"` makes several copies of one crate normal in this lock, so an extra
-/// unbanned `ort` must fail here rather than pass. A crate whose duplicates cannot
-/// be covered by any one row needs a `MULTI_COPY_EXCEPTIONS` entry, audited
-/// separately by `test_multi_copy_exceptions_are_declared_where_the_row_states_them`;
-/// the exemption lives in that assertion, so this predicate keeps meaning "all
-/// copies match" and its probe below stays meaningful.
+/// keeps its banned features while the gate prints `bans ok` — and
+/// `multiple-versions = "warn"` makes several copies of one crate normal in this
+/// lock, so an extra unbanned `ort` must fail here rather than pass.
+///
+/// A crate whose duplicates no one row can cover needs a `MULTI_COPY_EXCEPTIONS`
+/// entry, audited by `multi_copy_exceptions_are_declared_where_the_row_states_them`;
+/// the exemption lives in that assertion, so
+/// this predicate keeps meaning "all copies match" and its probe stays meaningful.
 fn covers_every_copy(lock: &[(String, String)], spec: &str) -> bool {
     let Some((name, version)) = spec.rsplit_once('@') else {
         return false;
@@ -162,9 +210,11 @@ fn covers_every_copy(lock: &[(String, String)], spec: &str) -> bool {
 /// The rows of a `[bans] features` list whose crate has more than one release in
 /// Cargo.lock, as `(crate name, versions)` — the rows `resolves_in` cannot
 /// certify, because a row is keyed by `name@version` while the lock keys a crate
-/// by name. The crate name is reported (not the whole spec): the exception roster
-/// is keyed on the crate, so a row for the same crate at a different version is
-/// caught rather than silently re-labelled.
+/// by name.
+///
+/// The crate name is reported, not the whole spec: the exception roster is keyed
+/// on the crate, so a row for the same crate at a different version is caught
+/// rather than silently re-labelled.
 fn multi_copy_crates<'a>(
     lock: &'a [(String, String)],
     rows: &[String],
@@ -200,29 +250,74 @@ fn test_every_banned_feature_row_names_a_crate_resolved_in_the_lockfile() {
         if let Some(reason) = spec_violation(spec) {
             panic!("deny.toml: feature-ban row crate = \"{spec}\" — {reason}");
         }
+        // Both halves, not one: `MULTI_COPY_EXCEPTIONS` exempts a row from *coverage*
+        // of every copy, and it must not exempt it from resolving at all — otherwise a
+        // roster crate could be banned at a version the lock does not resolve
+        // (`base64@0.99`), cargo-deny reports "unknown feature" for the named copy and
+        // prints `bans ok`, and the row is a green no-op. A roster row that resolves at
+        // some other release (`base64@0.13.1`) is not caught by this assertion either —
+        // it is a legitimate one-release ban — and is instead answered by the roster
+        // audit below, which requires the row to name every release the lock resolves.
+        let (why, resolves, covers) = row_verdict(&resolved, spec);
+        let exempt = MULTI_COPY_EXCEPTIONS.contains(&spec_crate(spec));
         assert!(
-            covers_every_copy(&resolved, spec) || MULTI_COPY_EXCEPTIONS.contains(&spec_crate(spec)),
-            "deny.toml: feature-ban row crate = \"{spec}\" does not cover every copy of its \
-             crate that Cargo.lock resolves — cargo-deny ignores a row matching nothing \
-             silently (verified: a row naming a crate the lock does not resolve prints `bans \
-             ok`), and an extra copy the row does not name keeps its banned features. Bump \
-             the row together with the pin in Cargo.toml, fix the crate name, or resolve the \
-             duplicate. A crate whose duplicates genuinely cannot be covered by one row needs \
-             an entry in MULTI_COPY_EXCEPTIONS, which \
-             test_multi_copy_exceptions_are_declared_where_the_row_states_them then audits."
+            resolves && (covers || exempt),
+            "deny.toml: feature-ban row crate = \"{spec}\" — {why}{}: cargo-deny ignores a \
+             row matching nothing silently (verified: a row naming a crate the lock does not \
+             resolve prints `bans ok`), and an extra copy the row does not name keeps its \
+             banned features. Bump the row together with the pin in Cargo.toml, fix the crate \
+             name, or resolve the duplicate. A crate whose duplicates genuinely cannot be \
+             covered by one row needs an entry in MULTI_COPY_EXCEPTIONS — which exempts the \
+             row from covering every copy, never from resolving in the lock — and \
+             test_multi_copy_exceptions_are_declared_where_the_row_states_them then audits \
+             that roster.",
+            if exempt && !covers {
+                " (its crate is on MULTI_COPY_EXCEPTIONS, so coverage is exempt but \
+                 resolving is not)"
+            } else {
+                ""
+            }
         );
     }
 }
 
 /// The only crates a ban row may name while Cargo.lock resolves several releases
-/// of them. A row is keyed by `name@version`, so a crate with several releases
-/// cannot be covered by any single row, however it is written — such a row is a
-/// coarse statement about one release, so it has to be on this roster (audited by
-/// `test_multi_copy_exceptions_are_declared_where_the_row_states_them`) rather
+/// of them.
+///
+/// A row is keyed by `name@version`, so a crate with several releases cannot be
+/// covered by any single row, however it is written — such a row is a coarse
+/// statement about one release, so it has to be on this roster (audited by
+/// `multi_copy_exceptions_are_declared_where_the_row_states_them`, which also
+/// requires the row's `reason` to name **every** one of those releases) rather
 /// than pass unnoticed. base64 is that case: the lock resolves 0.13.1 and 0.22.1
 /// as well, through independent upstream constraints, and `simd-unsafe` exists
-/// only in 0.23, so `base64@0.23` is the whole ban.
+/// only in 0.23, so `base64@0.23` is the whole ban. Naming every release is what
+/// stops a row that excuses itself against two of three copies from reading as a
+/// complete account of the duplicates.
+///
+/// Being on the roster exempts a row from covering **every** copy only; the row
+/// must still resolve in the lock. Without that, a roster crate could be banned at
+/// a version nobody resolves (`base64@0.99`) and cargo-deny would print `bans ok`
+/// for a row that enforces nothing. Pinned by `row_verdict_separates_the_two_halves`.
 const MULTI_COPY_EXCEPTIONS: [&str; 1] = ["base64"];
+
+/// Whether `line` names every version in `copies` as a **token**, not as a
+/// substring.
+///
+/// Two substring traps this avoids: `contains("0.23.1")` is satisfied by a reason
+/// that says only `0.23` while `0.23.1` appears elsewhere on the line (a real
+/// mutation passed the substring form), and `contains("0.23")` is satisfied by
+/// `0.23.1`. A token is a maximal run of digits, `.`, `-` and letters — `-`
+/// because a pre-release such as `2.0.0-rc.15` is itself a resolved version, so a
+/// hyphen must not end the token — so `0.23.1,` and `(0.23.1)` count while
+/// `release-0.23.1` and a bare `0.23` do not count for `0.23.1`.
+fn names_all_versions(line: &str, copies: &[&str]) -> bool {
+    let tokens: Vec<&str> = line
+        .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c.is_ascii_alphabetic()))
+        .filter(|t| !t.is_empty())
+        .collect();
+    copies.iter().all(|version| tokens.contains(version))
+}
 
 #[test]
 fn test_multi_copy_exceptions_are_declared_where_the_row_states_them() {
@@ -244,35 +339,40 @@ fn test_multi_copy_exceptions_are_declared_where_the_row_states_them() {
     );
 
     for (name, copies) in &multi_copy {
-        // The exception must be documented where a reader of the row sees it.
+        // The exception must be documented where a reader of the row sees it, and it
+        // must state every release the lock resolves. A bare `contains("duplicate")`
+        // certifies the shape of the excuse, not its accuracy: a row whose reason names
+        // two of three copies reads as a complete account while the third is invisible
+        // to anyone auditing the ban.
         let explains = deny.lines().any(|l| {
             l.trim_start().starts_with('{')
                 && l.contains(&format!("crate = \"{name}@"))
-                && l.contains("duplicate")
+                && names_all_versions(l, copies)
         });
         assert!(
             explains,
             "deny.toml: the {name} row(s) name a crate the lock resolves as {copies:?} — the \
-             row must carry a `reason` naming the duplicate releases, so nobody mistakes a \
-             one-release ban for a whole-crate one"
+             row must carry a `reason` that names **every** one of those releases (each of \
+             {copies:?} must appear on the row line), so nobody mistakes a one-release ban \
+             for a whole-crate one"
         );
     }
 }
 
-/// Contiguous, not two substrings: a row that keeps the crate but drops one
-/// denied feature satisfies a split pin — the same rule
-/// `tests/deny_gate_drift.rs` applies to the rows its own scan covers. Living
-/// here rather than there is a file-size matter, not a difference in what is
-/// pinned: deleting either literal from deny.toml fails this test.
+/// Contiguous, not two substrings: a row that keeps the crate but drops one denied
+/// feature satisfies a split pin — the same rule `tests/deny_gate_drift.rs` applies
+/// to the rows its own scan covers. Living here rather than there is a file-size
+/// matter, not a difference in what is pinned: deleting either literal from
+/// deny.toml fails this test.
 ///
 /// Per live line, not over a joined blob: `numbered` strips and joins, so the
-/// literal can only be required to *start* a line. A blob search would also
-/// match it split across the end of one row and the start of the next, which is
-/// how the `deny` list of the row above could certify the row below it.
+/// literal can only be required to *start* a line — a blob search would also match
+/// it split across the end of one row and the start of the next, which is how the
+/// `deny` list of the row above could certify the row below it.
 ///
 /// This subsumes pinning what each ort row bans: the literal carries both TLS
-/// features and the crate spec, so a row narrowed to one feature, or to a
-/// non-TLS feature, fails here.
+/// features and the crate spec, so a row narrowed to one feature, or to a non-TLS
+/// feature, fails here.
 #[test]
 fn test_the_ort_tls_deny_rows_are_pinned_as_contiguous_literals() {
     let deny = read("deny.toml");
@@ -289,146 +389,8 @@ fn test_the_ort_tls_deny_rows_are_pinned_as_contiguous_literals() {
     }
 }
 
-mod helper_probes {
-    use super::*;
-
-    #[test]
-    fn banned_crate_spec_reads_only_live_rows() {
-        assert_eq!(
-            banned_crate_spec("    { deny = [\"x\"], crate = \"a@1.2.3\", reason = \"r\" },"),
-            Some("a@1.2.3".to_string())
-        );
-        // A comment repeating the row is not a row.
-        assert_eq!(
-            banned_crate_spec("# { deny = [\"x\"], crate = \"a@1.2.3\" }"),
-            None
-        );
-        // Nor is a spec written outside a row, or a row whose spec is malformed.
-        assert_eq!(banned_crate_spec("crate = \"a@1.2.3\""), None);
-        assert_eq!(
-            banned_crate_spec("{ deny = [\"x\"], crate = a@1.2.3 }"),
-            None
-        );
-        assert_eq!(banned_crate_spec("{ deny = [\"x\"], crate = \"\" }"), None);
-        // `crate =` with only one space before `=` is not read: this scan takes
-        // the whitespace form deny.toml actually uses (rustfmt keeps it there).
-        assert_eq!(banned_crate_spec("{ crate= \"a@1.2.3\" }"), None);
-    }
-
-    #[test]
-    fn lockfile_packages_reads_headers_not_dependency_lines() {
-        let lock = "[[package]]\nname = \"a\"\nversion = \"1.2.3\"\nsource = \"x\"\ndependencies = [\n \"b 0.9.9\",\n]\n\n[[package]]\nname = \"b\"\nversion = \"0.9.9\"\n";
-        assert_eq!(
-            lockfile_packages(lock),
-            [
-                ("a".to_string(), "1.2.3".to_string()),
-                ("b".to_string(), "0.9.9".to_string())
-            ]
-        );
-        // A block with no version contributes nothing rather than borrowing one.
-        assert!(lockfile_packages("[[package]]\nname = \"a\"\n").is_empty());
-    }
-
-    #[test]
-    fn spec_violation_rejects_the_specs_that_match_more_than_one_release() {
-        // A malformed call yields Some too: the caller must not read `None` as
-        // "valid" for a spec with no `@` at all. `base64@0.23` is accepted — a
-        // major.minor prefix spec bites in cargo-deny, so rejecting it here
-        // would fail a row that works.
-        for good in ["a@1.2.3", "ort@2.0.0-rc.15", "base64@0.23", "a@1"] {
-            assert_eq!(spec_violation(good), None, "must accept {good}");
-        }
-        for bad in ["a@1.2.*", "a@>=1.2", "a@", "@1.2.3", "a"] {
-            assert!(spec_violation(bad).is_some(), "must reject {bad}");
-        }
-        // Non-numeric version text is not rejected here — cargo-deny's own
-        // matcher decides it — but it resolves to no package, and
-        // `resolves_in_matches_exact_and_prefix_specs` pins that it is caught
-        // against the lock rather than by this shape check.
-        assert!(spec_violation("a@1.2.x").is_none());
-        assert!(!resolves_in(
-            &[("a".to_string(), "1.2.3".to_string())],
-            "a@1.2.x"
-        ));
-    }
-
-    #[test]
-    fn resolves_in_matches_exact_and_prefix_specs() {
-        let lock = vec![
-            ("base64".to_string(), "0.23.1".to_string()),
-            ("ort".to_string(), "2.0.0-rc.15".to_string()),
-        ];
-        assert!(resolves_in(&lock, "base64@0.23"), "major.minor prefix");
-        assert!(resolves_in(&lock, "ort@2.0.0-rc.15"), "exact");
-        // The two ways a row goes dead: a stale version and a mistyped name.
-        assert!(!resolves_in(&lock, "ort@2.0.0-rc.9"), "stale rc pin");
-        assert!(!resolves_in(&lock, "orts@2.0.0-rc.15"), "mistyped name");
-        // A prefix that is not a version boundary must not match ("0.2" of 0.23).
-        assert!(!resolves_in(&lock, "base64@0.2"), "partial component");
-        assert!(!resolves_in(&lock, "a"), "no @");
-        // No copy of the crate at all — the row is a green no-op.
-        assert!(!resolves_in(&lock, "absent-crate@1.0.0"), "absent crate");
-    }
-
-    #[test]
-    fn covers_every_copy_demands_all_copies_resolves_in_only_one() {
-        let lock = vec![
-            ("ort".to_string(), "2.0.0-rc.15".to_string()),
-            ("ort".to_string(), "2.0.0-rc.9".to_string()),
-        ];
-        // The reason for the stricter predicate: one matching copy is enough for
-        // cargo-deny to accept the row, and not enough to ban the tree.
-        assert!(resolves_in(&lock, "ort@2.0.0-rc.15"), "one copy matches");
-        assert!(
-            !covers_every_copy(&lock, "ort@2.0.0-rc.15"),
-            "the other copy stays unbanned"
-        );
-        // One prefix on a `.` boundary covers both releases, so it bans both.
-        assert!(
-            covers_every_copy(&lock, "ort@2.0.0-rc"),
-            "prefix covers both"
-        );
-        // With a single copy the two predicates agree.
-        let one = vec![("ort".to_string(), "2.0.0-rc.15".to_string())];
-        assert!(resolves_in(&one, "ort@2.0.0-rc.15"));
-        assert!(covers_every_copy(&one, "ort@2.0.0-rc.15"));
-        // No copies: neither predicate rescues a row naming an absent crate.
-        assert!(!resolves_in(&lock, "nope@1.0.0"));
-        assert!(!covers_every_copy(&lock, "nope@1.0.0"));
-    }
-
-    #[test]
-    fn multi_copy_crates_lists_only_rows_whose_crate_has_duplicates() {
-        let lock = vec![
-            ("base64".to_string(), "0.13.1".to_string()),
-            ("base64".to_string(), "0.23.1".to_string()),
-            ("ort".to_string(), "2.0.0-rc.15".to_string()),
-        ];
-        let rows = ["base64@0.23".to_string(), "ort@2.0.0-rc.15".to_string()];
-        let multi = multi_copy_crates(&lock, &rows);
-        assert_eq!(multi.len(), 1, "only the base64 row names a duplicate");
-        // Reported by crate name, so the exception roster is keyed where a row
-        // for a second release of the same crate would also land.
-        assert_eq!(multi[0].0, "base64");
-        assert_eq!(
-            multi[0].1,
-            ["0.13.1", "0.23.1"],
-            "the reported copies are every release the lock resolves"
-        );
-        // A row whose crate is absent is not a multi-copy row (resolves_in catches it).
-        let rows = ["nope@1.0.0".to_string()];
-        assert!(multi_copy_crates(&lock, &rows).is_empty());
-    }
-
-    #[test]
-    fn the_committed_files_still_satisfy_the_scans() {
-        // A thin read means the scan above is vacuous, so assert on both files
-        // directly rather than trusting the test that uses them.
-        assert!(lockfile_packages(&read("Cargo.lock")).len() > 50);
-        assert!(numbered(&read("deny.toml")).count() > 10);
-        assert!(
-            numbered(&read("deny.toml"))
-                .any(|l| banned_crate_spec(&l) == Some("base64@0.23".to_string()))
-        );
-    }
-}
+/// Unit probes of the scanners above, kept in a sibling file so each stays under
+/// the per-file cap while still reaching the helpers as `super::` items. A
+/// subdirectory keeps Cargo from auto-discovering it as a second test target.
+#[path = "deny_feature_ban_lock/helper_probes.rs"]
+mod helper_probes;

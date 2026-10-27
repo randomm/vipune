@@ -373,7 +373,9 @@ What it covers, and what it deliberately does not:
   decodes untrusted import files and feature unification would otherwise re-enable it. `ort` and
   `ort-sys` may not resolve with `tls-native` or `tls-native-vendored` (native-tls/OpenSSL);
   `Cargo.toml` chooses `tls-rustls`, and `tests/deny_feature_ban_lock.rs` fails if such a row
-  names a crate@version the lockfile does not resolve — cargo-deny ignores a dead row silently.
+  names a crate@version the lockfile does not resolve — cargo-deny ignores a dead row silently —
+  or leaves a second copy of its crate unbanned, except for the crates on the test's declared
+  multi-copy roster (`base64`), which still have to name a version the lock resolves.
 - **Not configured** — `[licenses]` and `[sources]` are intentionally absent; enabling them is a
   separate decision, and adding an empty section rejects every license in the graph.
 

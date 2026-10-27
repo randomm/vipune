@@ -47,13 +47,13 @@ features = [
     # would silently re-enable simd-unsafe (unsafe SIMD, a 0.23 default feature)
     # if any other crate ever depends on base64 0.23 with defaults.
     # Row keyed by crate name, not by release: Cargo.lock resolves duplicate
-    # base64 releases (0.13.1 and 0.22.1 as well, through independent upstream
+    # base64 releases (0.13.1, 0.22.1 and 0.23.1, through independent upstream
     # constraints), so no single `name@version` row can cover every copy.
     # simd-unsafe exists only in 0.23, so this row is the whole ban — an
     # exception declared in tests/deny_feature_ban_lock.rs (MULTI_COPY_EXCEPTIONS)
     # rather than an accident. The ort rows below are per-release: ort and
     # ort-sys each resolve to exactly one copy, so their rows must cover it.
-    { deny = ["simd-unsafe"], crate = "base64@0.23", reason = "base64 0.23 decodes untrusted import files; simd-unsafe is a 0.23 default feature and must stay off; the lock resolves duplicate base64 releases, so this row pins the 0.23 copy that has the feature" },
+    { deny = ["simd-unsafe"], crate = "base64@0.23", reason = "base64 0.23 decodes untrusted import files; simd-unsafe is a 0.23 default feature and must stay off; the lock resolves duplicate base64 releases 0.13.1, 0.22.1 and 0.23.1, so this row pins the 0.23.1 copy that has the feature" },
     # ort's rc.15 defaults to tls-native (native-tls -> OpenSSL); Cargo.toml
     # picks tls-rustls instead, so OpenSSL must never enter the tree. The
     # version is the exact `=` pin in Cargo.toml — cargo-deny silently ignores a
