@@ -46,6 +46,13 @@ mod store_memory_importance_tests;
 #[path = "supersede_tests.rs"]
 mod supersede_tests;
 
+/// `store_memory` metadata-shape cases (#309), split out of `tests.rs` to keep
+/// that file inside the per-file cap. Same `feature = "mcp"` reasoning as
+/// `supersede_tests` above.
+#[cfg(all(test, feature = "mcp"))]
+#[path = "store_metadata_tests.rs"]
+mod store_metadata_tests;
+
 /// The get/update MCP surfaces, split out of `tests.rs` for #271 so that file
 /// stays inside the per-file cap. Same `feature = "mcp"` reasoning as
 /// `supersede_tests` above.
