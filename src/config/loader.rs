@@ -68,7 +68,7 @@ fn default_prune_min_age_days() -> f64 {
 
 /// Load configuration from TOML file.
 pub fn load_from_file() -> Result<Option<ConfigFile>, Error> {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let home = crate::config::home_dir();
     let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
 
     let config_path = config_dir.join("vipune/config.toml");

@@ -3,7 +3,12 @@
 use std::path::{Path, PathBuf};
 
 /// The home directory for default paths: `dirs::home_dir()`, then `$HOME`,
-/// then `"."` — the one chain every default-path computation in the crate uses.
+/// then `"."`.
+///
+/// Two call sites deliberately keep their own home lookup instead of this
+/// chain: `commands::hook_install`'s `home_dir()` errors when there is no
+/// home (installing hooks under `./` would be wrong), and [`expand_tilde`]/
+/// [`expand_tilde_path`] leave `~` unexpanded rather than rewrite it to `./`.
 pub(crate) fn home_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| {
         std::env::var("HOME")

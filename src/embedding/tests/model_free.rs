@@ -1,6 +1,7 @@
 //! Model-free tests for [`crate::embedding::EmbeddingEngine`] and the
 //! engine's prefix-application contract (no model download).
 
+use crate::embedding::hf_cache_dir_from_env;
 use crate::embedding::{
     EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine, l2_normalize,
     resolve_hf_cache_dir,
@@ -150,6 +151,48 @@ fn test_resolve_hf_cache_dir() {
         resolve_hf_cache_dir(Some("relative/path/"), home),
         std::path::PathBuf::from("relative/path/hub")
     );
+}
+
+/// The env-reading half of the cache-dir resolution: `EmbeddingEngine::new`
+/// gets its `hf_hub::Cache` path from `hf_cache_dir_from_env`, so setting
+/// `HF_HOME` in the process environment must select `$HF_HOME/hub`.
+///
+/// The `assert_ne!` against hf-hub's own default is what makes this a wiring
+/// pin: `Cache::default()` (what `ApiBuilder::new()` would use) ignores
+/// `HF_HOME` entirely, so without it the test passes vacuously on a host that
+/// already exports a real `HF_HOME`.
+#[test]
+fn test_hf_cache_dir_from_env_uses_hf_home() {
+    // Mutates the process env, so it takes the same guard as every other
+    // env-touching test in this target (see `config::paths::tests`).
+    let _guard = crate::config::tests_utils::lock_env_mutex();
+    let dir = tempfile::TempDir::new().expect("tempdir for HF_HOME");
+    let expected = dir.path().join("hub");
+
+    let saved = std::env::var("HF_HOME").ok();
+    unsafe {
+        std::env::set_var("HF_HOME", dir.path());
+    }
+    let resolved = hf_cache_dir_from_env();
+    // hf-hub 0.5.0 Cache::default(): home/.cache/huggingface/hub, ignoring
+    // HF_HOME — the path reverting `new` to ApiBuilder::new() would produce.
+    let hf_hub_default = dirs::home_dir().map(|home| home.join(".cache").join("huggingface"));
+    unsafe {
+        match saved {
+            Some(value) => std::env::set_var("HF_HOME", value),
+            None => std::env::remove_var("HF_HOME"),
+        }
+    }
+
+    assert_eq!(resolved, expected);
+    if let Some(default_parent) = hf_hub_default {
+        assert_ne!(
+            resolved,
+            default_parent.join("hub"),
+            "the tempdir HF_HOME must not coincide with hf-hub's own default cache, \
+             or this test cannot tell our resolver from ApiBuilder::new()"
+        );
+    }
 }
 
 #[test]
