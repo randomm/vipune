@@ -31,7 +31,7 @@ vipune search "deployment rules" --memory-type guard
 # Replace an outdated memory
 vipune add "Alice now works at Google" --supersedes <old-memory-id>
 # (the target must still be active or candidate — a row already superseded or
-# deprecated is refused and writes nothing; see cli-reference.md → add --supersedes)
+# deprecated is refused and writes nothing; see cli-reference.md → add, the --supersedes bullet)
 
 # ...or stage the replacement as a candidate: hidden from default search/list
 # until activated with `vipune update <id> --status active` (see
@@ -80,7 +80,7 @@ After completing work, store important findings:
 - `store_memory(text, metadata?, memory_type?, status?, importance?, supersedes?, force?)` — store with optional type/status/importance/supersede; `status` and `importance` are honoured on the row `supersedes` creates, so `status: "candidate"` + `supersedes` stages a hidden replacement (see `cli-reference.md` → "Supersede with a candidate replacement" for what that means and how to activate it) and `importance: "critical"` protects the new row from `prune`
 - `search_memories(query, limit?, memory_types?, statuses?, recency_weight?, hybrid?, no_touch?)` — find by meaning
 - `list_memories(limit?, memory_types?, statuses?)` — list recent
-- `supersede_memory(new_text, old_memory_id, memory_type?, metadata?)` — replace existing memory; the `old_memory_id` row must still be `active` or `candidate` (see `cli-reference.md` → `add --supersedes`)
+- `supersede_memory(new_text, old_memory_id, memory_type?, metadata?)` — replace existing memory; the `old_memory_id` row must still be `active` or `candidate` (see `cli-reference.md` → `add`, the `--supersedes` bullet)
 - `get_memory(id, no_touch?)` — retrieve a memory by ID
 - `delete_memory(id)` — permanently delete a memory
 - `update_memory(id, text?, metadata?, memory_type?, status?, importance?)` — update content, metadata, type, status, or importance
