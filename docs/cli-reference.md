@@ -142,7 +142,7 @@ rather than failing the batch. There is no `vipune ingest`/`batch_ingest` comman
 library-only.
 The storage tier below the store validates nothing, so `vipune import` is unchanged — a dump is
 taken as given — and the hook insert path (`src/hook/run.rs` → `Database::insert_with_hash`)
-writes metadata without this check.
+writes no metadata at all, so there is nothing for it to check.
 
 (`update --status` is the route named above, and its own flag table notes the one asymmetry it
 has with `add --status`.)
@@ -519,7 +519,7 @@ vipune mcp
 - `new_text` — the new content that replaces the old memory (required)
 - `old_memory_id` — ID of the memory to supersede (required)
 - `memory_type` — optional type for the new memory (default: `fact`)
-- `metadata` — optional structured labels as a JSON document; omitting it — or sending it as JSON `null` — stores the literal `null` in the column on this tool (the argument reaches the store as a `&str`, `src/mcp/tools.rs`), so prefer omitting it. `store_memory` maps both forms to no metadata (see the `store_memory` `metadata` bullet above)
+- `metadata` — optional structured labels as a JSON document; omitting it — or sending it as JSON `null` — stores **no** metadata (SQL NULL), the same as `store_memory` (see the `store_memory` `metadata` bullet above). Rows written by this tool before the fix may still hold the literal string `null` in the column; reads render that as JSON `null` too and no migration rewrites them
 
 It has no `status` parameter, so the row it creates is always `active`. Stage a `candidate` replacement through `store_memory` with `supersedes` + `status` instead.
 

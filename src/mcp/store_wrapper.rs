@@ -118,22 +118,22 @@ impl StoreWrapper {
         }
     }
 
-    /// Supersede an existing memory with new content, at the `active` status and
-    /// the default importance — what the `supersede_memory` tool drives (it has
-    /// neither a `status` nor an `importance` parameter).
+    /// Supersede an existing memory with new content at the `active` status and the
+    /// default importance — what `supersede_memory` drives. `metadata` is `Option<&str>`:
+    /// `None` is SQL NULL (as `store_memory`), not the string `"null"` (#305).
     #[allow(dead_code)] // Used by supersede_memory tool
     pub(crate) fn supersede(
         &self,
         project_id: &str,
         new_text: &str,
-        metadata: &str,
+        metadata: Option<&str>,
         memory_type: MemoryType,
         old_memory_id: &str,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let row = NewMemory {
             project_id,
             content: new_text,
-            metadata: Some(metadata),
+            metadata,
             memory_type,
             status: MemoryStatus::Active,
         };
