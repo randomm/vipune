@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-27
+
+### Miscellaneous
+
+- *(deps)* Bump criterion from 0.7.0 to 0.8.2 ([#315](https://github.com/randomm/vipune/pull/315))
+- *(deps)* Bump rusqlite from 0.40.2 to 0.41.0 ([#313](https://github.com/randomm/vipune/pull/313))
+- *(deps)* Bump rmcp from 1.8.0 to 3.7.0 ([#314](https://github.com/randomm/vipune/pull/314))
+
+
 ## [0.20.0] - 2026-10-27
 
 ### Features
