@@ -3,6 +3,7 @@
 
 use crate::embedding::{
     EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine, l2_normalize,
+    resolve_hf_cache_dir,
 };
 use crate::embedding_profiles::{EmbeddingRole, profile_for};
 use crate::errors::Error;
@@ -104,6 +105,11 @@ fn test_air_gapped_docs_and_ci_cache_match_embed_revision() {
         EMBED_MODEL_REVISION
     );
 
+    assert!(
+        ci.contains("path: ~/.cache/huggingface/hub"),
+        "CI must keep caching the default HuggingFace Hub cache dir — CI sets no HF_HOME, so the resolver uses this path",
+    );
+
     // Both built-in profiles must be pinned in the CI cache (issue #217):
     // the second cache key (HF_CACHE_KEY_E5) must reference the e5
     // profile's revision prefix, and the README must document the e5
@@ -119,6 +125,30 @@ fn test_air_gapped_docs_and_ci_cache_match_embed_revision() {
         readme.contains(&format!("--revision {}", e5.revision)),
         "README air-gapped instructions must use `--revision {}` for the e5 profile — drift between docs and code",
         e5.revision
+    );
+}
+
+/// The pure cache-dir resolver: `HF_HOME` set (non-empty) wins, unset and
+/// empty both fall back to `<home>/.cache/huggingface/hub`. Values are passed
+/// in directly, so this never touches the process environment (a sibling test
+/// reading `HOME` through `Config::default()` is the hazard the env-mutating
+/// tests in `config::tests_utils` serialise against).
+#[test]
+fn test_resolve_hf_cache_dir() {
+    let home = std::path::Path::new("/home/tester");
+    let default_dir = std::path::Path::new("/home/tester/.cache/huggingface/hub");
+
+    assert_eq!(
+        resolve_hf_cache_dir(Some("/data/hf"), home),
+        std::path::PathBuf::from("/data/hf/hub")
+    );
+    assert_eq!(resolve_hf_cache_dir(None, home), default_dir);
+    // An empty HF_HOME is unset, not the root directory (`/hub`).
+    assert_eq!(resolve_hf_cache_dir(Some(""), home), default_dir);
+    // Appended verbatim — no normalisation, matching hf-hub's own rule.
+    assert_eq!(
+        resolve_hf_cache_dir(Some("relative/path/"), home),
+        std::path::PathBuf::from("relative/path/hub")
     );
 }
 

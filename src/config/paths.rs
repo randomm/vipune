@@ -2,6 +2,16 @@
 
 use std::path::{Path, PathBuf};
 
+/// The home directory for default paths: `dirs::home_dir()`, then `$HOME`,
+/// then `"."` — the one chain every default-path computation in the crate uses.
+pub(crate) fn home_dir() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(|| {
+        std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."))
+    })
+}
+
 /// Expand `~` to home directory in a PathBuf (in-place).
 pub fn expand_tilde(path: &mut PathBuf) {
     if path.starts_with("~")
@@ -26,6 +36,27 @@ pub fn expand_tilde_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::tests_utils;
+
+    #[test]
+    fn test_home_dir_resolves_home() {
+        // Mutates the process env, so it takes the same guard as every other
+        // env-touching test in this target: `dirs::home_dir()` reads `HOME`
+        // through `getenv` on whatever thread a sibling test runs on.
+        let _guard = tests_utils::lock_env_mutex();
+        let saved = std::env::var("HOME").ok();
+        unsafe {
+            std::env::set_var("HOME", "/tmp/vipune-home-probe");
+        }
+        let resolved = home_dir();
+        unsafe {
+            match saved {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        assert_eq!(resolved, PathBuf::from("/tmp/vipune-home-probe"));
+    }
 
     #[test]
     fn test_expand_tilde() {

@@ -55,7 +55,7 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 4. Raw f32 array is converted to little-endian bytes for storage
 5. Cosine similarity computed in Rust during search (not via SQL extension)
 
-**Caching**: Model files downloaded on first use via `hf_hub`, cached in `~/.cache/huggingface/hub/`, reused for all subsequent operations.
+**Caching**: Model files downloaded on first use via `hf_hub`, cached by default in `~/.cache/huggingface/hub` (or `$HF_HOME/hub` when `HF_HOME` is set), reused for all subsequent operations.
 
 **See also**: [Embedding Pipeline Details](embedding-pipeline.md) for contributor-level documentation on ONNX integration, model versioning, and BLOB format.
 
@@ -165,7 +165,7 @@ Configurable parameters include:
 - `database_path`: Override database location (default: `~/.vipune/memories.db`)
 - `embedding_model`: HuggingFace model ID (default: `BAAI/bge-small-en-v1.5`)
 
-Model files are cached in the standard HuggingFace Hub cache at `~/.cache/huggingface/hub/`; its location is controlled by the `HF_HOME` environment variable (via `hf-hub`), not by vipune configuration.
+Model files are by default cached in the standard HuggingFace Hub cache at `~/.cache/huggingface/hub` (or `$HF_HOME/hub` when `HF_HOME` is set); setting `HF_HOME` relocates that cache, a rule implemented by vipune's own resolver (`src/embedding/engine.rs`) rather than by vipune configuration. The HF access token is then read from `$HF_HOME/token`, which is hf-hub's own convention.
 
 ## Design Constraints
 
