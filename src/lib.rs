@@ -51,17 +51,19 @@
 //! by `vipune::current_identity`'s `ModelIdentity` (model id + revision) so a
 //! model switch invalidates them.
 
+pub mod commands;
 pub mod config;
 pub mod embedding;
 pub mod embedding_profiles;
 pub mod errors;
+pub mod hook;
 pub mod memory;
 pub mod memory_types; // Library-only: batch ingest API (not used in CLI)
 pub mod migration;
 pub mod project;
 mod rrf;
-mod sqlite;
-mod temporal;
+pub mod sqlite;
+pub mod temporal;
 
 #[cfg(test)]
 #[path = "embedding_dim_audit_tests.rs"]

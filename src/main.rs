@@ -1,28 +1,23 @@
 //! CLI entry point for vipune memory layer.
-
-mod commands;
-mod config;
-mod embedding;
-mod embedding_profiles;
-mod errors;
-
-mod hook;
-mod memory;
-pub mod memory_types; // Re-export for library consumers: IngestPolicy, BatchIngestItemResult, BatchIngestResult
-mod migration;
-mod output;
-mod project;
-mod rrf;
-mod sqlite;
-mod temporal;
+//!
+//! The binary declares **no** modules: the command surface and its response
+//! DTOs live in the library (`vipune::commands`, and `vipune::commands::output`
+//! for the JSON DTOs) and everything else is imported from the library crate,
+//! so no library module is compiled a second time into the bin target (issue
+//! #267). The `vipune::` items below are the very same nominal types the library
+//! exposes, which is also what lets `run` hand the loaded config straight to
+//! `run_mcp` without a field-by-field mapping.
 
 use clap::Parser;
-use commands::Commands;
-use errors::Error;
-use memory::MemoryStore;
-use output::{ErrorResponse, print_json};
-use project::detect_project;
 use std::process::ExitCode;
+use vipune::Config;
+use vipune::commands;
+use vipune::commands::Commands;
+use vipune::commands::output::{ErrorResponse, print_json};
+use vipune::errors::Error;
+use vipune::hook::HookEvent;
+use vipune::memory::MemoryStore;
+use vipune::project::detect_project;
 
 /// vipune - A minimal memory layer for AI agents
 #[derive(Parser)]
@@ -93,58 +88,33 @@ fn main() -> ExitCode {
     }
 }
 
-/// Map the binary crate's locally-loaded `config::Config` into the library
-/// crate's `vipune::Config`.
-///
-/// The binary crate compiles its own `config` module separately from the
-/// `vipune` library crate, so the two `Config` types are distinct nominal
-/// types even though they share source. This mapping must stay pure, total,
-/// and field-by-field — no `..Default::default()` — because a
-/// `..Config::default()` fallback silently dropping fields is exactly how
-/// issue #149 shipped (MCP sessions ran with default config, ignoring the
-/// file/env-loaded values a CLI invocation would honour).
-#[cfg(feature = "mcp")]
-fn to_lib_config(config: &config::Config) -> vipune::Config {
-    vipune::Config {
-        database_path: config.database_path.clone(),
-        embedding_model: config.embedding_model.clone(),
-        similarity_threshold: config.similarity_threshold,
-        recency_weight: config.recency_weight,
-        hybrid: config.hybrid,
-        decay_refresh_days: config.decay_refresh_days,
-        promotion_threshold: config.promotion_threshold,
-        prune_retrieval_limit: config.prune_retrieval_limit,
-        prune_min_age_days: config.prune_min_age_days,
-    }
-}
-
 /// Map a `Commands::Hook` subcommand to its `HookEvent` counterpart, if it is
 /// one of the five event subcommands. Returns `None` for `Install` and
 /// `Uninstall` (those go through the normal command path) and for non-hook
 /// commands.
-fn hook_event_from_command(command: &Commands) -> Option<crate::hook::HookEvent> {
+fn hook_event_from_command(command: &Commands) -> Option<HookEvent> {
     match command {
         Commands::Hook {
             command: commands::HookCommands::SessionStart,
-        } => Some(crate::hook::HookEvent::SessionStart),
+        } => Some(HookEvent::SessionStart),
         Commands::Hook {
             command: commands::HookCommands::UserPromptSubmit,
-        } => Some(crate::hook::HookEvent::UserPromptSubmit),
+        } => Some(HookEvent::UserPromptSubmit),
         Commands::Hook {
             command: commands::HookCommands::PreToolUse,
-        } => Some(crate::hook::HookEvent::PreToolUse),
+        } => Some(HookEvent::PreToolUse),
         Commands::Hook {
             command: commands::HookCommands::PostToolUse,
-        } => Some(crate::hook::HookEvent::PostToolUse),
+        } => Some(HookEvent::PostToolUse),
         Commands::Hook {
             command: commands::HookCommands::PreCompact,
-        } => Some(crate::hook::HookEvent::PreCompact),
+        } => Some(HookEvent::PreCompact),
         _ => None,
     }
 }
 
 fn run(cli: &Cli) -> Result<ExitCode, Error> {
-    let mut config = config::Config::load()?;
+    let mut config = Config::load()?;
     config.ensure_directories()?;
 
     if let Some(db_path) = &cli.db_path {
@@ -167,13 +137,12 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
     #[cfg(feature = "mcp")]
     if matches!(cli.command, Commands::Mcp) {
         // MCP server run_mcp uses library types; map to local error type.
-        // The binary crate compiles its own `config` module separately from the
-        // `vipune` library crate, so `config::Config` and `vipune::Config` are
-        // distinct nominal types even though they share source. Rebuild the
-        // library's `Config` from the already-loaded (file + env + validated)
-        // local `config`, field for field, so MCP sessions honour the same
-        // configuration a CLI invocation would.
-        vipune::mcp::server::run_mcp(to_lib_config(&config), &project_id)
+        // The bin and the library share one `Config` type now (issue #267), so
+        // the already-loaded (file + env + validated) config is what MCP
+        // sessions get — the same values a CLI invocation honours. The field
+        // completeness that `to_lib_config` used to guarantee by hand is
+        // structural: there is no second type to map onto.
+        vipune::mcp::server::run_mcp(config, &project_id)
             .map_err(|e| Error::Config(e.to_string()))?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -187,213 +156,26 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
     commands::execute(&cli.command, &mut store, project_id, &config, cli.json)
 }
 
-// Regression coverage for #178 (memory_type/status observable in get/search/list
-// JSON) lives here because the `commands` module is a binary-only unit that
-// `cargo test --lib` cannot reach: the tests below run inside the bin target
-// and invoke the real handlers from `handlers.rs`.
-#[cfg(test)]
-mod issue_178_tests {
-    use crate::commands::{SearchContext, handle_get, handle_list, handle_search};
-    use crate::config::Config;
-    use crate::memory::crud::test_fake_embedder;
-    use crate::memory::{MemoryStore, SearchOptions};
-    use crate::output::{GetResponse, ListResponse, SearchResponse};
-    use crate::sqlite::Database;
-
-    /// Regression test for issue #178: `get --json` must return `memory_type`
-    /// and `status`. The row is written with type `guard` and status
-    /// `candidate` (non-defaults) so a mapping regression that drops the
-    /// fields cannot pass.
-    #[test]
-    fn test_get_json_response_includes_memory_type_and_status() {
-        let dir = tempfile::TempDir::new().expect("temp dir for issue 178 test");
-        let db_path = dir.path().join(format!("178_{}.db", uuid::Uuid::new_v4()));
-        let db = Database::open(&db_path).expect("open test database");
-        let embedding =
-            test_fake_embedder("never restart after a failed merge").expect("fake embedder");
-        let id = db
-            .insert(
-                "issue-178",
-                "never restart after a failed merge",
-                &embedding,
-                None,
-                "guard",
-                "candidate",
-            )
-            .expect("insert row");
-        let mut store = MemoryStore::from_db_with_test_embedder(db);
-
-        let exit = handle_get(&mut store, &id, "issue-178", true, false).expect("handle_get ok");
-        assert_eq!(exit, std::process::ExitCode::SUCCESS);
-
-        let memory = store.get(&id, "issue-178").unwrap().expect("memory found");
-        let response = GetResponse {
-            id: memory.id.clone(),
-            content: memory.content.clone(),
-            project_id: memory.project_id,
-            metadata: memory.metadata,
-            created_at: memory.created_at,
-            updated_at: memory.updated_at,
-            retrieval_count: memory.retrieval_count,
-            last_retrieved_at: memory.last_retrieved_at,
-            memory_type: memory.memory_type.clone(),
-            status: memory.status.clone(),
-            importance: memory.importance.clone(),
-        };
-        // `handle_get` returned SUCCESS for this row and `store.get` reads back
-        // the exact type/status the row was written with; the handler's mapping
-        // (Memory -> GetResponse in `handlers.rs`) therefore carries the
-        // non-default values end to end. `print_json` itself is exercised by
-        // the list/search tests below (same function for all three responses).
-        assert_eq!(memory.memory_type, "guard");
-        assert_eq!(memory.status, "candidate");
-
-        let json = serde_json::to_string_pretty(&response).expect("serialize get response");
-        assert!(
-            json.contains("\"memory_type\": \"guard\""),
-            "get JSON must carry memory_type: {json}"
-        );
-        assert!(
-            json.contains("\"status\": \"candidate\""),
-            "get JSON must carry status: {json}"
-        );
-    }
-
-    /// Regression test for issue #178: the `search`/`list --json` handlers
-    /// must return `memory_type` and `status`. Both handlers map `Memory`
-    /// rows into `SearchResultItem`/`ListItem` in `handlers.rs` via
-    /// `print_json`; this test runs that actual code path.
-    #[test]
-    fn test_search_list_json_response_includes_memory_type_and_status() {
-        let dir = tempfile::TempDir::new().expect("temp dir for issue 178 test");
-        let db_path = dir.path().join(format!("178_{}.db", uuid::Uuid::new_v4()));
-        let db = Database::open(&db_path).expect("open test database");
-        let embedding = test_fake_embedder("Alice works at Microsoft as a senior engineer")
-            .expect("fake embedder");
-        let _ = db
-            .insert(
-                "issue-178",
-                "Alice works at Microsoft as a senior engineer",
-                &embedding,
-                None,
-                "procedure",
-                "candidate",
-            )
-            .expect("insert row");
-        let mut store = MemoryStore::from_db_with_test_embedder(db);
-
-        let exit = handle_list(&mut store, "issue-178", 10, None, None, true, true)
-            .expect("handle_list ok");
-        assert_eq!(exit, std::process::ExitCode::SUCCESS);
-
-        let exit = handle_search(
-            &mut store,
-            "issue-178",
-            &SearchContext {
-                query: "senior engineer".to_string(),
-                limit: 10,
-                recency: None,
-                hybrid: false,
-                no_hybrid: true,
-                memory_type: None,
-                status: None,
-                include_candidates: true,
-                no_touch: true,
-            },
-            &Config::default(),
-            true,
-        )
-        .expect("handle_search ok");
-        assert_eq!(exit, std::process::ExitCode::SUCCESS);
-
-        // `print_json` writes `to_string_pretty` to stdout; re-run the same
-        // serialization on the rows the handlers just read to verify the
-        // payload the handlers emit (stdout itself is racy to capture under
-        // parallel tests). The handler's mapping is verified structurally:
-        // the rows read back here are exactly what the handlers mapped into
-        // the response structs.
-        let memories = store
-            .list("issue-178", 10, Some(&["procedure"]), Some(&["candidate"]))
-            .expect("list rows")
-            .into_iter()
-            .map(|m| crate::output::ListItem {
-                id: m.id,
-                content: m.content,
-                created_at: m.created_at,
-                retrieval_count: m.retrieval_count,
-                last_retrieved_at: m.last_retrieved_at,
-                memory_type: m.memory_type,
-                status: m.status,
-                importance: m.importance,
-            })
-            .collect::<Vec<_>>();
-        let list_json =
-            serde_json::to_string_pretty(&ListResponse { memories }).expect("serialize list");
-        assert!(
-            list_json.contains("\"memory_type\": \"procedure\""),
-            "list JSON must carry memory_type: {list_json}"
-        );
-        assert!(
-            list_json.contains("\"status\": \"candidate\""),
-            "list JSON must carry status: {list_json}"
-        );
-
-        let results = store
-            .search(
-                "issue-178",
-                "senior engineer",
-                10,
-                0.0,
-                SearchOptions {
-                    memory_types: Some(vec!["procedure"]),
-                    statuses: Some(vec!["candidate"]),
-                },
-            )
-            .expect("search rows")
-            .into_iter()
-            .map(|m| crate::output::SearchResultItem {
-                id: m.id,
-                content: m.content,
-                similarity: m.similarity.unwrap_or(0.0),
-                created_at: m.created_at,
-                retrieval_count: m.retrieval_count,
-                last_retrieved_at: m.last_retrieved_at,
-                memory_type: m.memory_type,
-                status: m.status,
-                importance: m.importance,
-            })
-            .collect::<Vec<_>>();
-        let search_json =
-            serde_json::to_string_pretty(&SearchResponse { results }).expect("serialize search");
-        assert!(
-            search_json.contains("\"memory_type\": \"procedure\""),
-            "search JSON must carry memory_type: {search_json}"
-        );
-        assert!(
-            search_json.contains("\"status\": \"candidate\""),
-            "search JSON must carry status: {search_json}"
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use memory_types::{BatchIngestItemResult, IngestPolicy};
-    #[cfg(feature = "mcp")]
-    use std::path::PathBuf;
 
-    /// Regression test for #149: the `config::Config -> vipune::Config`
-    /// mapping must carry every field through unchanged. Every field here is
-    /// set to a value distinct from `Config::default()` so a regression that
-    /// reintroduces `..Config::default()` (silently falling back to defaults
-    /// for unmapped fields) is caught — a test that only exercises defaults
-    /// cannot detect that class of bug.
+    /// Regression coverage for #149 — MCP sessions must honour the file/env
+    /// config a CLI invocation honours, not `Config::default()`.
+    ///
+    /// That used to be a field-by-field mapping (`to_lib_config`) whose every
+    /// field this test had to set non-default to catch a `..Config::default()`
+    /// fallback. The bin and the library share one `Config` type now (issue
+    /// #267), so `run` hands the loaded struct to `run_mcp` directly and there
+    /// is no mapping left to drop a field. What still needs pinning — and what
+    /// this test now pins — is that the struct keeps every knob the CLI and MCP
+    /// both read: a field removed from `Config` compiles here but fails the
+    /// exhaustive destructuring below.
     #[cfg(feature = "mcp")]
     #[test]
-    fn test_to_lib_config_maps_all_fields_non_default() {
-        let local_config = config::Config {
-            database_path: PathBuf::from("/nondefault/db/path.sqlite"),
+    fn test_config_is_the_single_type_shared_with_mcp() {
+        let config = Config {
+            database_path: std::path::PathBuf::from("/nondefault/db/path.sqlite"),
             embedding_model: "nondefault/embedding-model".to_string(),
             similarity_threshold: 0.42,
             recency_weight: 0.77,
@@ -404,20 +186,32 @@ mod tests {
             prune_min_age_days: 9.5,
         };
 
-        let lib_config = to_lib_config(&local_config);
+        // Exhaustive destructuring: adding a field to `Config` without wiring it
+        // through makes this fail to compile, which is the guard #149 needed.
+        let Config {
+            database_path,
+            embedding_model,
+            similarity_threshold,
+            recency_weight,
+            hybrid,
+            decay_refresh_days,
+            promotion_threshold,
+            prune_retrieval_limit,
+            prune_min_age_days,
+        } = config;
 
         assert_eq!(
-            lib_config.database_path,
-            PathBuf::from("/nondefault/db/path.sqlite")
+            database_path,
+            std::path::PathBuf::from("/nondefault/db/path.sqlite")
         );
-        assert_eq!(lib_config.embedding_model, "nondefault/embedding-model");
-        assert_eq!(lib_config.similarity_threshold, 0.42);
-        assert_eq!(lib_config.recency_weight, 0.77);
-        assert!(lib_config.hybrid);
-        assert_eq!(lib_config.decay_refresh_days, 14.0);
-        assert_eq!(lib_config.promotion_threshold, 7);
-        assert_eq!(lib_config.prune_retrieval_limit, 3);
-        assert_eq!(lib_config.prune_min_age_days, 9.5);
+        assert_eq!(embedding_model, "nondefault/embedding-model");
+        assert_eq!(similarity_threshold, 0.42);
+        assert_eq!(recency_weight, 0.77);
+        assert!(hybrid);
+        assert_eq!(decay_refresh_days, 14.0);
+        assert_eq!(promotion_threshold, 7);
+        assert_eq!(prune_retrieval_limit, 3);
+        assert_eq!(prune_min_age_days, 9.5);
     }
 
     #[test]
@@ -427,31 +221,6 @@ mod tests {
         assert!(cli.project.is_none());
         assert!(cli.db_path.is_none());
         matches!(cli.command, Commands::Add { .. });
-    }
-
-    // Exercise batch types to eliminate dead_code warnings from binary compilation
-    #[test]
-    fn test_batch_types_exist() {
-        // Verify IngestPolicy variants can be constructed
-        let _policy_force = IngestPolicy::Force;
-        let _policy_conflict = IngestPolicy::ConflictAware;
-
-        // Verify BatchIngestItemResult variants can be constructed
-        let _added = BatchIngestItemResult::Added {
-            id: "test-id".to_string(),
-        };
-        let _conflicts = BatchIngestItemResult::Conflicts {
-            proposed: "test".to_string(),
-            conflicts: vec![],
-        };
-        let _error = BatchIngestItemResult::Error {
-            message: "error".to_string(),
-        };
-
-        // Verify MemoryStore has batch_ingest method exists (compilation check)
-        // Note: We don't actually run it since that would require downloading models
-        // This test is just to satisfy dead_code analysis
-        assert!(IngestPolicy::Force == IngestPolicy::Force);
     }
 
     #[test]
@@ -617,17 +386,6 @@ mod tests {
                 ..
             } if query == "query"
         );
-    }
-
-    // Exercise MemoryStore::batch_ingest to eliminate dead_code warnings
-    #[test]
-    fn test_batch_ingest_integration_compiles() {
-        let (_dir, mut store) = MemoryStore::test_store();
-
-        // Test with empty batch
-        let result = store.batch_ingest("test-project", vec![], IngestPolicy::Force);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().results.len(), 0);
     }
 
     // ── project merge CLI parse tests ──

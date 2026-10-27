@@ -211,7 +211,7 @@ pub fn handle_promote(
     });
 
     if json {
-        crate::output::print_json(&response);
+        crate::commands::output::print_json(&response);
     } else {
         println!(
             "Promoted {} candidate memor{} to active (threshold retrieval_count >= {})",

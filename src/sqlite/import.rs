@@ -27,7 +27,7 @@ impl Database {
     ///
     /// Returns error if the database write fails, including a primary-key
     /// constraint violation when the id already exists.
-    #[allow(dead_code)] // used by bin target (import); exercised by lib tests
+    #[allow(dead_code)] // used by the import handler (src/commands/import.rs) and its tests
     #[allow(clippy::too_many_arguments)] // signature mirrors all 12 table columns
     pub fn insert_with_id(
         &self,
@@ -90,7 +90,7 @@ impl Database {
     /// path to open a single all-or-nothing transaction on the same
     /// connection that built the skip set and applied the nonzero
     /// busy_timeout).
-    #[allow(dead_code)] // used by bin target (import), not by lib
+    // No dead_code exemption: the import handler (src/commands/import.rs) calls it.
     pub(crate) fn connection(&mut self) -> &mut rusqlite::Connection {
         &mut self.conn
     }

@@ -9,8 +9,8 @@
 //!
 //! Tests live in the companion module `hook_install_tests.rs`.
 
+use crate::commands::output::print_json;
 use crate::errors::Error;
-use crate::output::print_json;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};

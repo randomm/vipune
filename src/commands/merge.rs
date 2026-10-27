@@ -2,8 +2,8 @@
 //!
 //! Moves all rows from one project_id to another within a single transaction.
 
+use crate::commands::output::{MergeResponse, print_json};
 use crate::errors::Error;
-use crate::output::{MergeResponse, print_json};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;

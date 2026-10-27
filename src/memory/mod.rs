@@ -3,12 +3,14 @@
 //! Provides a high-level API for storing, searching, and retrieving memories
 //! with automatic embedding generation via the ONNX model.
 
+// pub(crate): module internals hidden; public items re-exported explicitly via lib.rs.
+// `crud` and `store` are `pub(crate)` rather than private because the command
+// handlers (`src/commands/`) reach the test embedder seam and the store's
+// test-only constructors, and those handlers now compile in this crate.
 pub(crate) mod add;
 pub(crate) mod batch;
 pub(crate) mod crud;
 pub mod search;
-
-// pub(crate): module internals hidden; public items re-exported explicitly via lib.rs
 pub(crate) mod store;
 
 pub mod lifecycle;

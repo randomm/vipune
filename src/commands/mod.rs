@@ -13,12 +13,17 @@ pub mod hook_run;
 mod hook_install_tests;
 mod import;
 mod merge;
+pub mod output;
 mod promote;
 mod prune;
 mod reindex;
 
 #[cfg(test)]
 pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search};
+
+#[cfg(test)]
+#[path = "issue_178_tests.rs"]
+mod issue_178_tests;
 
 #[cfg(test)]
 mod backup_tests;

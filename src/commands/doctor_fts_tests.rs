@@ -9,9 +9,9 @@
 //! The locked-DB and repair tests use the real handler end-to-end.
 
 use crate::commands::doctor_fts::{handle_doctor_fts, recovery_for, recovery_note};
+use crate::commands::output::DoctorFtsResponse;
 use crate::errors::{Error, LOCKED_DB_MESSAGE};
 use crate::memory::crud::test_fake_embedder;
-use crate::output::DoctorFtsResponse;
 use crate::sqlite::Database;
 use crate::sqlite::fts::FtsDesyncReport;
 use rusqlite::Connection;
@@ -439,7 +439,7 @@ fn fts_desync_report_helpers() {
 fn doctor_fts_response_serializes_expected_fields() {
     let response = DoctorFtsResponse {
         in_sync: false,
-        underpopulated_by_project: vec![crate::output::DoctorFtsProject {
+        underpopulated_by_project: vec![crate::commands::output::DoctorFtsProject {
             project_id: "proj".to_string(),
             memory_rows: 5,
             missing_from_fts: 2,

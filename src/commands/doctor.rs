@@ -3,8 +3,8 @@
 //! `--embeddings`: reports per-project total / real / mock / unknown rows.
 //! `--projects`: scans all projects for suspected split pairs (bare id vs owner/repo).
 
+use crate::commands::output::{DoctorProjectsResponse, DoctorResponse, print_json};
 use crate::errors::Error;
-use crate::output::{DoctorProjectsResponse, DoctorResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::embedding::classify_embedding;
 use rusqlite::{Connection, OpenFlags};
@@ -212,7 +212,7 @@ pub(crate) fn collect_doctor_projects_response(
         suspected_splits: suspected_splits
             .iter()
             .map(
-                |(bare, owned)| crate::output::DoctorProjectsSuspectedSplit {
+                |(bare, owned)| crate::commands::output::DoctorProjectsSuspectedSplit {
                     pair: [bare.clone(), owned.clone()],
                     row_counts: [
                         *counts.get(bare).unwrap_or(&0),

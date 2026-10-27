@@ -255,13 +255,13 @@ Orientation for agents new to the codebase (verify against the tree — the
 | `src/rrf.rs` | Reciprocal-rank fusion of dense + FTS results |
 | `src/temporal.rs` | Recency/decay scoring |
 | `src/hook/` | Hook *event* machinery only (payload parsing, candidate extraction, placeholder embeddings, `run_hook_event`). **Not** install/uninstall — those live in `src/commands/hook_install.rs` |
-| `src/commands/` | Subcommand handlers; the clap surface is the `Commands` / `ProjectCommands` / `HookCommands` enums in `mod.rs`, and `handlers.rs` projects `Memory` into the `output.rs` DTOs |
+| `src/commands/` | Subcommand handlers **and the CLI's JSON DTOs** (`output.rs`); the crate is the shared surface the binary consumes (issue #267 — `src/main.rs` declares no modules). The clap surface is the `Commands` / `ProjectCommands` / `HookCommands` enums in `mod.rs`, and `handlers.rs` projects `Memory` into the `output.rs` DTOs |
 | `src/migration.rs` | Model-revision migration: `migrate_model` plus the marker-first crash-safe lifecycle; reaches for `Database::conn()` directly |
 | `src/sqlite/identity.rs` | `ModelIdentity` and the read side of the identity marker — the gate every embedding-capable path must pass |
 | `src/embedding_profiles.rs` | `BUILTIN_PROFILES` (bge + `intfloat/multilingual-e5-small`), `profile_for`, and the per-model query/passage prefixes |
 | `src/memory_types.rs` | Cross-layer result types (not storage): conflict and batch-ingest results |
 | `src/mcp/` | MCP server (`rmcp` + `tokio`) behind the **default** `mcp` feature. Long-lived process over a `Mutex<MemoryStore>`: a poisoned lock must surface as a per-request error, never abort the server |
-| `src/errors.rs`, `src/output.rs` | `thiserror` errors; JSON/text response DTOs — `output.rs` declares its **own** DTOs and never imports `Memory` |
+| `src/errors.rs`, `src/commands/output.rs` | `thiserror` errors; JSON/text response DTOs — `output.rs` declares its **own** DTOs and never imports `Memory` |
 
 **Key invariants:**
 
@@ -288,9 +288,9 @@ Orientation for agents new to the codebase (verify against the tree — the
   "12-column" comments in `src/sqlite/query_mod.rs` and `src/sqlite/mod.rs` are
   **stale** — the shape is 13 columns.
 
-  `src/output.rs` does **not** import `Memory` — it declares its own DTOs,
-  which `src/commands/handlers.rs` fills by projecting `Memory` fields, so a
-  rename/retype does break those projections but the compiler catches it in
+  `src/commands/output.rs` does **not** import `Memory` — it declares its own
+  DTOs, which `src/commands/handlers.rs` fills by projecting `Memory` fields, so
+  a rename/retype does break those projections but the compiler catches it in
   `handlers.rs`, not in `output.rs`.
 - **`Memory` stores `memory_type`/`status`/`importance` as `String`** with no
   CHECK constraint, and validation is per column — the enum `from_str` helpers

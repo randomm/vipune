@@ -40,9 +40,9 @@
 //! (`ImportanceLevel::parse`) and the prune literals. An empty string or an
 //! explicit JSON `null` is malformed, not absent.
 
+use crate::commands::output::print_json;
 use crate::errors::Error;
 use crate::memory::lifecycle::MemoryImportance;
-use crate::output::print_json;
 use crate::sqlite::Database;
 use crate::sqlite::identity;
 use base64::Engine;

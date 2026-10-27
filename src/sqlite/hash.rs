@@ -31,7 +31,7 @@ pub fn normalize_content(content: &str) -> String {
 
 /// 64-bit FNV-1a hash of `input`, hex-encoded (16 lowercase chars).
 /// No external crate — hand-rolled per project std-first philosophy.
-#[allow(dead_code)] // used by content_hash; content_hash used by hook + migration
+#[allow(dead_code)] // public helper: reached in-crate through `content_hash`, which composes through it
 pub fn fnv1a64_hex(input: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
     for byte in input.as_bytes() {
@@ -43,7 +43,8 @@ pub fn fnv1a64_hex(input: &str) -> String {
 
 /// Compute the dedup hash for a content string:
 /// normalise (lowercase + collapse whitespace) then FNV-1a 64-bit hex.
-#[allow(dead_code)] // used by hook insert path (task-b) and migration (task-c)
+// No dead_code exemption: the hook insert path (src/hook/run.rs) and the
+// migration-4 dedup backfill both call it, so it is live in every target.
 pub fn content_hash(content: &str) -> String {
     let normalized = normalize_content(content);
     fnv1a64_hex(&normalized)
