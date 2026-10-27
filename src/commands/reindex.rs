@@ -23,11 +23,11 @@
 //! `is_migrating` before calling the library. Plain reindex (no `--force`)
 //! still re-embeds only Mock-classified rows.
 
+use crate::commands::output::{ReindexFailure, ReindexResponse, print_json};
 use crate::embedding::{EmbeddingEngine, MAX_EMBEDDING_TOKENS};
 use crate::embedding_profiles::{EmbeddingRole, profile_for};
 use crate::errors::Error;
 use crate::migration::migrate_model;
-use crate::output::{ReindexFailure, ReindexResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::embedding::classify_embedding;
 use crate::sqlite::identity;

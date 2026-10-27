@@ -1,11 +1,11 @@
 //! Command handlers for vipune CLI.
 
+use crate::commands::output::*;
 use crate::embedding_profiles::EmbeddingRole;
 use crate::errors::Error;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 use crate::memory_types::{AddResult, IngestPolicy};
-use crate::output::*;
 use crate::{config, embedding::EmbeddingEngine, temporal};
 use std::process::ExitCode;
 

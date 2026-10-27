@@ -16,8 +16,8 @@
 //!   the FTS5 rebuild special command `INSERT INTO memories_fts(memories_fts)
 //!   VALUES('rebuild')`. Repair is always GLOBAL and ignores `-p`.
 
+use crate::commands::output::{DoctorFtsProject, DoctorFtsResponse, print_json};
 use crate::errors::{Error, LOCKED_DB_MESSAGE};
-use crate::output::{DoctorFtsProject, DoctorFtsResponse, print_json};
 use crate::sqlite::Database;
 use crate::sqlite::fts::FtsDesyncReport;
 use rusqlite::{Connection, OpenFlags};

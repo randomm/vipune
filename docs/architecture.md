@@ -36,7 +36,7 @@ vipune is a single Rust binary CLI tool for semantic memory storage and search. 
 | `src/errors.rs` | Unified, vipune-owned error types; no variant stores a third-party error type. Locked database is `Error::DatabaseLocked` (`Error::is_locked()`). |
 | `src/sqlite/db_error.rs` | Classifies raw `rusqlite::Error` from the SQLite result code at the storage boundary — the one place a lock is recognised |
 | `src/memory_types.rs` | Shared type definitions (AddResult, ConflictMemory) |
-| `src/output.rs` | JSON response formatting for CLI output |
+| `src/commands/output.rs` | JSON response formatting for CLI output |
 | `src/temporal.rs` | Recency decay scoring with exponential/linear decay functions for search result weighting |
 | `src/rrf.rs` | Reciprocal Rank Fusion (RRF) algorithm for merging semantic and BM25 search rankings |
 

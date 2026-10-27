@@ -6,19 +6,32 @@ mod doctor;
 mod doctor_fts;
 mod export;
 mod handlers;
-pub mod hook_install;
-pub mod hook_run;
+mod hook_install;
+mod hook_run;
 
 #[cfg(test)]
 mod hook_install_tests;
 mod import;
 mod merge;
+pub mod output;
 mod promote;
 mod prune;
 mod reindex;
 
+// The binary's hook entry points (`main.rs` maps the five event subcommands to
+// `HookEvent` and calls `handle_hook_event` before dispatching), re-exported
+// here so `commands` stays the only crate surface `main.rs` names and
+// `crate::hook` / `commands::hook_run` can stay private.
+#[doc(hidden)]
+pub use crate::hook::HookEvent;
+pub use hook_run::handle_hook_event;
+
 #[cfg(test)]
 pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search};
+
+#[cfg(test)]
+#[path = "issue_178_tests.rs"]
+mod issue_178_tests;
 
 #[cfg(test)]
 mod backup_tests;
@@ -63,7 +76,6 @@ mod reindex_tests;
 
 use crate::config;
 use crate::errors::Error;
-use crate::hook::HookEvent;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, UpdateParams};
 use serde::Serialize;

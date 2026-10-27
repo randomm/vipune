@@ -2,11 +2,11 @@
 
 #![cfg(test)]
 
+use crate::commands::output::ReindexFailure;
 use crate::commands::reindex::*;
 use crate::errors::Error;
 use crate::memory::crud::{mock_embedding_for_content, test_fake_embedder};
 use crate::memory::store::MemoryStore;
-use crate::output::ReindexFailure;
 use crate::sqlite::Database;
 use crate::sqlite::embedding::{EmbeddingClass, classify_embedding};
 use rusqlite::Connection;

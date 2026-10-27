@@ -286,7 +286,12 @@ impl Database {
     /// promote) need deterministic `created_at` values so eligibility rules
     /// such as "age > T" can be tested and reasoned about without sleeping.
     #[allow(clippy::too_many_arguments)] // signature mirrors insert(); 7/8 data fields map 1:1 to columns
-    #[allow(dead_code)] // used by prune/promote lifecycle handlers in the binary target
+    #[allow(dead_code)]
+    // No production caller: every `insert_with_time` call site is #[cfg(test)] —
+    // prune.rs `seed()` sits in `#[cfg(test)] mod tests`, and the prune_tests.rs,
+    // sqlite/tests.rs `migration` and memory/tests/search.rs modules are all
+    // #[cfg(test)]-wired. benches/db_search.rs only mentions this fn in prose
+    // (it notes the fn is invisible to bench targets). promote.rs never inserts.
     pub fn insert_with_time(
         &self,
         project_id: &str,
@@ -333,7 +338,7 @@ impl Database {
     /// Returns error on invalid embedding dimensions, write failure, or unique
     /// index rejection of the `(project_id, content_hash)` pair.
     #[allow(clippy::too_many_arguments)] // mirrors insert(); 7/8 data fields map 1:1 to columns
-    #[allow(dead_code)] // used by hook insert path (task-b) once src/hook/ lands
+    // No dead_code exemption: `src/hook/run.rs` calls it on every hook insert.
     pub fn insert_with_hash(
         &self,
         project_id: &str,
@@ -411,7 +416,6 @@ impl Database {
     /// Construct a `Database` from an already-opened `Connection`.
     /// Bypasses schema creation and migration; the connection must point
     /// to a fully initialised database.
-    #[allow(dead_code)] // lib target compiles src/sqlite/ but not src/commands/; only caller is in binary target
     pub(crate) fn from_conn(conn: Connection) -> Self {
         Self { conn }
     }

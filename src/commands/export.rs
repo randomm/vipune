@@ -208,11 +208,12 @@ impl From<&ExportRow> for ExportJsonlRow {
 
 /// Response struct for `vipune export --json`.
 ///
-/// Note: task-d of issue #195 owns `src/output.rs` and will add the shared
-/// response struct there. Until it lands, this command-local struct carries
-/// the spec-final field set (`rows`, `format_version`, `path`) so the export
-/// command builds and its tests run independently. Replace the call site with
-/// `crate::output::ExportResponse` and delete this once task-d is merged.
+/// Note: task-d of issue #195 owns `src/commands/output.rs` and will add the
+/// shared response struct there. Until it lands, this command-local struct
+/// carries the spec-final field set (`rows`, `format_version`, `path`) so the
+/// export command builds and its tests run independently. Replace the call site
+/// with `crate::commands::output::ExportResponse` and delete this once task-d is
+/// merged.
 #[derive(serde::Serialize)]
 pub struct ExportResponse {
     /// Number of data rows written (header line not counted).
@@ -321,7 +322,7 @@ pub fn handle_export(
     };
 
     if json {
-        crate::output::print_json(&response);
+        crate::commands::output::print_json(&response);
     } else {
         println!("Exported {} row(s) to {}", count, output_path.display());
     }

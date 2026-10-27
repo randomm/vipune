@@ -3,8 +3,8 @@
 use crate::commands::doctor::{
     collect_doctor_projects_response, detect_split_pairs, handle_doctor_projects,
 };
+use crate::commands::output::{DoctorProjectsResponse, DoctorProjectsSuspectedSplit};
 use crate::memory::crud::test_fake_embedder;
-use crate::output::{DoctorProjectsResponse, DoctorProjectsSuspectedSplit};
 use crate::sqlite::Database;
 use std::collections::HashMap;
 use std::path::PathBuf;

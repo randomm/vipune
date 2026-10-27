@@ -15,8 +15,8 @@
 //! - Never re-embeds and never decodes embeddings — the copy is a page-level
 //!   duplicate, so corrupt/NULL embedding blobs carry through byte-identically.
 
+use crate::commands::output::{BackupResponse, print_json};
 use crate::errors::Error;
-use crate::output::{BackupResponse, print_json};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;

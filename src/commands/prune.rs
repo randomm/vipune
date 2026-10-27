@@ -257,7 +257,7 @@ pub fn handle_prune(
     };
 
     if json {
-        crate::output::print_json(&response);
+        crate::commands::output::print_json(&response);
     } else {
         println!(
             "Pruned {} candidate memory(ies) to deprecated (N={}, T={}d); {} row(s) in database before, {} after",

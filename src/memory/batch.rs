@@ -153,7 +153,6 @@ impl MemoryStore {
     ///     }
     /// }
     /// ```
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn batch_ingest(
         &mut self,
         project_id: &str,
