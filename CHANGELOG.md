@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-27
+
+### Bug Fixes
+
+- Answer MCP store lock poisoning per request ([#296](https://github.com/randomm/vipune/pull/296))
+
+### Miscellaneous
+
+- Harden the cargo-deny gate ([#294](https://github.com/randomm/vipune/pull/294))
+
+
 ## [0.18.0] - 2026-10-26
 
 ### Documentation
