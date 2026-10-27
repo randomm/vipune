@@ -1,59 +1,47 @@
-//! `store_memory` metadata-shape tests for the MCP surface (issue #309).
+//! `store_memory` / `update_memory` metadata-shape tests for the MCP surface
+//! (issue #309).
 //!
-//! Split out of `tests.rs` to keep that file inside the per-file size cap. The
-//! gate keeps the `feature = "mcp"` half for the same reason as `supersede_tests`:
-//! the tool handler these tests drive does not exist in the `--no-default-features`
-//! lane CI runs. The shared fixtures come from `tests.rs` behind `pub(super)`.
-#[cfg(all(test, feature = "mcp"))]
+//! New module (not split out of `tests.rs`): the metadata write rule moved into
+//! one helper in #309 and these are the tool-driven cases that pin it. The gate
+//! keeps the `feature = "mcp"` half for the same reason as `supersede_tests`:
+//! the tool handler these tests drive does not exist in the
+//! `--no-default-features` lane CI runs. The shared fixtures come from
+//! `tests.rs` behind `pub(super)`.
+#[cfg(test)]
 mod mcp_store_metadata {
     use crate::config::Config;
     use crate::mcp::store_wrapper::StoreWrapper;
-    use crate::mcp::tests::tool_result_id;
+    use crate::mcp::tests::{seed_row_with_metadata, tool_result_id};
     use crate::mcp::tools::ToolHandler;
     use crate::memory::MemoryStore;
-    use crate::sqlite::Database;
+    use serde_json::json;
     use std::sync::{Arc, Mutex};
 
-    /// Reads the metadata column straight out of SQLite with no Rust type
-    /// between the column and the assertion. `MemoryStore::get` and the wrapper's
-    /// `get` both hand back an `Option<String>` decoded by `map_row_to_memory`, so
-    /// a row whose column holds the 4-character text `null` is a `Some("null")`
-    /// there — which the read-side `trim() != "null"` rendering then displays as
-    /// JSON `null`, exactly like a real SQL NULL (#305). Only the raw column
-    /// distinguishes the two spellings, so that is what this test asserts on.
-    ///
-    /// Re-opens the file for each read rather than sharing the store's handle:
-    /// `Database` owns its `Connection` and the store holds it behind the `Mutex`,
-    /// and SQLite's default rollback journal allows one reader alongside the
-    /// writer — so the read only has to avoid the write critical section, which
-    /// the loop's ordering does (the row is written before this is called).
-    fn raw_metadata_column(db_path: &std::path::Path, id: &str) -> Option<String> {
-        let db = Database::open(db_path).expect("open test database");
-        db.conn()
-            .query_row("SELECT metadata FROM memories WHERE id = ?1", [id], |row| {
-                row.get::<_, Option<String>>(0)
-            })
-            .expect("row written")
+    /// A handler and a wrapper over the same store, so a test can drive the tool
+    /// and then read the row back.
+    fn handler_for(project: &str) -> (tempfile::TempDir, ToolHandler, StoreWrapper) {
+        let (_dir, store) = MemoryStore::test_store();
+        let store = Arc::new(Mutex::new(store));
+        let handler = ToolHandler::new(store.clone(), project.to_string(), Config::default());
+        let wrapper = StoreWrapper::new(store);
+        (_dir, handler, wrapper)
     }
 
     /// Issue #309: `store_memory` built the 4-character string `"null"` for an
     /// absent argument and then compared the serialised text back to that literal
     /// to recover `None`. The two spellings of "no metadata" must land on the same
     /// SQL NULL column and no other value may be collapsed into it — so the JSON
-    /// *string* `"null"` keeps its quotes. Both `StoreWrapper::get` and the raw
-    /// column are asserted: the wrapper alone cannot tell SQL NULL from the text
-    /// `null` (see [`raw_metadata_column`]).
+    /// *string* `"null"` keeps its quotes.
+    ///
+    /// The assertion reads the stored column back through `StoreWrapper::get`,
+    /// which hands it over verbatim via `map_row_to_memory`: the read-side
+    /// `trim() != "null"` rendering that collapses both spellings lives in
+    /// `parse_metadata` / the tool response builders, which this path does not go
+    /// through, so a regression that stores the text `null` instead of SQL NULL
+    /// shows up here as `Some("null")` against an expected `None`.
     #[tokio::test]
     async fn store_memory_stores_no_metadata_for_omitted_or_null_metadata() {
-        use serde_json::json;
-
-        let (dir, db_path) = MemoryStore::test_db_path();
-        let store = MemoryStore::from_db_with_test_embedder(
-            Database::open(&db_path).expect("open test database"),
-        );
-        let store = Arc::new(Mutex::new(store));
-        let wrapper = StoreWrapper::new(store.clone());
-        let handler = ToolHandler::new(store, "omitted-meta-proj".to_string(), Config::default());
+        let (_dir, handler, wrapper) = handler_for("omitted-meta-proj");
 
         // (arguments sent to the tool, metadata column expected on the new row).
         // `force` because every case shares one text: without it the conflict
@@ -101,15 +89,48 @@ mod mcp_store_metadata {
                 expected,
                 "{label}: the metadata column must hold what the handler was given"
             );
+        }
+    }
+
+    /// Issue #309, the `update_memory` half of the rule: an absent `metadata`
+    /// argument and `"metadata": null` both reach the handler as `None` — rmcp
+    /// deserialises the JSON `null` into `None` for the `Option<Value>` field
+    /// before the handler body runs — so both must be "leave the column alone",
+    /// not "clear it". The row keeps the document it was seeded with while the
+    /// text still updates.
+    ///
+    /// The helper's `Value::Null` arm is not what this pins (the serde boundary
+    /// means the handler never sees it); that arm is covered by
+    /// `metadata_column_maps_only_absent_and_json_null_to_none` in `helpers.rs`.
+    #[tokio::test]
+    async fn update_memory_leaves_metadata_untouched_when_it_is_omitted_or_null() {
+        const SEEDED: &str = r#"{"keep":"me"}"#;
+        const SEED_TEXT: &str = "row to reword";
+
+        for label in ["omitted", "explicit null"] {
+            let (_dir, handler, wrapper) = handler_for("upd-meta-proj");
+            let seed = seed_row_with_metadata(&wrapper, "upd-meta-proj", SEED_TEXT, SEEDED);
+
+            let mut args = json!({ "id": seed.id, "text": "reworded content" });
+            if label == "explicit null" {
+                args["metadata"] = json!(null);
+            }
+
+            handler
+                .call_tool_for_test("update_memory", args)
+                .await
+                .unwrap_or_else(|err| panic!("{label}: update_memory must succeed: {err:?}"));
+
+            let row = wrapper
+                .get(&seed.id, "upd-meta-proj")
+                .expect("get")
+                .unwrap_or_else(|| panic!("{label}: row readable"));
+            assert_eq!(row.content, "reworded content", "{label}: text updated");
             assert_eq!(
-                raw_metadata_column(&db_path, &id).as_deref(),
-                expected,
-                "{label}: the raw column must be SQL NULL, not the literal text null"
+                row.metadata.as_deref(),
+                Some(SEEDED),
+                "{label}: an absent or null metadata must leave the column unchanged"
             );
         }
-        // The TempDir must outlive the store handle, as everywhere else (#278):
-        // the handler holds the last `Arc`, so it drops with it at the end of the
-        // scope, before `dir`.
-        drop(dir);
     }
 }

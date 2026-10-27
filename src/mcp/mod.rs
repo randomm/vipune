@@ -46,8 +46,8 @@ mod store_memory_importance_tests;
 #[path = "supersede_tests.rs"]
 mod supersede_tests;
 
-/// `store_memory` metadata-shape cases (#309), split out of `tests.rs` to keep
-/// that file inside the per-file cap. Same `feature = "mcp"` reasoning as
+/// `store_memory` / `update_memory` metadata-shape cases (#309) — a new test
+/// module, not a split from `tests.rs`. Same `feature = "mcp"` reasoning as
 /// `supersede_tests` above.
 #[cfg(all(test, feature = "mcp"))]
 #[path = "store_metadata_tests.rs"]

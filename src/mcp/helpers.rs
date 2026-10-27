@@ -10,7 +10,7 @@ use crate::sqlite::Memory;
 /// metadata" and store SQL NULL, while every other value is stored as its own
 /// JSON text — so the *string* `"null"` keeps its quotes and never collapses
 /// into the NULL spelling (`serde_json::to_string` is what adds them).
-pub(crate) fn metadata_column(
+pub(super) fn metadata_column(
     metadata: &Option<serde_json::Value>,
 ) -> Result<Option<String>, rmcp::ErrorData> {
     match metadata {
