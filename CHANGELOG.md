@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-27
+
+### Features
+
+- *(deps)* Bump ort and ort-sys to 2.0.0-rc.15 ([#311](https://github.com/randomm/vipune/pull/311))
+
+### Miscellaneous
+
+- Unify MCP metadata serialisation in one helper ([#310](https://github.com/randomm/vipune/pull/310))
+
+
 ## [0.19.1] - 2026-10-27
 
 ### Bug Fixes
