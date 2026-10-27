@@ -53,9 +53,11 @@
 
 // The binary's command surface: `Commands`/`execute`, the hook entry points and
 // the JSON DTOs under `commands::output`. It is the seam `src/main.rs` imports
-// instead of re-declaring the module tree (issue #267), not library API — so it
-// is doc-hidden, which keeps it out of rustdoc and out of the public API that
-// cargo-semver-checks compares against `origin/main`.
+// instead of re-declaring the module tree (issue #267), not library API. It is
+// `pub` only so `src/main.rs` can reach it and `#[doc(hidden)]` only to keep it
+// out of rustdoc — doc-hiddenness is not a stability promise and does not hide
+// the module from API tooling, so treat everything under it as free to change in
+// any release.
 #[doc(hidden)]
 pub mod commands;
 pub mod config;

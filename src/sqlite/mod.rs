@@ -286,7 +286,11 @@ impl Database {
     /// promote) need deterministic `created_at` values so eligibility rules
     /// such as "age > T" can be tested and reasoned about without sleeping.
     #[allow(clippy::too_many_arguments)] // signature mirrors insert(); 7/8 data fields map 1:1 to columns
-    #[allow(dead_code)] // used by prune/promote lifecycle handlers (src/commands/prune.rs)
+    #[allow(dead_code)]
+    // No production caller: only test code calls this — the #[cfg(test)] mod
+    // tests in src/commands/prune.rs, src/commands/prune_tests.rs,
+    // src/sqlite/migration_tests.rs and src/memory/tests/search.rs. promote.rs
+    // only updates existing rows, never inserts.
     pub fn insert_with_time(
         &self,
         project_id: &str,

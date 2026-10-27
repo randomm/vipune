@@ -27,7 +27,10 @@ impl Database {
     ///
     /// Returns error if the database write fails, including a primary-key
     /// constraint violation when the id already exists.
-    #[allow(dead_code)] // used by the import handler (src/commands/import.rs) and its tests
+    #[allow(dead_code)]
+    // No production caller: the import handler inserts with a raw tx.execute,
+    // so only the tests in src/sqlite/crud_tests.rs and src/sqlite/export_scan.rs
+    // call this.
     #[allow(clippy::too_many_arguments)] // signature mirrors all 12 table columns
     pub fn insert_with_id(
         &self,
