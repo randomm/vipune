@@ -2,8 +2,8 @@
 //! engine's prefix-application contract (no model download).
 
 use crate::embedding::{
-    EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine, l2_normalize,
-    resolve_hf_cache_dir,
+    EMBED_MODEL_ID, EMBED_MODEL_REVISION, EMBEDDING_DIMS, EmbeddingEngine, hf_cache_dir_from_env,
+    l2_normalize, resolve_hf_cache_dir,
 };
 use crate::embedding_profiles::{EmbeddingRole, profile_for};
 use crate::errors::Error;
@@ -150,6 +150,94 @@ fn test_resolve_hf_cache_dir() {
         resolve_hf_cache_dir(Some("relative/path/"), home),
         std::path::PathBuf::from("relative/path/hub")
     );
+}
+
+/// hf-hub's *default* cache directory: `ApiBuilder::new()` (and
+/// `Cache::default()`) resolves to `$HF_HOME/hub` **only when `HF_HOME` names
+/// an existing directory**, otherwise `~/.cache/huggingface/hub` — no `hub`
+/// subdirectory in that branch. The control value for the test below: the
+/// asserted path must differ from it, or the assertion would also hold with
+/// production reverted to `ApiBuilder::new()` (which is the regression being
+/// pinned). It cannot be a literal here — this host ships an inherited
+/// `HF_HOME`, so a fixed expected value could coincide with the default.
+fn hf_hub_default_cache_dir() -> std::path::PathBuf {
+    match std::env::var("HF_HOME") {
+        Ok(hf_home) if !hf_home.is_empty() && std::path::Path::new(&hf_home).is_dir() => {
+            std::path::Path::new(&hf_home).join("hub")
+        }
+        _ => crate::config::home_dir()
+            .join(".cache")
+            .join("huggingface")
+            .join("hub"),
+    }
+}
+
+/// The env-reading side of the cache-dir resolution: `$HF_HOME` from the
+/// process environment must reach the path `EmbeddingEngine::new` hands to
+/// `hf_hub::Cache::new`. The pure resolver above pins the *rule*; nothing in
+/// the suite pinned the *wiring* — reverting `EmbeddingEngine::new` to
+/// `ApiBuilder::new()`, or reading a different variable, used to leave the
+/// unit suite green while model downloads silently ignored `HF_HOME`.
+///
+/// `EmbeddingEngine::new` itself is deliberately not called here: it builds the
+/// process-wide ONNX `Environment` through a `OnceLock`
+/// (`crate::embedding::engine::ort_environment`) before it resolves the cache
+/// directory, so any call would pay the ORT build in this test process and
+/// then attempt a download. This asserts the value the sole production call
+/// site feeds to `hf_hub::Cache::new`.
+///
+/// `HF_HOME` is cleared on entry and `HOME` pinned: the host process may
+/// already export `HF_HOME`, and the helper's fallback half reads `HOME`
+/// through `crate::config::home_dir()`, which a sibling env test under the
+/// same mutex could otherwise move mid-assertion. Both are restored on exit
+/// (also on the panic path, by the guard), so nothing leaks to siblings.
+#[test]
+fn test_hf_cache_dir_from_env_reads_hf_home() {
+    let _guard = crate::config::tests_utils::lock_env_mutex();
+    let saved_home = std::env::var("HOME").ok();
+    let saved_hf_home = std::env::var("HF_HOME").ok();
+
+    unsafe {
+        std::env::remove_var("HF_HOME");
+        std::env::set_var("HOME", "/tmp/vipune-hf-home");
+        std::env::set_var("HF_HOME", "/tmp/vipune-hf-home/hf-override");
+    }
+    let resolved = hf_cache_dir_from_env();
+    // An empty `HF_HOME` is unset, not the root directory (`/hub`).
+    unsafe {
+        std::env::set_var("HF_HOME", "");
+    }
+    let empty = hf_cache_dir_from_env();
+    unsafe {
+        std::env::remove_var("HF_HOME");
+    }
+    let unset = hf_cache_dir_from_env();
+    unsafe {
+        match saved_hf_home {
+            Some(value) => std::env::set_var("HF_HOME", value),
+            None => std::env::remove_var("HF_HOME"),
+        }
+        match saved_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    assert_eq!(
+        resolved,
+        std::path::PathBuf::from("/tmp/vipune-hf-home/hf-override/hub"),
+        "HF_HOME from the process env must select the hf-hub cache dir"
+    );
+    assert_ne!(
+        resolved,
+        hf_hub_default_cache_dir(),
+        "the asserted path must differ from hf-hub's own default, or this test \
+         would pass with ApiBuilder::new()"
+    );
+    // Unset and empty both fall back to the shared home lookup.
+    let fallback = std::path::PathBuf::from("/tmp/vipune-hf-home/.cache/huggingface/hub");
+    assert_eq!(empty, fallback);
+    assert_eq!(unset, fallback);
 }
 
 #[test]

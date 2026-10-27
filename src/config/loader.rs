@@ -68,7 +68,11 @@ fn default_prune_min_age_days() -> f64 {
 
 /// Load configuration from TOML file.
 pub fn load_from_file() -> Result<Option<ConfigFile>, Error> {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    // The shared home lookup (`dirs::home_dir()` -> `$HOME` -> `"."`), so a
+    // host with no `dirs` home but a set `$HOME` still resolves the user's
+    // config file. `dirs::config_dir()` stays direct: it is the
+    // `$XDG_CONFIG_HOME` lookup, which `home_dir()` does not provide.
+    let home = crate::config::home_dir();
     let config_dir = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
 
     let config_path = config_dir.join("vipune/config.toml");

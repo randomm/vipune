@@ -19,6 +19,6 @@ pub use engine::{
 };
 
 #[cfg(test)]
-pub(crate) use engine::resolve_hf_cache_dir;
+pub(crate) use engine::{hf_cache_dir_from_env, resolve_hf_cache_dir};
 #[cfg(test)]
 pub(crate) use inference::l2_normalize;

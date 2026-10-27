@@ -63,6 +63,23 @@ pub(crate) fn resolve_hf_cache_dir(hf_home: Option<&str>, home: &Path) -> PathBu
     }
 }
 
+/// The hf-hub cache directory for **this process**: reads `$HF_HOME` from the
+/// environment and resolves it against the shared home lookup
+/// ([`crate::config::home_dir`]).
+///
+/// This is the one site that reads `HF_HOME`; the pure two-argument
+/// [`resolve_hf_cache_dir`] holds the rule and stays directly testable. Go
+/// through this helper rather than calling the resolver with your own env read
+/// — an `EmbeddingEngine` that instead used `ApiBuilder::new()` (hf-hub's
+/// default cache) or read a different variable would silently download into
+/// `~/.cache/huggingface/hub` while the token came from elsewhere.
+pub(crate) fn hf_cache_dir_from_env() -> PathBuf {
+    resolve_hf_cache_dir(
+        std::env::var("HF_HOME").ok().as_deref(),
+        &crate::config::home_dir(),
+    )
+}
+
 /// The process-wide ONNX Runtime environment, built on first use.
 ///
 /// ONNX Runtime permits exactly one environment per process: rc.15's
@@ -162,6 +179,7 @@ impl EmbeddingEngine {
     /// hf-hub's `ApiBuilder::new()` ignores `HF_HOME`). The client is built
     /// with `ApiBuilder::from_cache` over that same directory so hf-hub reads
     /// the access token from `$HF_HOME/token`, not from the default cache.
+    /// The directory itself comes from [`hf_cache_dir_from_env`].
     pub fn new(model_id: &str) -> Result<Self, Error> {
         use crate::embedding_profiles::profile_for;
 
@@ -182,11 +200,7 @@ impl EmbeddingEngine {
         // the token from `~/.cache/huggingface/token` while downloading into
         // `$HF_HOME/hub`. `from_cache` derives both from the one directory we
         // resolved, keeping cache and token consistent.
-        //
-        // The home directory comes from the one shared lookup Config::default()
-        // uses.
-        let home = crate::config::home_dir();
-        let cache_dir = resolve_hf_cache_dir(std::env::var("HF_HOME").ok().as_deref(), &home);
+        let cache_dir = hf_cache_dir_from_env();
         let air_gapped_hint = format!(
             "If running in an air-gapped environment, pre-fetch the model before going offline:\n  huggingface-cli download {} --revision {} --cache-dir {}",
             profile.model_id,
