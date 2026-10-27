@@ -187,7 +187,7 @@ vipune add "New corrected statement" --supersedes <old-id> --memory-type fact --
 
 When you save a memory similar to an existing one (≥ 0.85 similarity), vipune flags a conflict. Three responses:
 
-1. **The new is correct, the old is wrong** → `vipune add "..." --supersedes <old-id>` (atomic replacement)
+1. **The new is correct, the old is wrong** → `vipune add "..." --supersedes <old-id>` (atomic replacement). The target must still be `active` or `candidate`: superseding a row that `prune` already deprecated, or one already superseded, is refused with exit 1 and writes nothing (see `docs/cli-reference.md` → `add --supersedes`). Verify the target with `vipune get <old-id> --json` first when it may be stale.
 2. **Both are true but address different angles** → `vipune add "..." --force` (intentional coexistence — rare)
 3. **The old is fine, no new memory needed** → don't add
 

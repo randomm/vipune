@@ -26,7 +26,7 @@ vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status
 - `text` - Memory text content (required)
 
 **Flags:**
-- `-m, --metadata <json>` - Optional JSON metadata (e.g., `{"topic": "auth"}`)
+- `-m, --metadata <json>` - Optional JSON metadata (e.g., `{"topic": "auth"}`). Omitting it is legal; a **present** value must be non-blank and parse as JSON — see [Metadata is validated on write](#metadata-is-validated-on-write)
 - `--force` - Bypass conflict detection and add regardless
 - `--memory-type <type>` - Memory type: `fact` (default), `preference`, `procedure`, `guard`, `observation`
 - `--status <status>` - Initial status: `active` (default) or `candidate`
@@ -38,7 +38,7 @@ vipune add <text> [--metadata <json>] [--force] [--memory-type <type>] [--status
 - Checks for similar existing memories (similarity ≥ threshold)
 - If conflicts found: returns exit code 2, lists conflicting memories
 - If `--force` used: skips conflict check and adds memory
-- If `--supersedes` used: atomically adds new memory and marks target as `superseded`. The target must still be `active` or `candidate`: superseding a row that is already `superseded` (which would fork the chain into a replacement nothing points at) or `deprecated` is rejected with an error and writes nothing — `prune` demotions stay final
+- If `--supersedes` used: atomically adds new memory and marks target as `superseded`. The target must still be `active` or `candidate`: superseding a row that is already `superseded` (which would fork the chain into a replacement nothing points at) or `deprecated` is refused with `Invalid input: cannot supersede memory <id>: status is already '<status>'` (plus ` (superseded_by <id>)` when set) and writes nothing — `prune` demotions stay final. The guard sits in the store, so the MCP `store_memory` `supersedes` parameter and `supersede_memory` are refused the same way
 - `--importance` is stored on the new row (also on the row created by `--supersedes`), and `export` writes that value so `import` restores it
 - `--status` is stored on the new row too, including the row created by `--supersedes`. Only `active` and `candidate` are valid here: `--status superseded`/`deprecated` is rejected with or without `--supersedes`, since the old row's `superseded` is set by the supersede transaction itself. A `--status candidate` replacement is hidden from default `search`/`list` (which filter to `status = 'active'`) along with the `superseded` row it replaced — see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for how to read and activate it
 
@@ -118,6 +118,25 @@ therefore never promotes, which is deliberate (see the `promote` module doc); th
 `update --status active` above is the deterministic route.
 
 The same rule is what `store_memory`'s `supersedes` + `status: "candidate"` writes over MCP.
+
+---
+
+### Metadata is validated on write
+
+The rule the `add` and `update` paths share, stated once: a *present* metadata value must be
+non-blank and parse as JSON. A blank value is refused with `Invalid input: metadata cannot be
+empty`, a non-JSON one with `Invalid input: invalid metadata JSON: <parser message>`; both exit
+`1` (only `ContentTooLong` maps to `3`) and write nothing — the check runs before the embedding
+call, so a refused row costs no inference. **Omitting** metadata is still legal: the parse is a
+gate, never a re-serialisation, and the accepted document is stored exactly as passed.
+The same rule runs on the library entry points `MemoryStore::ingest`,
+`MemoryStore::ingest_with_importance`, `MemoryStore::supersede_with` and
+`MemoryStore::batch_ingest` — the last reports the refusal **per item** (a
+`BatchIngestItemResult::Error` for that index) and still stores the other items, rather than
+failing the batch. There is no `vipune ingest`/`batch_ingest` command: those are library-only.
+The storage tier below the store validates nothing, so `vipune import` is unchanged — a dump is
+taken as given.
+
 This section is the only place the consequence is stated — `add --status`, the MCP tool
 parameters and `agent-integration.md` link here rather than restating it. (`update --status` is
 the route named above, and its own flag table notes the one asymmetry it has with `add --status`.)
@@ -369,7 +388,7 @@ vipune update <id> [text] [--metadata <json>]
 - If only `text` provided: generates new embedding, preserves metadata
 - If only `--metadata` provided: updates metadata without re-embedding
 - If both `text` and `--metadata` provided: updates both
-- Metadata must be valid JSON (validated on write)
+- Metadata must be valid JSON when present (validated on write — see [Metadata is validated on write](#metadata-is-validated-on-write))
 
 **Exit codes:**
 - `0` - Memory updated
@@ -483,18 +502,18 @@ vipune mcp
 
 `store_memory` accepts:
 - `text` — the information to remember (required)
-- `metadata` — optional structured labels as JSON (e.g., `{"topic": "auth"}`)
+- `metadata` — optional structured labels as a JSON document (e.g., `{"topic": "auth"}`). Omitting it is legal. The CLI/library wording of the rule is [Metadata is validated on write](#metadata-is-validated-on-write); over MCP the argument is a parsed JSON value, so the blank / malformed-string branches are unreachable here and the only metadata refusal this tool can raise is `Invalid metadata: <serializer message>`
 - `memory_type` — type of memory: `fact` (default), `preference`, `procedure`, `guard`, `observation`
 - `status` — initial status: `active` (default) or `candidate`. Stored on the new row, including the row created by `supersedes` (see [Supersede with a candidate replacement](#supersede-with-a-candidate-replacement) for what a hidden `candidate` replacement means and how to activate it)
 - `importance` — initial importance: `low`, `medium` (default), `high`, or `critical` (case-insensitive; the tool schema advertises the four canonical spellings as an `enum`, and the handler accepts any casing). `high` and `critical` are a hard exclusion for `prune`, which never demotes such a row. The level also affects search ranking: `critical` never recency-decays and `high` decays slowly, so they keep their recency score longer than `medium` and `low`. Stored on the new row, including the row created by `supersedes`. Importance can be changed later with `update_memory`. `supersedes` and `force` are mutually exclusive, as on the CLI: sending both is rejected with no row written
-- `supersedes` — ID of memory to supersede (atomically replaces old memory; mutually exclusive with `force`)
+- `supersedes` — ID of memory to supersede (atomically replaces old memory; mutually exclusive with `force`). The target must still be `active` or `candidate` — superseding a row that is already `superseded` or `deprecated` is refused as `invalid_input` and writes nothing, exactly as on the CLI (see the `--supersedes` bullet under [`add`](#add), the single statement of that guard)
 - `force` — force store even if conflicts detected (default: `false`)
 
 `supersede_memory` accepts:
 - `new_text` — the new content that replaces the old memory (required)
 - `old_memory_id` — ID of the memory to supersede (required)
 - `memory_type` — optional type for the new memory (default: `fact`)
-- `metadata` — optional structured labels as JSON
+- `metadata` — optional structured labels as a JSON document; omitting it is legal (see the `store_memory` `metadata` bullet above for the MCP-side wording)
 
 It has no `status` parameter, so the row it creates is always `active`. Stage a `candidate` replacement through `store_memory` with `supersedes` + `status` instead.
 
@@ -664,7 +683,7 @@ not-found errors), which is sanitised on every surface alike.
 
 **Common errors:**
 - Memory not found (`get`, `update`, `delete`)
-- Invalid metadata (not valid JSON)
+- Invalid metadata (not valid JSON) — see [Metadata is validated on write](#metadata-is-validated-on-write)
 - Database errors (permissions, disk full)
 - Missing or invalid configuration
 
