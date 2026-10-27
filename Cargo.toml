@@ -2,7 +2,7 @@
 name = "vipune"
 version = "0.19.1"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.92"
 license = "Apache-2.0"
 repository = "https://github.com/randomm/vipune"
 homepage = "https://github.com/randomm/vipune"
@@ -23,11 +23,30 @@ clap = { version = "4.5", features = ["derive"] }
 # Database
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 
-# ONNX Runtime for embeddings (CPU-only, auto-downloads shared library).
-# Using RC 9 for compatibility with gline-rs (see issue #53).
-# Stable 2.0.0 not released (latest stable: 1.18.0 with API incompatibilities).
-ort = { version = "=2.0.0-rc.9", features = ["ndarray", "download-binaries"] }
-ort-sys = "=2.0.0-rc.9"
+# ONNX Runtime for embeddings (CPU-only; the build script downloads the prebuilt
+# ONNX Runtime static library). Pinned to the rc series for the memory-safety/UB
+# fixes rc.15 carries; stable 2.0.0 is not released. `ort` declares exactly the
+# matching `ort-sys`, so the two pins move together — bump them in one edit.
+#
+# `default-features = false` + an explicit list, rather than the defaults: rc.15
+# defaults to `tls-native`, which drags native-tls/openssl-sys (Linux),
+# schannel (Windows) and security-framework (macOS) into the tree just to fetch
+# the prebuilt ONNX Runtime at build time. rc.9's download stack was ureq 2 +
+# rustls + webpki-roots, so `tls-rustls` keeps that: one TLS stack, no OpenSSL,
+# and the `ring` provider ureq already resolves for hf-hub (no second provider,
+# no aws-lc-rs). The remaining defaults are kept verbatim except `tracing`,
+# which is off — nothing in this crate or the crate's own build script emits
+# `tracing` events, and `tokenizers` uses its `tracing`/`tracing-subscriber`
+# only in a doc example. `copy-dylibs` and `api-31` are kept as defaults even
+# though the static build here may not need them: dropping them changes how the
+# ORT library is linked and installed, and that is not this change.
+#
+# `ort-sys` is declared separately (it is a build-dep of `ort` too, so it needs
+# its own pin) and must not be given a TLS feature: it defaults to `std` +
+# `api-17` only, and `ort` enables the matching `ort-sys` features from its own
+# `tls-rustls`/`download-binaries`/`api-31` features.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls", "copy-dylibs", "api-31"] }
+ort-sys = "=2.0.0-rc.15"
 
 # HuggingFace tokenizers and model download
 tokenizers = "0.23.2"

@@ -44,16 +44,21 @@ pub(crate) fn encode_and_infer(
             "attention_mask" => attention_mask_tensor,
             "token_type_ids" => token_type_ids_tensor
         ];
-        engine.session.run(inputs?)?
+        engine.session.run(inputs)?
     } else {
         let inputs = inputs![
             "input_ids" => input_ids_tensor,
             "attention_mask" => attention_mask_tensor
         ];
-        engine.session.run(inputs?)?
+        engine.session.run(inputs)?
     };
 
-    let last_hidden_state = outputs
+    // rc.15's `try_extract_tensor` returns `(&Shape, &[f32])`: the shape and a
+    // flat C-contiguous slice straight from the tensor, so the rc.9
+    // `as_slice().unwrap()` is gone — a failed extraction is an `Err`, never a
+    // bad slice. `Shape` derefs to `[i64]` (rc.9 indexed `[usize]`), so the two
+    // dims read below are cast back to `usize`; the value checked is unchanged.
+    let (shape, data) = outputs
         .get("last_hidden_state")
         .or_else(|| outputs.get("token_embeddings"))
         .ok_or_else(|| {
@@ -63,8 +68,6 @@ pub(crate) fn encode_and_infer(
         })?
         .try_extract_tensor::<f32>()?;
 
-    let shape = last_hidden_state.shape();
-    let data = last_hidden_state.as_slice().unwrap();
     if shape.len() != 3 {
         return Err(Error::Inference(format!(
             "Expected 3D output (batch, seq_len, hidden), got {:?}",
@@ -72,8 +75,8 @@ pub(crate) fn encode_and_infer(
         )));
     }
 
-    let batch_size = shape[0];
-    let hidden_dim = shape[2];
+    let batch_size = shape[0] as usize;
+    let hidden_dim = shape[2] as usize;
 
     if batch_size != 1 || hidden_dim != EMBEDDING_DIMS {
         return Err(Error::Inference(format!(

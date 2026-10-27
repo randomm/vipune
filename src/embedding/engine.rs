@@ -17,7 +17,10 @@
 //! The ONNX run + pooling live in [`inference`]; constants and the
 //! `EmbeddingEngine` struct are re-exported from [`engine`].
 
+use std::sync::OnceLock;
+
 use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
+use ort::environment::Environment;
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use tokenizers::Tokenizer;
@@ -48,6 +51,34 @@ pub const EMBED_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 /// (`crate::embedding_profiles::BUILTIN_PROFILES`); this constant is kept as
 /// the stable public re-export the library API and drift tests reference.
 pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
+
+/// The process-wide ONNX Runtime environment, built on first use.
+///
+/// ONNX Runtime permits exactly one environment per process: rc.15's
+/// `EnvironmentBuilder::build` fails with "only one environment is allowed per
+/// process" once one exists. Every `EmbeddingEngine` therefore shares this one
+/// `Environment` (it is `Clone` over an `Arc`), so constructing a second
+/// engine — e5 beside bge in a test, a store that swaps its embedder, or the
+/// MCP server — cannot fail on the second build.
+///
+/// The engine still holds a clone: rc.15 releases the ORT env when the last
+/// `Environment` handle drops, so the handle has to outlive every session that
+/// was built against it.
+fn ort_environment() -> Result<Environment, Error> {
+    static ENVIRONMENT: OnceLock<Environment> = OnceLock::new();
+    if let Some(environment) = ENVIRONMENT.get() {
+        return Ok(environment.clone());
+    }
+    // Telemetry is off: vipune is a local CLI, and the builder would otherwise
+    // turn ONNX Runtime's telemetry on for every run.
+    let environment = ort::init()
+        .with_telemetry(false)
+        .build()
+        .map_err(Error::from)?;
+    // A concurrent loser re-reads the winner's value; either way the process
+    // ends up with exactly one environment.
+    Ok(ENVIRONMENT.get_or_init(|| environment.clone()).clone())
+}
 
 /// ONNX embedding engine for synchronous text-to-vector conversion.
 ///
@@ -85,6 +116,12 @@ pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
 /// because ONNX internally mutates state for tensor allocations during
 /// inference.
 pub struct EmbeddingEngine {
+    /// The environment this engine's `session` was built against. Never read
+    /// after construction — it exists so the ORT env outlives the session:
+    /// the field drops *after* `session` (declaration order), and the shared
+    /// handle keeps the last `ReleaseEnv` from running while any session lives.
+    /// Declared before `session` for exactly that reason.
+    _environment: Environment,
     pub(super) session: Session,
     pub(super) tokenizer: Tokenizer,
     /// Truncation-free tokenizer cloned once at startup for accurate token counting.
@@ -152,18 +189,26 @@ impl EmbeddingEngine {
             }))
             .map_err(Error::from)?;
 
-        let session = Session::builder()
+        // Shared, process-wide environment (see [`ort_environment`]); built on
+        // the first engine this process creates.
+        let environment = ort_environment()?;
+
+        let session = Session::builder(&environment)
             .map_err(Error::from)?
             .with_optimization_level(GraphOptimizationLevel::Level1)
-            .map_err(Error::from)?
+            // rc.15 returns the builder back on failure (`Error<SessionBuilder>`);
+            // `From<Error<SessionBuilder>> for Error<()>` discards the recoverable
+            // builder and keeps the message, so the error still reaches the caller
+            // (a `recover()` here would swallow it).
+            .map_err(|e| Error::from(ort::error::Error::from(e)))?
             .commit_from_file(&model_path)
             .map_err(Error::from)?;
 
         // Check if model requires token_type_ids input
         let requires_token_type_ids = session
-            .inputs
+            .inputs()
             .iter()
-            .any(|input| input.name == "token_type_ids");
+            .any(|input| input.name() == "token_type_ids");
 
         // Pre-initialize a truncation-free tokenizer for accurate token counting.
         // Cloning once at startup avoids a 700KB+ deep copy on every embed() call.
@@ -171,6 +216,7 @@ impl EmbeddingEngine {
         count_tokenizer.with_truncation(None).map_err(Error::from)?;
 
         Ok(EmbeddingEngine {
+            _environment: environment,
             session,
             tokenizer,
             count_tokenizer,

@@ -5,15 +5,18 @@ updates:
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 5
-    # ort/ort-sys are pinned together for gline-rs compatibility (issue #53) and must move together.
-    # Pre-releases on the 2.0.0 line are ignored so only a stable 2.0 is proposed.
-    ignore:
-      - dependency-name: "ort"
-        versions: [">= 2.0.0-rc.1, < 2.0.0"]
-      - dependency-name: "ort-sys"
-        versions: [">= 2.0.0-rc.1, < 2.0.0"]
     groups:
+      # ort and ort-sys pin the same release of one repo and `ort` declares
+      # exactly the matching `ort-sys`, so they must move in a single PR; they
+      # get their own group and are excluded from rust-dependencies below.
+      ort:
+        patterns:
+          - "ort"
+          - "ort-sys"
       rust-dependencies:
+        exclude-patterns:
+          - "ort"
+          - "ort-sys"
         update-types:
           - "minor"
           - "patch"

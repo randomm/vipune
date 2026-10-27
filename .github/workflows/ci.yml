@@ -115,7 +115,7 @@ jobs:
   # dependency raising its own rust-version above the declaration reddens CI
   # instead of breaking user builds, whichever feature set they build.
   #
-  # Both feature sets must build on 1.88. Keep the toolchain pin in sync with
+  # Both feature sets must build on 1.92. Keep the toolchain pin in sync with
   # `rust-version` in Cargo.toml, the minimum stated in README.md and the floor
   # in CONTRIBUTING.md — `test_msrv_version_pins_agree` locks all four together.
   msrv:
@@ -129,19 +129,19 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.88.0
+          toolchain: 1.92.0
 
       - name: Cache cargo registry
         uses: actions/cache@v6
         with:
           path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-msrv-1.88.0-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-msrv-1.92.0-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo build
         uses: actions/cache@v6
         with:
           path: target
-          key: ${{ runner.os }}-cargo-build-target-msrv-1.88.0-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-build-target-msrv-1.92.0-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Check (default features)
         run: cargo check --locked --all-targets
