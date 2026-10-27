@@ -287,10 +287,11 @@ impl Database {
     /// such as "age > T" can be tested and reasoned about without sleeping.
     #[allow(clippy::too_many_arguments)] // signature mirrors insert(); 7/8 data fields map 1:1 to columns
     #[allow(dead_code)]
-    // No production caller: only test code calls this — the #[cfg(test)] mod
-    // tests in src/commands/prune.rs, src/commands/prune_tests.rs,
-    // src/sqlite/migration_tests.rs and src/memory/tests/search.rs. promote.rs
-    // only updates existing rows, never inserts.
+    // No production caller: every `insert_with_time` call site is #[cfg(test)] —
+    // prune.rs `seed()` sits in `#[cfg(test)] mod tests`, and the prune_tests.rs,
+    // sqlite/tests.rs `migration` and memory/tests/search.rs modules are all
+    // #[cfg(test)]-wired. benches/db_search.rs only mentions this fn in prose
+    // (it notes the fn is invisible to bench targets). promote.rs never inserts.
     pub fn insert_with_time(
         &self,
         project_id: &str,
