@@ -8,7 +8,7 @@ use crate::mcp::params::*;
 use crate::memory::lifecycle::{MemoryImportance, MemoryStatus, MemoryType};
 use crate::memory::{MemoryStore, NewMemory, UpdateParams};
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content, ServerCapabilities, ServerInfo};
+use rmcp::model::{CallToolResult, ContentBlock, ServerCapabilities, ServerConfig};
 use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
@@ -48,7 +48,7 @@ impl ToolHandler {
         &self,
         name: &str,
         arguments: serde_json::Value,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
         use rmcp::ServerHandler;
         use rmcp::model::CallToolRequestParams;
 
@@ -164,7 +164,7 @@ impl ToolHandler {
             let value = self
                 .store
                 .supersede_with_row(&row, supersedes_id, importance_val)?;
-            return Ok(CallToolResult::success(vec![Content::text(
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
                 serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
             )]));
         }
@@ -176,7 +176,7 @@ impl ToolHandler {
             importance_val,
         )?;
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
         )]))
     }
@@ -261,7 +261,7 @@ impl ToolHandler {
         // Build JSON response using helper
         let results: Vec<serde_json::Value> = memories.iter().map(format_memory_json).collect();
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&results).map_err(McpError::from_serde_error)?,
         )]))
     }
@@ -308,7 +308,7 @@ impl ToolHandler {
             .list(&self.project_id, limit, type_slice, status_slice)
             .map_err(|e: Error| -> rmcp::ErrorData { e.into() })?;
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
         )]))
     }
@@ -350,7 +350,7 @@ impl ToolHandler {
             &params.old_memory_id,
         )?;
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&value).map_err(McpError::from_serde_error)?,
         )]))
     }
@@ -393,7 +393,7 @@ impl ToolHandler {
         // Format memory as JSON using helper
         let result = format_memory_json(&memory);
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&result).map_err(McpError::from_serde_error)?,
         )]))
     }
@@ -426,7 +426,7 @@ impl ToolHandler {
             "status": "deleted"
         });
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&result).map_err(McpError::from_serde_error)?,
         )]))
     }
@@ -515,7 +515,7 @@ impl ToolHandler {
             "status": "updated"
         });
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&result).map_err(McpError::from_serde_error)?,
         )]))
     }
@@ -523,7 +523,7 @@ impl ToolHandler {
 
 #[tool_handler]
 impl rmcp::ServerHandler for ToolHandler {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
     }
 }

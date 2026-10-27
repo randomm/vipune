@@ -68,10 +68,16 @@ pub(super) fn seed_row_with_metadata(
 
 /// Pull the `id` out of a tool result's JSON text content.
 ///
-/// The tool handlers return `CallToolResult`, whose payload is a list of
-/// text contents holding the serialised response, so a handler-driven test
-/// has to unwrap that envelope once instead of per assertion.
-pub(super) fn tool_result_id(result: &rmcp::model::CallToolResult) -> String {
+/// `ServerHandler::call_tool` returns `CallToolResponse`, an envelope whose
+/// `Complete` arm carries the `CallToolResult` whose payload is the list of
+/// text contents holding the serialised response — so a handler-driven test
+/// unwraps both envelopes once here instead of per assertion. Anything other
+/// than `Complete` (MRTR `InputRequired`, or a Tasks `Task` handle) means the
+/// tool answered in a way no vipune tool is allowed to, which is the panic.
+pub(super) fn tool_result_id(result: &rmcp::model::CallToolResponse) -> String {
+    let rmcp::model::CallToolResponse::Complete(result) = result else {
+        panic!("vipune tools only ever answer with a complete CallToolResult")
+    };
     let text = result
         .content
         .iter()
