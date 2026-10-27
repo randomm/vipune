@@ -1,0 +1,51 @@
+# Why this file exists
+#
+# The prebuilt ONNX Runtime that `ort-sys` downloads for Apple targets always
+# carries the CoreML execution provider — its resolver
+# (`ort-sys`'s build/download/resolve.rs) inserts `coreml` into the feature set
+# it requests unconditionally, so the EP is linked whatever this crate enables.
+# That EP's Objective-C (`host_utils.mm.o`, `model.mm.o`) uses `@available`,
+# which clang lowers into a call of the compiler-rt builtin
+# `___isPlatformVersionAtLeast` (llvm-project compiler-rt/lib/builtins/
+# os_version_check.c). rustc links with `-nodefaultlibs`, so nothing supplies
+# it and the darwin link dies with "Undefined symbols for architecture arm64"
+# (plus "was built for newer 'macOS' version (13.4) than being linked (11.0)",
+# since rustc hardcodes 11.0.0 as the floor for this triple —
+# `OSVersion::minimum_deployment_target` in compiler/rustc_target). Linux never
+# sees this: the builtin is Darwin-only.
+#
+# `-fapple-link-rtlib` makes the linker driver add `libclang_rt.osx.a`, which
+# defines the symbol. That is `ort`'s own documented remedy for this exact error
+# — `RUSTFLAGS="-Clink-arg=-fapple-link-rtlib" cargo build` under "CoreML" in
+# docs/content/perf/execution-providers.mdx as shipped at 2.0.0-rc.11 — and
+# until pykeio/ort@8fa741d248 (2026-09-22, "remove unnecessary linking to
+# libclang_rt") it was also what `ort-sys`'s build script did for every apple
+# target. It dropped the job believing rust-lang/rust#138944 made `std`'s weak
+# `#[rustc_std_internal_symbol]` implementation sufficient; that assumption
+# holds when `std` is linked, which is not the case for every link unit here
+# (`libstd`'s rlib is only on the command line when the linked graph pulls it
+# in). The rc.15 `ort-sys` in this tree links neither.
+#
+# Writing the flag in the `[target.<triple>] rustflags` form — rather than a
+# `build.rs` `cargo:rustc-link-arg`, which reaches only the emitting crate's own
+# units — is deliberate: it also covers a plain local `cargo build` on a Mac,
+# not just CI. `.github/workflows/release.yml` repeats the flag for the darwin
+# `build-local-artifacts` job because `dist build` exports its own `RUSTFLAGS`
+# for the cargo step (`cargo-dist/src/build/cargo.rs`: `.env("RUSTFLAGS",
+# rustflags)`) and an explicit `RUSTFLAGS` overrides every `rustflags` key in
+# `.cargo/config.toml`, so this file cannot reach that job. Deleting either copy
+# re-breaks the build it covers.
+#
+# Raising the deployment target instead (`MACOSX_DEPLOYMENT_TARGET=13.4`) is not
+# `ort`'s documented remedy and does not define the symbol, so it would only
+# quieten the warning; and it would silently raise vipune's minimum supported
+# macOS. It is not used, so the supported-OS floor is unchanged.
+
+# Scoped per-triple so neither Linux lane's flags change. Both Apple triples
+# dist knows about are listed; `x86_64-apple-darwin` is not in dist's `targets`
+# today, so its entry is inert until that triple is built.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fapple-link-rtlib"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-fapple-link-rtlib"]

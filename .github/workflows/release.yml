@@ -133,6 +133,18 @@ jobs:
           cache-provider: ${{ matrix.cache_provider }}
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
+      # The darwin job links the pyke prebuilt ONNX Runtime, whose CoreML EP
+      # calls the compiler-rt builtin `___isPlatformVersionAtLeast` — see the
+      # rationale in .cargo/config.toml, which carries the same flag for local
+      # builds. It has to be exported here as well because `dist build` below
+      # sets its own `RUSTFLAGS`, and an explicit `RUSTFLAGS` overrides every
+      # `[target.<triple>] rustflags` key in .cargo/config.toml. Kept as an
+      # append (`${RUSTFLAGS:-}`) rather than an assignment so a future dist
+      # that sets the variable in the step env is not clobbered; the `if:` keeps
+      # the Linux lanes' RUSTFLAGS byte-identical to what they are today.
+      - name: Link Apple compiler-rt for ort's CoreML EP
+        if: ${{ matrix.host == 'aarch64-apple-darwin' }}
+        run: echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-fapple-link-rtlib" >> "$GITHUB_ENV"
       # Get the dist-manifest
       - name: Fetch local artifacts
         uses: actions/download-artifact@v8
