@@ -48,14 +48,28 @@ Text input → Tokenizer → ONNX session → Mean pooling → L2 normalization 
 
 ### Version Pinning
 
-vipune uses ONNX Runtime v2.0.0-rc.9, **pinned with exact version**:
+vipune uses ONNX Runtime v2.0.0-rc.15, **pinned with exact version**:
 
 ```toml
 # In Cargo.toml
-ort = { version "=2.0.0-rc.9", features = ["download-binaries"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "copy-dylibs", "api-31"] }
+ort-sys = "=2.0.0-rc.15"
 ```
 
-**Why pinned**: Compatibility with `gline-rs` (see issue #53). Upgrading ONNX requires careful testing, as newer versions may break existing embeddings.
+The feature list is explicit (with `default-features = false`) because the
+rc.15 defaults include `tls-native`, which pulls `native-tls`/`openssl-sys` in
+just to download the prebuilt ONNX Runtime at build time. `tls-rustls` keeps
+the rustls + `ring` + webpki-roots stack the rc.9 upgrade used, so the tree has
+one TLS stack and no OpenSSL. `ort-sys` needs no TLS feature of its own —
+`ort`'s `tls-rustls` enables the matching `ort-sys` feature. `ndarray` is not
+enabled: no code in this crate builds or extracts an `ndarray` tensor.
+
+**Why pinned**: the rc series carries the memory-safety / undefined-behaviour
+fixes this release needs, and `ort` declares exactly the matching `ort-sys`, so
+the two pins always move together (see `.github/dependabot.yml`, which groups
+them). Upgrading ONNX requires careful testing, as newer versions may shift the
+vectors the stored embeddings were produced with — `src/embedding/tests/golden.rs`
+compares the production passage output against a committed fixture to catch that.
 
 ### `&mut self` Requirement
 
@@ -100,7 +114,7 @@ This affects `MemoryStore` methods that generate embeddings (`add`, `search`, `u
 
 ### `EMBEDDING_DIMS: 384`
 
-- **Where defined**: `src/embedding.rs`
+- **Where defined**: `src/embedding/engine.rs`
 - **Value**: 384 f32 values (model-specific)
 - **Used by**:
   - Database BLOB size validation
@@ -139,14 +153,22 @@ Changing the embedding model breaks existing databases:
 
 ### Migration Process
 
-If you must change models:
+Re-embed an existing database with the currently configured model:
 
-1. **Export all memories** (text content only)
-2. **Delete existing database**: `rm ~/.vipune/memories.db`
-3. **Update model ID** in config: `VIPUNE_EMBEDDING_MODEL="new/model/name"`
-4. **Re-import memories**: new embeddings generated automatically
+```bash
+vipune reindex --force --all-projects
+```
 
-**No automated migration script exists** — model changes are intentional, not routine upgrades.
+(`--all-projects` is required with `--force`: `handle_reindex` refuses a forced
+re-embed that would cover only some of the projects in a shared store.) Library
+consumers can call
+`vipune::migrate_model(db_path, &config)` in-process; both run the same
+crash-safe pre-flight → marker-first → re-embed lifecycle documented in the
+README (Switching models on an existing database).
+
+A plain `vipune reindex` re-embeds nothing here: the stored vectors still look
+real to `EmbeddingClass::Real`, which checks the norm, not the values. Use
+`--force` when a runtime or model change moved the vectors.
 
 ### Testing Model Changes
 
@@ -178,10 +200,11 @@ When testing a new model:
 
 ## Implementation Files
 
-- **`src/embedding.rs`**: ONNX engine, tokenizer, mean pooling
+- **`src/embedding/engine.rs`**: ONNX environment + session, tokenizer, `requires_token_type_ids`
+- **`src/embedding/inference.rs`**: model run, mean pooling, `l2_normalize()`
 - **`src/sqlite/embedding.rs`**: BLOB I/O, cosine similarity
 - **`src/memory/crud.rs`**: Embedding generation in add/update/search
-- **`src/memory/store.rs`**: `MAX_INPUT_LENGTH`, `EMBEDDING_DIMS` constants
+- **`src/memory/store.rs`**: `MAX_INPUT_LENGTH` constant
 
 ## Debugging Embedding Issues
 
@@ -198,13 +221,13 @@ vipune add "Test text"
 Check `EMBEDDING_DIMS` constant:
 
 ```bash
-# In src/embedding.rs
+# In src/embedding/engine.rs
 pub const EMBEDDING_DIMS: usize = 384;  // Must match model output
 ```
 
 ### Embedding Not L2-Normalized
 
-Check `l2_normalize()` in `src/embedding.rs`:
+Check `l2_normalize()` in `src/embedding/inference.rs`:
 
 ```rust
 fn l2_normalize(vec: &[f32]) -> Vec<f32> {

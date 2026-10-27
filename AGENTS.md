@@ -18,12 +18,10 @@ Context7 has the authoritative current shape of each crate.
 
 This repo's real external surface (from `Cargo.toml`):
 
-- `ort` / `ort-sys` — ONNX Runtime, pinned together at `=2.0.0-rc.9`;
-  `download-binaries` feature. The pin is still justified in `Cargo.toml` by
-  "compatibility with gline-rs", but gline-rs is not in vipune's dependency
-  tree (not in `Cargo.toml`, not in `Cargo.lock`) — the pin is kept at rc.9
-  for now and moving to rc.15 with a golden-embedding drift test is tracked in
-  issue [#265](https://github.com/randomm/vipune/issues/265)
+- `ort` / `ort-sys` — ONNX Runtime, pinned together at `=2.0.0-rc.15`
+  (`ndarray` + `download-binaries` features). The rc pin is kept for the
+  memory-safety/UB fixes rc.15 carries; stable 2.0.0 is unreleased, and
+  `ort` declares exactly the matching `ort-sys`, so the two always move together
 - `tokenizers` — HuggingFace tokenizer for the embedding pipeline
 - `hf-hub` — model download from the HuggingFace Hub (`ureq` feature)
 - `rusqlite` — bundled + `backup` features; SQLite is the only storage

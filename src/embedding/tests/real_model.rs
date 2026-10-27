@@ -9,6 +9,38 @@ use crate::errors::Error;
 
 use super::model_free::store_prefix_path::store_with_recorded_identity;
 
+/// `EmbeddingEngine::requires_token_type_ids` **measured on ort 2.0.0-rc.9**
+/// (the pin at the time the golden fixture was captured, issue #265) for each
+/// built-in profile: both models declare a `token_type_ids` graph input, so
+/// the flag is `true` for both. `inference::encode_and_infer` adds or drops
+/// the `token_type_ids` input on this flag alone, so a flip is silent and
+/// changes every vector — these consts are the committed baseline the bump to
+/// rc.15 is compared against, and the PR body records the same measurement.
+const EXPECTED_REQUIRES_TOKEN_TYPE_IDS_BGE: bool = true;
+const EXPECTED_REQUIRES_TOKEN_TYPE_IDS_E5: bool = true;
+
+/// Pins the `token_type_ids` branch of the inference path for both built-in
+/// models: the flag computed from the ONNX session inputs at engine startup
+/// must equal the value measured on ort rc.9. Model-backed and `#[ignore]`d
+/// (two model downloads). Lives here rather than in `golden.rs` because the
+/// field is `pub(super)` — this module is the widest visibility the assertion
+/// needs.
+#[ignore]
+#[test]
+fn test_requires_token_type_ids_matches_measured_baseline() {
+    let bge = EmbeddingEngine::new(EMBED_MODEL_ID).expect("load bge model");
+    assert_eq!(
+        bge.requires_token_type_ids, EXPECTED_REQUIRES_TOKEN_TYPE_IDS_BGE,
+        "bge-small requires_token_type_ids drifted from the rc.9 measurement"
+    );
+
+    let e5 = EmbeddingEngine::new("intfloat/multilingual-e5-small").expect("load e5 model");
+    assert_eq!(
+        e5.requires_token_type_ids, EXPECTED_REQUIRES_TOKEN_TYPE_IDS_E5,
+        "multilingual-e5-small requires_token_type_ids drifted from the rc.9 measurement"
+    );
+}
+
 #[ignore]
 #[test]
 fn test_integration_whitespace_only() {

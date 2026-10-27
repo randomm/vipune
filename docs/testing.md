@@ -35,7 +35,7 @@ vipune uses Rust's standard test organization:
 - **Unit tests**: At the bottom of each source file in `#[cfg(test)]` modules
 - **Integration tests**: In the `tests/` directory
 - **Example locations**:
-  - Unit tests: `src/embedding.rs`, `src/config/mod.rs`, `src/commands.rs`
+  - Unit tests: `src/embedding/engine.rs`, `src/config/mod.rs`, `src/commands/handlers.rs`
   - Integration tests: `tests/lib_integration.rs`
 
 ## Test Utilities
@@ -247,6 +247,19 @@ Avoid testing implementation details that change:
 - ❌ Specific embedding scores (test similarity ordering, not exact values)
 
 **Test behavior, not implementation.**
+
+## Golden Embedding Fixture
+
+`src/embedding/tests/golden.rs` pins the **numbers** the ONNX pipeline produces:
+it re-embeds a fixed corpus through `embed_passage` and compares element-wise
+against the committed `golden_bge_small.txt`, failing above a 1e-4 max absolute
+difference (the `#[ignore]`d `test_golden_embeddings_match_fixture`, run by the
+nightly model lane). Regenerate only when the model id/revision legitimately
+changes, with `VIPUNE_REGENERATE_GOLDEN=1 cargo test golden_fixture_regenerate
+-- --ignored --nocapture` (the `--nocapture` is what surfaces the per-text
+diffs and the summary line the test prints) — **never to make a drift failure
+pass**, which would delete the
+very signal the test exists to produce.
 
 ## Coverage Expectations
 

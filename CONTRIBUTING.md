@@ -24,7 +24,7 @@ https://github.com/randomm/vipune/issues
 ## Development Setup
 
 ### Prerequisites
-- Rust 1.88+ (install from https://rustup.rs/) — the MSRV, declared as
+- Rust 1.92+ (install from https://rustup.rs/) — the MSRV, declared as
   `rust-version` in `Cargo.toml` and gated in CI for both feature sets
 - Git
 

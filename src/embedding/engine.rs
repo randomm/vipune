@@ -17,7 +17,10 @@
 //! The ONNX run + pooling live in [`inference`]; constants and the
 //! `EmbeddingEngine` struct are re-exported from [`engine`].
 
+use std::sync::OnceLock;
+
 use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
+use ort::environment::Environment;
 use ort::session::Session;
 use ort::session::builder::GraphOptimizationLevel;
 use tokenizers::Tokenizer;
@@ -48,6 +51,38 @@ pub const EMBED_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 /// (`crate::embedding_profiles::BUILTIN_PROFILES`); this constant is kept as
 /// the stable public re-export the library API and drift tests reference.
 pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
+
+/// The process-wide ONNX Runtime environment, built on first use.
+///
+/// ONNX Runtime permits exactly one environment per process: rc.15's
+/// `EnvironmentBuilder::build` fails with "only one environment is allowed per
+/// process" once one exists. Every `EmbeddingEngine` therefore shares this one
+/// `Environment` (it is `Clone` over an `Arc`), so constructing a second
+/// engine — e5 beside bge in a test, a store that swaps its embedder, or the
+/// MCP server — cannot fail on the second build.
+///
+/// The `OnceLock` holds the `Result`, not the `Environment`: `get_or_init` runs
+/// the initializer on exactly one thread and every other caller blocks in
+/// `get_or_init` until that call returns, so `build` is never called twice
+/// concurrently (and a failed build is latched rather than retried — the
+/// message keeps the `ort` `ErrorCode`, which `Display` alone drops).
+fn ort_environment() -> Result<Environment, Error> {
+    static ENVIRONMENT: OnceLock<Result<Environment, String>> = OnceLock::new();
+    let environment = ENVIRONMENT.get_or_init(|| {
+        // Telemetry is off: vipune is a local CLI, and the builder would
+        // otherwise turn ONNX Runtime's telemetry on for every run.
+        ort::init()
+            .with_telemetry(false)
+            .build()
+            .map_err(|e| format!("[{:?}] {}", e.code(), e))
+    });
+    match environment {
+        Ok(environment) => Ok(environment.clone()),
+        Err(message) => Err(Error::Onnx {
+            message: format!("ort environment: {message}"),
+        }),
+    }
+}
 
 /// ONNX embedding engine for synchronous text-to-vector conversion.
 ///
@@ -85,6 +120,14 @@ pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
 /// because ONNX internally mutates state for tensor allocations during
 /// inference.
 pub struct EmbeddingEngine {
+    /// The environment this engine's `session` was built against. Never read
+    /// after construction — it exists so the ORT env outlives the session:
+    /// the field drops *after* `session` (declaration order), and the shared
+    /// handle keeps the last `ReleaseEnv` from running while any session lives.
+    /// Declared before `session` for exactly that reason. Belt-and-braces, not
+    /// the only keep-alive: rc.15 `Session`s hold an `Environment` clone of
+    /// their own, so the ORT env already outlives every session built from it.
+    _environment: Environment,
     pub(super) session: Session,
     pub(super) tokenizer: Tokenizer,
     /// Truncation-free tokenizer cloned once at startup for accurate token counting.
@@ -111,6 +154,14 @@ impl EmbeddingEngine {
         // Resolve through the profile table: unknown ids are rejected here, and
         // every profile carries its exact pinned revision.
         let profile = profile_for(model_id)?;
+
+        // Build/latch the process-wide ORT environment (see
+        // [`ort_environment`]) BEFORE touching the Hub: an environment failure
+        // is deterministic (rc.15 refuses a second environment in a process
+        // that already has one), so it must surface first instead of behind a
+        // multi-megabyte model download that is pure waste on a doomed call.
+        let environment = ort_environment()?;
+
         // Same air-gapped remedy as the download sites below: a builder
         // failure is a Hub/network failure too, so it must not arrive as a
         // bare `HfHub` message that names no remedy.
@@ -152,18 +203,22 @@ impl EmbeddingEngine {
             }))
             .map_err(Error::from)?;
 
-        let session = Session::builder()
+        let session = Session::builder(&environment)
             .map_err(Error::from)?
             .with_optimization_level(GraphOptimizationLevel::Level1)
-            .map_err(Error::from)?
+            // rc.15 returns the builder back on failure (`Error<SessionBuilder>`);
+            // `From<Error<SessionBuilder>> for Error<()>` discards the recoverable
+            // builder and keeps the message, so the error still reaches the caller
+            // (a `recover()` here would swallow it).
+            .map_err(|e| Error::from(ort::error::Error::from(e)))?
             .commit_from_file(&model_path)
             .map_err(Error::from)?;
 
         // Check if model requires token_type_ids input
         let requires_token_type_ids = session
-            .inputs
+            .inputs()
             .iter()
-            .any(|input| input.name == "token_type_ids");
+            .any(|input| input.name() == "token_type_ids");
 
         // Pre-initialize a truncation-free tokenizer for accurate token counting.
         // Cloning once at startup avoids a 700KB+ deep copy on every embed() call.
@@ -171,6 +226,7 @@ impl EmbeddingEngine {
         count_tokenizer.with_truncation(None).map_err(Error::from)?;
 
         Ok(EmbeddingEngine {
+            _environment: environment,
             session,
             tokenizer,
             count_tokenizer,

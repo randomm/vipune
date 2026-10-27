@@ -133,6 +133,12 @@ jobs:
           cache-provider: ${{ matrix.cache_provider }}
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
+      # ort's CoreML EP needs compiler-rt on darwin — see .cargo/config.toml for
+      # why this step must survive `dist generate` (dist exports its own RUSTFLAGS).
+      - name: Link Apple compiler-rt for ort's CoreML EP
+        if: ${{ matrix.host == 'aarch64-apple-darwin' }}
+        shell: bash
+        run: echo "RUSTFLAGS=${RUSTFLAGS:-} -C link-arg=-fapple-link-rtlib" >> "$GITHUB_ENV"
       # Get the dist-manifest
       - name: Fetch local artifacts
         uses: actions/download-artifact@v8

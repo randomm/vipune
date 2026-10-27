@@ -1,0 +1,22 @@
+# The prebuilt ONNX Runtime that `ort-sys` downloads for Apple targets always
+# carries the CoreML execution provider, whose Objective-C uses `@available`;
+# clang lowers that into a call of the compiler-rt builtin
+# `___isPlatformVersionAtLeast`, and rustc links with `-nodefaultlibs`, so
+# nothing supplies it and the darwin link dies with "Undefined symbols for
+# architecture arm64". `-fapple-link-rtlib` makes the linker driver add
+# `libclang_rt.osx.a`, which defines the symbol — `ort`'s own documented remedy
+# for this error, and until pykeio/ort@8fa741d248 ("remove unnecessary linking
+# to libclang_rt") what `ort-sys`'s build script did for every apple target;
+# the matching doc text was removed in pykeio/ort@9b316809bf. The rc.15
+# `ort-sys` in this tree links neither.
+#
+# `.github/workflows/release.yml` repeats the flag for the darwin build job
+# because `dist build` exports its own `RUSTFLAGS`, and an explicit `RUSTFLAGS`
+# overrides every `rustflags` key in this file. Deleting either copy re-breaks
+# the build it covers.
+
+# Scoped per-triple so neither Linux lane's flags change. Add a
+# `x86_64-apple-darwin` entry together with that triple in Cargo.toml's
+# `dist` targets if it is ever built.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fapple-link-rtlib"]
