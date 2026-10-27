@@ -32,7 +32,7 @@ impl StoreWrapper {
         &self,
         project_id: &str,
         text: &str,
-        metadata: &str,
+        metadata: Option<&str>,
         force: bool,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
         let mut store = lock_mcp(&self.0, "ingest")?;
@@ -43,7 +43,7 @@ impl StoreWrapper {
         };
 
         match store
-            .ingest(project_id, text, Some(metadata), policy)
+            .ingest(project_id, text, metadata, policy)
             .map_err(|e| -> rmcp::ErrorData { e.into() })?
         {
             crate::memory_types::AddResult::Added { id } => {

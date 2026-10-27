@@ -1,6 +1,6 @@
 //! MCP tool implementations.
 
-use crate::mcp::helpers::format_memory_json;
+use crate::mcp::helpers::{format_memory_json, metadata_column};
 use crate::mcp::store_wrapper::{McpError, StoreWrapper};
 
 use crate::errors::Error;
@@ -136,26 +136,17 @@ impl ToolHandler {
             .map_err(|e| McpError::invalid_input(&format!("Invalid importance: {}", e)))?;
 
         // Serialize metadata
-        let metadata_str = match &params.metadata {
-            Some(meta) => serde_json::to_string(meta)
-                .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?,
-            None => "null".to_string(),
-        };
+        let metadata_str = metadata_column(&params.metadata)?;
 
         // Handle supersedes path — the validated status and importance have to
         // travel with the new row or `status: "candidate"` is silently stored as
         // `active` (issue #258) and a named level as `medium` (issue #256), both
         // the MCP twins of the CLI drops. The row is the store's own `NewMemory`,
         // so the two add paths share one row type rather than duplicating it.
-        let metadata_ref = if metadata_str == "null" {
-            None
-        } else {
-            Some(metadata_str.as_str())
-        };
         let row = NewMemory {
             project_id: &self.project_id,
             content: &params.text,
-            metadata: metadata_ref,
+            metadata: metadata_str.as_deref(),
             memory_type: memory_type_val,
             status: status_val,
         };
@@ -349,12 +340,7 @@ impl ToolHandler {
         let memory_type_val = MemoryType::from_str(memory_type)
             .map_err(|e| McpError::invalid_input(&format!("Invalid memory type: {}", e)))?;
 
-        let metadata_str = params
-            .metadata
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?;
+        let metadata_str = metadata_column(&params.metadata)?;
 
         let value = self.store.supersede(
             &self.project_id,
@@ -506,15 +492,7 @@ impl ToolHandler {
             .transpose()
             .map_err(|e| McpError::invalid_input(&format!("Invalid importance: {e}")))?;
 
-        // Serialize metadata if provided
-        let metadata_str = if let Some(ref meta) = params.metadata {
-            Some(
-                serde_json::to_string(meta)
-                    .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?,
-            )
-        } else {
-            None
-        };
+        let metadata_str = metadata_column(&params.metadata)?;
 
         // Convert text to &str if provided
         let text_str = params.text.as_deref();

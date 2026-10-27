@@ -295,7 +295,7 @@ fn a_poisoned_store_mutex_is_answered_as_an_internal_error_instead_of_panicking(
         // conflict scan, which would answer `Ok(Conflicts)` for a non-empty store.
         (
             "ingest",
-            w.ingest("poison-proj", "never written", "null", true)
+            w.ingest("poison-proj", "never written", None, true)
                 .expect_err("ingest must answer, not panic"),
         ),
         (

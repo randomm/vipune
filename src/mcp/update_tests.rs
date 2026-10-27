@@ -22,7 +22,7 @@ mod mcp_update {
         let project_id = "test-project";
 
         // Store a memory via ingest
-        let result = wrapper.ingest(project_id, "test memory content", "null", false);
+        let result = wrapper.ingest(project_id, "test memory content", None, false);
         assert!(result.is_ok());
         let value = result.unwrap();
         let json_str = serde_json::to_string(&value).unwrap();

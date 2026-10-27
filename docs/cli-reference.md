@@ -130,8 +130,8 @@ empty`, a non-JSON one with `Invalid input: invalid metadata JSON: <parser messa
 call, so a refused row costs no inference. **Omitting** metadata is still legal: the parse is a
 gate, never a re-serialisation, and the CLI and library store the accepted document exactly as
 passed; over MCP the value arrives already parsed and is re-serialised before the store sees it
-(`serde_json::to_string` in `src/mcp/tools.rs`), so whitespace or key order may differ from what
-the client sent.
+(`serde_json::to_string` in `metadata_column`, `src/mcp/helpers.rs`), so
+whitespace or key order may differ from what the client sent.
 The rule lives in the store's `add`, `supersede` and `update` bodies, so every public
 add/supersede/update entry point inherits it — e.g. `MemoryStore::ingest`,
 `MemoryStore::ingest_with_type_status`, `MemoryStore::ingest_with_importance`,
@@ -533,7 +533,7 @@ It has no `status` parameter, so the row it creates is always `active`. Stage a 
 `update_memory` accepts:
 - `id` — ID of the memory to update (required)
 - `text` — optional new content for the memory
-- `metadata` — optional new metadata as JSON object
+- `metadata` — optional new metadata as a JSON document. **Unlike `store_memory` and `supersede_memory`**, which store SQL NULL for an omitted or JSON-`null` argument, here omitting it — or sending it as JSON `null` — leaves the stored metadata **unchanged** (see the `store_memory`/`supersede_memory` `metadata` bullets above). There is consequently no MCP way to clear a row's metadata: send a document to replace it, or delete and re-store the row
 - `memory_type` — optional new memory type
 - `status` — optional new status: `active` or `candidate`
 - `importance` — new importance: `low`, `medium`, `high`, or `critical` (case-insensitive; the tool schema advertises the four canonical spellings as an `enum`, and the handler accepts any casing). Omitting it leaves the row's level unchanged; an invalid value is rejected before any write. This is the only MCP demotion path: `prune` never demotes `high`/`critical`, so an over-rated row stays prune-exempt until it is demoted here

@@ -40,6 +40,32 @@ pub(super) fn seed_row(wrapper: &StoreWrapper, project: &str, text: &str) -> cra
     seed_row_at(wrapper, project, text, MemoryImportance::Medium)
 }
 
+/// Seed one active row at the default level carrying `metadata` verbatim, so a
+/// metadata test starts from a known document rather than a NULL column.
+pub(super) fn seed_row_with_metadata(
+    wrapper: &StoreWrapper,
+    project: &str,
+    text: &str,
+    metadata: &str,
+) -> crate::Memory {
+    use crate::memory::lifecycle::{MemoryStatus, MemoryType};
+    let row = NewMemory {
+        project_id: project,
+        content: text,
+        metadata: Some(metadata),
+        memory_type: MemoryType::Fact,
+        status: MemoryStatus::Active,
+    };
+    let seeded = wrapper
+        .ingest_with_lifecycle(&row, true, MemoryImportance::Medium)
+        .expect("seed add");
+    let id = seeded["id"].as_str().expect("seed id").to_string();
+    wrapper
+        .get(&id, project)
+        .expect("get")
+        .expect("seeded row readable")
+}
+
 /// Pull the `id` out of a tool result's JSON text content.
 ///
 /// The tool handlers return `CallToolResult`, whose payload is a list of
@@ -344,7 +370,7 @@ mod tool_handler_tests {
         let project_id = "test-project";
 
         // Ingest a memory
-        let result = wrapper.ingest(project_id, "rust is awesome", "null", false);
+        let result = wrapper.ingest(project_id, "rust is awesome", None, false);
         assert!(result.is_ok());
         let value = result.unwrap();
         let json_str = serde_json::to_string(&value).unwrap();
@@ -383,7 +409,7 @@ mod tool_handler_tests {
         // Ingest a memory with metadata
         let metadata_json = serde_json::json!({"topic": "rust", "type": "fact"});
         let metadata_str = serde_json::to_string(&metadata_json).unwrap();
-        let result = wrapper.ingest(project_id, "rust is awesome", &metadata_str, false);
+        let result = wrapper.ingest(project_id, "rust is awesome", Some(&metadata_str), false);
         assert!(result.is_ok());
 
         // Search for it
@@ -437,7 +463,7 @@ mod tool_handler_tests {
         let project_id = "test-project";
 
         // Store a memory
-        let result = wrapper.ingest(project_id, "memory to delete", "null", false);
+        let result = wrapper.ingest(project_id, "memory to delete", None, false);
         assert!(result.is_ok());
         let value = result.unwrap();
         let json_str = serde_json::to_string(&value).unwrap();
