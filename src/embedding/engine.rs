@@ -61,23 +61,27 @@ pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a
 /// engine — e5 beside bge in a test, a store that swaps its embedder, or the
 /// MCP server — cannot fail on the second build.
 ///
-/// The engine still holds a clone: rc.15 releases the ORT env when the last
-/// `Environment` handle drops, so the handle has to outlive every session that
-/// was built against it.
+/// The `OnceLock` holds the `Result`, not the `Environment`: `get_or_init` runs
+/// the build on exactly one thread and every other thread blocks until that
+/// attempt is decided, so there is no window in which two threads each call
+/// `build` (and a failed build is remembered rather than retried, since a
+/// second attempt cannot succeed while the first attempt's env may live on).
 fn ort_environment() -> Result<Environment, Error> {
-    static ENVIRONMENT: OnceLock<Environment> = OnceLock::new();
-    if let Some(environment) = ENVIRONMENT.get() {
-        return Ok(environment.clone());
+    static ENVIRONMENT: OnceLock<Result<Environment, String>> = OnceLock::new();
+    let environment = ENVIRONMENT.get_or_init(|| {
+        // Telemetry is off: vipune is a local CLI, and the builder would
+        // otherwise turn ONNX Runtime's telemetry on for every run.
+        ort::init()
+            .with_telemetry(false)
+            .build()
+            .map_err(|e| e.to_string())
+    });
+    match environment {
+        Ok(environment) => Ok(environment.clone()),
+        Err(message) => Err(Error::Onnx {
+            message: format!("ort environment: {message}"),
+        }),
     }
-    // Telemetry is off: vipune is a local CLI, and the builder would otherwise
-    // turn ONNX Runtime's telemetry on for every run.
-    let environment = ort::init()
-        .with_telemetry(false)
-        .build()
-        .map_err(Error::from)?;
-    // A concurrent loser re-reads the winner's value; either way the process
-    // ends up with exactly one environment.
-    Ok(ENVIRONMENT.get_or_init(|| environment.clone()).clone())
 }
 
 /// ONNX embedding engine for synchronous text-to-vector conversion.
@@ -120,7 +124,9 @@ pub struct EmbeddingEngine {
     /// after construction — it exists so the ORT env outlives the session:
     /// the field drops *after* `session` (declaration order), and the shared
     /// handle keeps the last `ReleaseEnv` from running while any session lives.
-    /// Declared before `session` for exactly that reason.
+    /// Declared before `session` for exactly that reason. Belt-and-braces, not
+    /// the only keep-alive: rc.15 `Session`s hold an `Environment` clone of
+    /// their own, so the ORT env already outlives every session built from it.
     _environment: Environment,
     pub(super) session: Session,
     pub(super) tokenizer: Tokenizer,

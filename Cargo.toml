@@ -39,13 +39,15 @@ rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 # `tracing` events, and `tokenizers` uses its `tracing`/`tracing-subscriber`
 # only in a doc example. `copy-dylibs` and `api-31` are kept as defaults even
 # though the static build here may not need them: dropping them changes how the
-# ORT library is linked and installed, and that is not this change.
+# ORT library is linked and installed, and that is not this change. `ndarray`
+# is dropped: no code in this crate constructs or extracts an `ndarray` tensor
+# (`rg ndarray src/` is empty) — inputs are built from plain slices.
 #
 # `ort-sys` is declared separately (it is a build-dep of `ort` too, so it needs
 # its own pin) and must not be given a TLS feature: it defaults to `std` +
 # `api-17` only, and `ort` enables the matching `ort-sys` features from its own
 # `tls-rustls`/`download-binaries`/`api-31` features.
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls", "copy-dylibs", "api-31"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "copy-dylibs", "api-31"] }
 ort-sys = "=2.0.0-rc.15"
 
 # HuggingFace tokenizers and model download

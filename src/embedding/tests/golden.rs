@@ -43,7 +43,8 @@
 //! but a bare `cargo test -- --ignored` (the nightly CI lane) still runs every
 //! ignored test, and a generator that always rewrote the data file would both
 //! dirty the tree and make [`test_golden_embeddings_match_fixture`] pass
-//! vacuously. Without the var the generator does nothing.
+//! vacuously. Only the exact value `1` enables the generator; unset or any
+//! other value does nothing.
 //!
 //! The generator re-embeds `GOLDEN_TEXTS` through `embed_passage` at the
 //! pinned revision and rewrites the file. Commit the new file together with
@@ -61,9 +62,11 @@ const GOLDEN_FILE: &str = "src/embedding/tests/golden_bge_small.txt";
 /// Element-wise tolerance for the golden comparison (issue #265).
 const MAX_ABS_DIFF: f32 = 1e-4;
 
-/// The fixed corpus: short, long, unicode, code-like and whitespace-heavy
-/// texts, all non-empty and all well under the 512-token limit (the engine
-/// short-circuits empty input to a zero vector, which would pin nothing).
+/// The fixed corpus: short, long, unicode and code-like texts, all non-empty
+/// and all well under the 512-token limit (the engine short-circuits empty
+/// input to a zero vector, which would pin nothing). The last entry carries
+/// the collapsed form of a wider-spaced original — whitespace runs cannot
+/// survive the fixture format, so it pins the collapse, not the raw spacing.
 ///
 /// Each entry is stored in the canonical `whitespace_key` form (whitespace
 /// runs collapsed to one space, ends trimmed) because the data file uses a
@@ -90,11 +93,10 @@ fn whitespace_key(raw: &str) -> String {
 
 /// Builds the fixture line for one (text, embedding) pair.
 ///
-/// The `.9e` width is load-bearing, not cosmetic: `f32`'s shortest
-/// round-trip form (`{:.9e}` is, but the plainest float formatting is not)
-/// and a fixed exponent width keep every record the same byte layout, so the
-/// positional split in [`decode_line`] and the file's size stay stable across
-/// regenerations.
+/// The `{:.9e}` field format is load-bearing, not cosmetic: nine mantissa
+/// digits round-trips every `f32` exactly, and a fixed exponent width keeps
+/// every record the same byte layout, so the positional split in
+/// [`decode_line`] and the file's size stay stable across regenerations.
 fn encode_line(text: &str, embedding: &[f32]) -> String {
     let mut line = text.to_string();
     for value in embedding {
@@ -171,6 +173,16 @@ fn test_golden_fixture_shape() {
             "fixture line {} must hold only finite floats",
             index + 1
         );
+        // The fixture pins post-normalisation output, so each vector must be a
+        // unit vector: a fixture whose norm is off cannot detect the drift it
+        // exists to detect (the production path L2-normalises, so 1.0 is the
+        // only defensible expectation).
+        let norm = embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() <= 1e-3,
+            "fixture line {} must be L2-normalised (norm {norm})",
+            index + 1
+        );
     }
 }
 
@@ -222,8 +234,9 @@ fn test_golden_embeddings_match_fixture() {
     );
 }
 
-/// Env var that opts in to rewriting the committed fixture. Without it set,
-/// [`golden_fixture_regenerate`] returns immediately.
+/// Env var that opts in to rewriting the committed fixture. It must be set to
+/// exactly `1`; any other value (or no value) makes [`golden_fixture_regenerate`]
+/// return immediately.
 const REGENERATE_ENV_VAR: &str = "VIPUNE_REGENERATE_GOLDEN";
 
 /// Regenerates the committed fixture from the current runtime.
@@ -231,8 +244,10 @@ const REGENERATE_ENV_VAR: &str = "VIPUNE_REGENERATE_GOLDEN";
 /// Opt-in via [`REGENERATE_ENV_VAR`]: `#[ignore]`d tests still run under a
 /// bare `cargo test -- --ignored`, and an always-on generator would rewrite
 /// the committed fixture on that run — dirtying the tree and neutralising
-/// [`test_golden_embeddings_match_fixture`]. Without the var it prints a skip
-/// line and returns without touching the file or loading the model.
+/// [`test_golden_embeddings_match_fixture`]. Only the exact value `1` enables
+/// it; any other value (including `true` or `0`) prints a skip line and
+/// returns without touching the file or loading the model, so a stray
+/// `VIPUNE_REGENERATE_GOLDEN=0` in an environment cannot rewrite the fixture.
 ///
 /// With the opt-in it is intentionally destructive to the data file: run it
 /// only when the model id/revision legitimately changes (see the module
@@ -242,7 +257,7 @@ const REGENERATE_ENV_VAR: &str = "VIPUNE_REGENERATE_GOLDEN";
 #[ignore]
 #[test]
 fn golden_fixture_regenerate() {
-    if std::env::var(REGENERATE_ENV_VAR).is_err() {
+    if std::env::var(REGENERATE_ENV_VAR).as_deref() != Ok("1") {
         println!(
             "skipped: {REGENERATE_ENV_VAR} is not set, leaving {GOLDEN_FILE} untouched \
              (set {REGENERATE_ENV_VAR}=1 to regenerate)"

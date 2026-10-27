@@ -52,7 +52,7 @@ vipune uses ONNX Runtime v2.0.0-rc.15, **pinned with exact version**:
 
 ```toml
 # In Cargo.toml
-ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls", "copy-dylibs", "api-31"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-rustls", "copy-dylibs", "api-31"] }
 ort-sys = "=2.0.0-rc.15"
 ```
 
@@ -61,7 +61,8 @@ rc.15 defaults include `tls-native`, which pulls `native-tls`/`openssl-sys` in
 just to download the prebuilt ONNX Runtime at build time. `tls-rustls` keeps
 the rustls + `ring` + webpki-roots stack the rc.9 upgrade used, so the tree has
 one TLS stack and no OpenSSL. `ort-sys` needs no TLS feature of its own —
-`ort`'s `tls-rustls` enables the matching `ort-sys` feature.
+`ort`'s `tls-rustls` enables the matching `ort-sys` feature. `ndarray` is not
+enabled: no code in this crate builds or extracts an `ndarray` tensor.
 
 **Why pinned**: the rc series carries the memory-safety / undefined-behaviour
 fixes this release needs, and `ort` declares exactly the matching `ort-sys`, so
