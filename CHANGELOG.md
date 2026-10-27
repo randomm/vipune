@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-10-27
+
+### Bug Fixes
+
+- Honour HF_HOME for the embedding model cache ([#321](https://github.com/randomm/vipune/pull/321))
+
+
 ## [0.20.1] - 2026-10-27
 
 ### Miscellaneous
