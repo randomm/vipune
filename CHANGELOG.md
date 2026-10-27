@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-27
+
+### Bug Fixes
+
+- Answer MCP store lock poisoning per request ([#296](https://github.com/randomm/vipune/pull/296))
+
+### Features
+
+- Add a NewSupersedingMemory constructor and tighten supersede validation ([#295](https://github.com/randomm/vipune/pull/295))
+
+### Miscellaneous
+
+- Harden the cargo-deny gate ([#294](https://github.com/randomm/vipune/pull/294))
+
+
 ## [0.18.0] - 2026-10-26
 
 ### Documentation
