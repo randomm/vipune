@@ -1,16 +1,18 @@
 //! Content hashing for dedup (issue #191).
 //!
 //! Provides a single shared, dependency-free 64-bit FNV-1a hash over
-//! normalised content (lowercased, whitespace-collapsed). Used by:
-//! - `Database::insert_with_hash` (the hook insert path)
-//! - The dedup migration backfill (issue #191, task-c)
+//! normalised content (lowercased, whitespace-collapsed), exposed as
+//! `content_hash` and called by the hook insert path
+//! (`src/hook/run.rs`) and the migration-4 dedup backfill
+//! (`src/sqlite/migrations.rs`).
 //!
 //! The hash function and the normalisation step must remain identical
 //! across all call sites or dedup will silently break.
 
 /// Normalise content for hashing: lowercase, collapse all whitespace
 /// runs (spaces, tabs, newlines) into single spaces, trim the result.
-#[allow(dead_code)] // used by hook path (task-b) and migration backfill (task-c)
+/// `pub` only for this module's own tests; in production it is reached
+/// solely through `content_hash`.
 pub fn normalize_content(content: &str) -> String {
     let lower = content.to_lowercase();
     let mut out = String::with_capacity(lower.len());
@@ -31,7 +33,8 @@ pub fn normalize_content(content: &str) -> String {
 
 /// 64-bit FNV-1a hash of `input`, hex-encoded (16 lowercase chars).
 /// No external crate — hand-rolled per project std-first philosophy.
-#[allow(dead_code)] // public helper: reached in-crate through `content_hash`, which composes through it
+/// `pub` only for this module's own tests; in production it is reached
+/// solely through `content_hash`.
 pub fn fnv1a64_hex(input: &str) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
     for byte in input.as_bytes() {

@@ -206,14 +206,9 @@ impl From<&ExportRow> for ExportJsonlRow {
     }
 }
 
-/// Response struct for `vipune export --json`.
-///
-/// Note: task-d of issue #195 owns `src/commands/output.rs` and will add the
-/// shared response struct there. Until it lands, this command-local struct
-/// carries the spec-final field set (`rows`, `format_version`, `path`) so the
-/// export command builds and its tests run independently. Replace the call site
-/// with `crate::commands::output::ExportResponse` and delete this once task-d is
-/// merged.
+/// Response struct for `vipune export --json`, kept command-local: `export`
+/// and its tests own this shape, and `commands::output` has no consumer for a
+/// shared variant.
 #[derive(serde::Serialize)]
 pub struct ExportResponse {
     /// Number of data rows written (header line not counted).
