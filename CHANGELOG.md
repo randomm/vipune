@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-10-27
+
+### Documentation
+
+- Document the v0.19.0 metadata and re-supersede refusals ([#301](https://github.com/randomm/vipune/pull/301))
+
+### Miscellaneous
+
+- Stop src/main.rs re-declaring the library module tree ([#302](https://github.com/randomm/vipune/pull/302))
+
+
 ## [0.19.0] - 2026-10-27
 
 ### Bug Fixes
