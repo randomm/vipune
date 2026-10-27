@@ -68,10 +68,20 @@ pub(super) fn seed_row_with_metadata(
 
 /// Pull the `id` out of a tool result's JSON text content.
 ///
-/// The tool handlers return `CallToolResult`, whose payload is a list of
-/// text contents holding the serialised response, so a handler-driven test
-/// has to unwrap that envelope once instead of per assertion.
-pub(super) fn tool_result_id(result: &rmcp::model::CallToolResult) -> String {
+/// `ServerHandler::call_tool` returns `CallToolResponse`, whose `Complete` arm
+/// carries a `CallToolResult` whose payload is the list of text contents holding
+/// the serialised response — so a handler-driven test unwraps both envelopes once
+/// here. Anything other than `Complete` (MRTR `InputRequired`, or a Tasks
+/// `Task` handle) is an answer no vipune tool may give: the panic. So is
+/// `is_error`: vipune reports failure as `Err(ErrorData)`, not an error result.
+pub(super) fn tool_result_id(result: &rmcp::model::CallToolResponse) -> String {
+    let rmcp::model::CallToolResponse::Complete(result) = result else {
+        panic!("vipune tools only ever answer with a complete CallToolResult: {result:?}")
+    };
+    assert!(
+        !result.is_error.unwrap_or(false),
+        "Complete tool result must not report is_error"
+    );
     let text = result
         .content
         .iter()
@@ -292,11 +302,10 @@ mod tool_handler_tests {
     ///
     /// `#[tool_router]` generates `ToolHandler::tool_router()` from the `#[tool]`
     /// attributes, and `#[tool_handler]` routes `tools/list` through
-    /// `Self::tool_router().list_all()` (rmcp-macros 1.8.0
-    /// src/tool_handler.rs:66-77, src/tool_router.rs:62-70). An rmcp API change
-    /// that silently drops a route would remove a tool from clients with no
-    /// compile error and no failing test — this is that test. No embedding model
-    /// is needed to list tools, so it runs in the default `cargo test`.
+    /// `Self::tool_router().list_all()` (rmcp-macros 3.8.0 src/tool_handler.rs:65-87).
+    /// An rmcp API change that silently drops a route would remove a tool from
+    /// clients with no compile error and no failing test — this is that test. Needs
+    /// no embedding model, so `cargo test` runs it.
     #[test]
     fn test_tool_router_exposes_all_expected_tools() {
         let expected = [
@@ -315,12 +324,9 @@ mod tool_handler_tests {
             .map(|tool| tool.name.into_owned())
             .collect();
 
-        // `list_all` sorts by name (rmcp 1.8.0 src/handler/server/router/tool.rs:580-589),
-        // so the comparison below is order-stable; assert it to keep that assumption visible.
-        assert_eq!(
-            listed,
-            expected.iter().map(|s| s.to_string()).collect::<Vec<_>>()
-        );
+        // `list_all` sorts by name (rmcp 3.7.0 src/handler/server/router/tool.rs:588), so
+        // the comparison below is order-stable; assert it to keep that assumption visible.
+        assert_eq!(listed, expected.map(str::to_string).to_vec());
 
         // Every tool is also reachable by name, which is the path `tools/call`
         // takes through the router.

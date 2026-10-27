@@ -322,8 +322,8 @@ fn test_rmcp_floor_is_at_or_above_the_patched_release() {
     // Numeric compare, not a literal match, so a routine rmcp bump stays green.
     let (major, minor) = declared_version(&manifest, "rmcp");
     assert!(
-        (major, minor) >= (1, 8),
-        "Cargo.toml: rmcp {major}.{minor} permits versions before the 1.4.0 fix for RUSTSEC-2026-0189"
+        (major, minor) >= (3, 7),
+        "Cargo.toml: rmcp {major}.{minor} predates the 3.7.0 floor src/mcp is written against"
     );
 }
 

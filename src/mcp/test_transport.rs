@@ -11,7 +11,7 @@
 use rmcp::ServerHandler;
 use rmcp::model::{
     ClientCapabilities, Implementation, InitializeRequestParams, ProtocolVersion,
-    ServerCapabilities, ServerInfo,
+    ServerCapabilities, ServerConfig,
 };
 use rmcp::service::{
     RequestContext, RoleServer, RxJsonRpcMessage, TxJsonRpcMessage, serve_directly,
@@ -59,8 +59,8 @@ impl Transport<RoleServer> for NullServerTransport {
 struct NullHandler;
 
 impl ServerHandler for NullHandler {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().build())
     }
 }
 
