@@ -21,7 +21,7 @@ mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
 clap = { version = "4.5", features = ["derive"] }
 
 # Database
-rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+rusqlite = { version = "0.41", features = ["bundled", "backup"] }
 
 # ONNX Runtime for embeddings (CPU-only; the build script downloads the prebuilt
 # ONNX Runtime static library). Pinned to the rc series for the memory-safety/UB
