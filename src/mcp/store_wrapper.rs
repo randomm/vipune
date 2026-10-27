@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::memory::{MemoryStore, NewMemory, NewSupersedingMemory, UpdateParams};
 
+use super::store_lock::{lock_mcp, lock_store};
+
 #[cfg(test)]
 #[path = "store_wrapper_error_tests.rs"]
 mod error_mapping_tests;
@@ -33,7 +35,7 @@ impl StoreWrapper {
         metadata: &str,
         force: bool,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = lock_mcp(&self.0, "ingest")?;
         let policy = if force {
             IngestPolicy::Force
         } else {
@@ -81,7 +83,7 @@ impl StoreWrapper {
         force: bool,
         importance: MemoryImportance,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = lock_mcp(&self.0, "ingest_with_lifecycle")?;
         let policy = if force {
             IngestPolicy::Force
         } else {
@@ -162,7 +164,7 @@ impl StoreWrapper {
         old_memory_id: &str,
         importance: MemoryImportance,
     ) -> Result<serde_json::Value, rmcp::ErrorData> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = lock_mcp(&self.0, "supersede_with_row")?;
 
         let new_id = match store.supersede_with(&NewSupersedingMemory {
             row: *row,
@@ -194,7 +196,7 @@ impl StoreWrapper {
         recency_weight: f64,
         options: crate::memory::SearchOptions,
     ) -> Result<Vec<crate::Memory>, Error> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = lock_store(&self.0, "search_raw")?;
         store.search(project_id, query, limit, recency_weight, options)
     }
 
@@ -207,7 +209,7 @@ impl StoreWrapper {
         recency_weight: f64,
         options: crate::memory::SearchOptions,
     ) -> Result<Vec<crate::Memory>, Error> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = lock_store(&self.0, "search_hybrid_raw")?;
         store.search_hybrid(project_id, query, limit, recency_weight, options)
     }
 
@@ -222,7 +224,7 @@ impl StoreWrapper {
         memory_types: Option<Vec<&str>>,
         statuses: Option<Vec<&str>>,
     ) -> Result<serde_json::Value, Error> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = lock_store(&self.0, "search")?;
         let memories = store.search(
             project_id,
             query,
@@ -271,7 +273,7 @@ impl StoreWrapper {
         memory_types: Option<Vec<&str>>,
         statuses: Option<Vec<&str>>,
     ) -> Result<serde_json::Value, Error> {
-        let mut store = self.0.lock().unwrap();
+        let mut store = lock_store(&self.0, "search_hybrid")?;
         let options = crate::memory::SearchOptions {
             memory_types,
             statuses,
@@ -312,7 +314,7 @@ impl StoreWrapper {
         memory_types: Option<&[&str]>,
         statuses: Option<&[&str]>,
     ) -> Result<serde_json::Value, Error> {
-        let store = self.0.lock().unwrap();
+        let store = lock_store(&self.0, "list")?;
         let memories = store.list(project_id, limit, memory_types, statuses)?;
 
         let results: Vec<serde_json::Value> = memories
@@ -353,13 +355,7 @@ impl StoreWrapper {
         id: &str,
         project_id: &str,
     ) -> Result<Option<crate::Memory>, rmcp::ErrorData> {
-        let store = self.0.lock().map_err(|e| {
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INTERNAL_ERROR,
-                format!("store lock poisoned: {e}"),
-                None,
-            )
-        })?;
+        let store = lock_mcp(&self.0, "get")?;
         store
             .get(id, project_id)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
@@ -368,13 +364,7 @@ impl StoreWrapper {
     /// Delete a memory by ID scoped to a project.
     #[allow(dead_code)] // Used by delete_memory tool
     pub(crate) fn delete(&self, id: &str, project_id: &str) -> Result<bool, rmcp::ErrorData> {
-        let store = self.0.lock().map_err(|e| {
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INTERNAL_ERROR,
-                format!("store lock poisoned: {e}"),
-                None,
-            )
-        })?;
+        let store = lock_mcp(&self.0, "delete")?;
         store
             .delete(id, project_id)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
@@ -388,13 +378,7 @@ impl StoreWrapper {
         project_id: &str,
         params: UpdateParams<'_>,
     ) -> Result<(), rmcp::ErrorData> {
-        let mut store = self.0.lock().map_err(|e| {
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INTERNAL_ERROR,
-                format!("store lock poisoned: {e}"),
-                None,
-            )
-        })?;
+        let mut store = lock_mcp(&self.0, "update")?;
         store
             .update(id, project_id, params)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
@@ -403,13 +387,7 @@ impl StoreWrapper {
     /// Update retrieval telemetry for a list of memory IDs.
     #[allow(dead_code)] // Used by search_memories and get_memory tools
     pub(crate) fn touch_memories(&self, ids: &[&str]) -> Result<(), rmcp::ErrorData> {
-        let store = self.0.lock().map_err(|e| {
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INTERNAL_ERROR,
-                format!("store lock poisoned: {e}"),
-                None,
-            )
-        })?;
+        let store = lock_mcp(&self.0, "touch_memories")?;
         store
             .touch_memories(ids)
             .map_err(|e| -> rmcp::ErrorData { e.into() })
