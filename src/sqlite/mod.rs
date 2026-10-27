@@ -411,7 +411,7 @@ impl Database {
     /// Construct a `Database` from an already-opened `Connection`.
     /// Bypasses schema creation and migration; the connection must point
     /// to a fully initialised database.
-    pub fn from_conn(conn: Connection) -> Self {
+    pub(crate) fn from_conn(conn: Connection) -> Self {
         Self { conn }
     }
 

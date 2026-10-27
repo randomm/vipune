@@ -51,19 +51,25 @@
 //! by `vipune::current_identity`'s `ModelIdentity` (model id + revision) so a
 //! model switch invalidates them.
 
+// The binary's command surface: `Commands`/`execute`, the hook entry points and
+// the JSON DTOs under `commands::output`. It is the seam `src/main.rs` imports
+// instead of re-declaring the module tree (issue #267), not library API — so it
+// is doc-hidden, which keeps it out of rustdoc and out of the public API that
+// cargo-semver-checks compares against `origin/main`.
+#[doc(hidden)]
 pub mod commands;
 pub mod config;
 pub mod embedding;
 pub mod embedding_profiles;
 pub mod errors;
-pub mod hook;
+mod hook;
 pub mod memory;
 pub mod memory_types; // Library-only: batch ingest API (not used in CLI)
 pub mod migration;
 pub mod project;
 mod rrf;
-pub mod sqlite;
-pub mod temporal;
+mod sqlite;
+mod temporal;
 
 #[cfg(test)]
 #[path = "embedding_dim_audit_tests.rs"]

@@ -13,9 +13,10 @@ use std::process::ExitCode;
 use vipune::Config;
 use vipune::commands;
 use vipune::commands::Commands;
+use vipune::commands::HookEvent;
+use vipune::commands::handle_hook_event;
 use vipune::commands::output::{ErrorResponse, print_json};
 use vipune::errors::Error;
-use vipune::hook::HookEvent;
 use vipune::memory::MemoryStore;
 use vipune::project::detect_project;
 
@@ -92,7 +93,7 @@ fn main() -> ExitCode {
 /// one of the five event subcommands. Returns `None` for `Install` and
 /// `Uninstall` (those go through the normal command path) and for non-hook
 /// commands.
-fn hook_event_from_command(command: &Commands) -> Option<HookEvent> {
+fn hook_event_from_command(command: &Commands) -> Option<commands::HookEvent> {
     match command {
         Commands::Hook {
             command: commands::HookCommands::SessionStart,
@@ -130,7 +131,7 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
     // but NOT Install/Uninstall (those run via the normal path and don't
     // touch the DB or the embedder).
     if let Some(event) = hook_event_from_command(&cli.command) {
-        return commands::hook_run::handle_hook_event(&config, cli.json, event);
+        return handle_hook_event(&config, cli.json, event);
     }
 
     // Handle MCP command separately (doesn't use MemoryStore directly)
