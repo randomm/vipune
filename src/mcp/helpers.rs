@@ -5,11 +5,16 @@ use crate::sqlite::Memory;
 
 /// Serialises a tool's `metadata` argument for the storage column.
 ///
-/// One rule for all three write tools (`store_memory`, `supersede_memory`,
-/// `update_memory`): an absent argument and a JSON `null` both mean "no
-/// metadata" and store SQL NULL, while every other value is stored as its own
-/// JSON text — so the *string* `"null"` keeps its quotes and never collapses
-/// into the NULL spelling (`serde_json::to_string` is what adds them).
+/// One rule for all three write tools: an absent argument and a JSON `null`
+/// both become `None` — "no metadata given". What the callers do with `None`
+/// differs: `store_memory`/`supersede_memory` store SQL NULL, while
+/// `update_memory` leaves the stored column unchanged. Every other value is
+/// passed on as its own JSON text, still subject to the store's validation —
+/// so the *string* `"null"` keeps its quotes and never collapses into the NULL
+/// spelling (`serde_json::to_string` is what adds them).
+///
+/// rmcp/serde already deserialises an explicit JSON `null` into `None` for the
+/// `Option<Value>` tool field, so the `Value::Null` arm is belt-and-braces.
 pub(super) fn metadata_column(
     metadata: &Option<serde_json::Value>,
 ) -> Result<Option<String>, rmcp::ErrorData> {

@@ -492,7 +492,6 @@ impl ToolHandler {
             .transpose()
             .map_err(|e| McpError::invalid_input(&format!("Invalid importance: {e}")))?;
 
-        // Serialize metadata if provided
         let metadata_str = metadata_column(&params.metadata)?;
 
         // Convert text to &str if provided
