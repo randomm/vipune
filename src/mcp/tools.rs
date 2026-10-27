@@ -326,7 +326,7 @@ impl ToolHandler {
     ///
     /// The old memory is marked as superseded and a new memory is created.
     /// Use this when information has changed and the old version should no
-    /// longer appear in search results.
+    /// longer appear in search results. Omitted or `null` `metadata` is stored as SQL NULL (#305).
     #[tool(
         name = "supersede_memory",
         description = "Replace an existing memory with new content. The old memory is marked as superseded and a new memory is created. Use this when information has changed and the old version should no longer appear in search results."
@@ -349,17 +349,17 @@ impl ToolHandler {
         let memory_type_val = MemoryType::from_str(memory_type)
             .map_err(|e| McpError::invalid_input(&format!("Invalid memory type: {}", e)))?;
 
-        // Serialize metadata
-        let metadata_str = match &params.metadata {
-            Some(meta) => serde_json::to_string(meta)
-                .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?,
-            None => "null".to_string(),
-        };
+        let metadata_str = params
+            .metadata
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| McpError::invalid_input(&format!("Invalid metadata: {}", e)))?;
 
         let value = self.store.supersede(
             &self.project_id,
             &params.new_text,
-            &metadata_str,
+            metadata_str.as_deref(),
             memory_type_val,
             &params.old_memory_id,
         )?;

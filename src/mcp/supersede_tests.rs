@@ -112,7 +112,7 @@ mod mcp_supersede {
             .supersede(
                 "status-proj",
                 "plain replacement",
-                "null",
+                None,
                 MemoryType::Fact,
                 &new_id,
             )
@@ -168,6 +168,111 @@ mod mcp_supersede {
             .expect("superseded row still readable");
         assert_eq!(replaced_row.status, "superseded");
         assert_eq!(replaced_row.superseded_by.as_deref(), Some(new_id.as_str()));
+    }
+
+    /// Issue #305: `supersede_memory` serialised an absent/`null` metadata
+    /// argument to the 4-character string `"null"` and handed it to the store as
+    /// a `&str`, so the replacement row's metadata column held that literal while
+    /// `store_memory` stored SQL NULL for the same input. Every read path renders
+    /// both spellings as JSON `null` (`parse_metadata`, and the `trim() != "null"`
+    /// guards in the wrapper's search/list), so the difference is invisible in
+    /// tool output — this test reads the `Option<String>` **column** back through
+    /// `StoreWrapper::get`.
+    ///
+    /// Drives the `supersede_memory` TOOL (nothing else does) through the router
+    /// for every shape its handler can receive — including the non-object scalars
+    /// and strings, which a "simplify" to an object-only match would silently null
+    /// out — and pins parity with a `store_memory` row whose `metadata` key was
+    /// likewise omitted.
+    #[tokio::test]
+    async fn supersede_memory_stores_no_metadata_for_omitted_or_null_metadata() {
+        use serde_json::json;
+
+        let (_dir, store) = MemoryStore::test_store();
+        let store = Arc::new(Mutex::new(store));
+        let wrapper = StoreWrapper::new(store.clone());
+        let handler = ToolHandler::new(store.clone(), "meta-proj".to_string(), Config::default());
+
+        // Parity control: a `store_memory` row with the metadata key omitted.
+        // Its column must equal every no-metadata row the tool loop stores below,
+        // so one read of it replaces a separate equality assertion at the end.
+        let stored = handler
+            .call_tool_for_test("store_memory", json!({ "text": "stored control" }))
+            .await
+            .expect("store_memory must succeed");
+        let stored_row = wrapper
+            .get(&tool_result_id(&stored), "meta-proj")
+            .expect("get")
+            .expect("stored row");
+        assert_eq!(
+            stored_row.metadata, None,
+            "the parity control must itself store no metadata"
+        );
+
+        // (arguments sent to the tool, metadata column expected on the new row).
+        let cases = [
+            ("omitted", json!({}), None),
+            ("explicit null", json!({ "metadata": null }), None),
+            (
+                "json-null string",
+                json!({ "metadata": "null" }),
+                Some("\"null\""),
+            ),
+            ("a number", json!({ "metadata": 0 }), Some("0")),
+            ("a boolean", json!({ "metadata": false }), Some("false")),
+            ("an empty string", json!({ "metadata": "" }), Some(r#""""#)),
+            (
+                "a real document",
+                json!({ "metadata": { "topic": "auth" } }),
+                Some(r#"{"topic":"auth"}"#),
+            ),
+        ];
+
+        for (label, extra, expected) in cases {
+            let old = seed_row(&wrapper, "meta-proj", "original content");
+            let mut args = json!({
+                "new_text": "replacement content",
+                "old_memory_id": old.id,
+            });
+            for (key, value) in extra.as_object().expect("extra args are an object") {
+                args[key] = value.clone();
+            }
+
+            let result = handler
+                .call_tool_for_test("supersede_memory", args)
+                .await
+                .unwrap_or_else(|err| panic!("{label}: supersede_memory must succeed: {err:?}"));
+            let new_id = tool_result_id(&result);
+
+            let row = wrapper
+                .get(&new_id, "meta-proj")
+                .expect("get")
+                .unwrap_or_else(|| panic!("{label}: replacement row stored"));
+            assert_eq!(
+                row.metadata.as_deref(),
+                expected,
+                "{label}: the metadata column must hold what the handler was given"
+            );
+            assert_eq!(row.content, "replacement content");
+            assert_eq!(row.status, "active");
+
+            // The retirement half of the same transaction: a handler that
+            // inserted the replacement without marking the old row would still
+            // pass every metadata assertion above.
+            let retired = wrapper
+                .get(&old.id, "meta-proj")
+                .expect("get")
+                .unwrap_or_else(|| panic!("{label}: superseded row still readable"));
+            assert_eq!(
+                retired.status, "superseded",
+                "{label}: the supersede call must retire the old row"
+            );
+            assert_eq!(
+                retired.superseded_by.as_deref(),
+                Some(new_id.as_str()),
+                "{label}: the old row must link to the row that replaced it"
+            );
+        }
     }
 
     /// Issue #271: the re-supersede guard has to answer an agent in the tool's
