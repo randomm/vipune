@@ -17,6 +17,7 @@
 //! The ONNX run + pooling live in [`inference`]; constants and the
 //! `EmbeddingEngine` struct are re-exported from [`engine`].
 
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use hf_hub::{Repo, RepoType, api::sync::ApiBuilder};
@@ -51,6 +52,29 @@ pub const EMBED_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 /// (`crate::embedding_profiles::BUILTIN_PROFILES`); this constant is kept as
 /// the stable public re-export the library API and drift tests reference.
 pub const EMBED_MODEL_REVISION: &str = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a";
+
+/// The home directory used for default paths: `dirs::home_dir()` with an
+/// `env::var("HOME")` fallback, the same pattern `Config::default()` uses.
+fn home_dir() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(|| {
+        std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."))
+    })
+}
+
+/// Resolves the hf-hub cache directory: `$HF_HOME/hub` when `HF_HOME` is set
+/// to a non-empty value, `<home>/.cache/huggingface/hub` otherwise (hf-hub's
+/// own rule; an empty `HF_HOME` counts as unset, and the env value is appended
+/// to verbatim — no normalisation, so a relative value resolves against the
+/// process cwd). Pure: the env value and home dir are arguments, so the
+/// resolution is testable without a model or network.
+pub(crate) fn resolve_hf_cache_dir(hf_home: Option<&str>, home: &Path) -> PathBuf {
+    match hf_home {
+        Some(hf_home) if !hf_home.is_empty() => Path::new(hf_home).join("hub"),
+        _ => home.join(".cache").join("huggingface").join("hub"),
+    }
+}
 
 /// The process-wide ONNX Runtime environment, built on first use.
 ///
@@ -145,9 +169,12 @@ impl EmbeddingEngine {
     /// rejected with an error listing the available profiles. No profile ever
     /// loads a floating revision — each is pinned to an exact commit SHA.
     ///
-    /// Files are cached locally in the HF Hub cache
-    /// (`~/.cache/huggingface/hub/` by default, or `$HF_HOME/hub` when `HF_HOME`
-    /// is set), only downloaded once.
+    /// Files are cached locally in the HF Hub cache, only downloaded once:
+    /// `$HF_HOME/hub` when `HF_HOME` is set to a non-empty value, otherwise
+    /// `~/.cache/huggingface/hub` (see [`resolve_hf_cache_dir`], which is
+    /// vipune's own resolver — hf-hub's `ApiBuilder::new()` ignores `HF_HOME`).
+    /// Because the cache dir moves with `HF_HOME`, hf-hub then reads the
+    /// access token from `$HF_HOME/token` (its own convention).
     pub fn new(model_id: &str) -> Result<Self, Error> {
         use crate::embedding_profiles::profile_for;
 
@@ -162,15 +189,29 @@ impl EmbeddingEngine {
         // multi-megabyte model download that is pure waste on a doomed call.
         let environment = ort_environment()?;
 
+        // hf-hub's ApiBuilder::new() ignores HF_HOME, so the cache directory
+        // is resolved here and handed to the client explicitly. The home
+        // directory is obtained the same way Config::default() does it.
+        let home = home_dir();
+        let cache_dir = resolve_hf_cache_dir(std::env::var("HF_HOME").ok().as_deref(), &home);
+        let air_gapped_hint = format!(
+            "If running in an air-gapped environment, pre-fetch the model before going offline:\n  huggingface-cli download {} --revision {} --cache-dir {}",
+            profile.model_id,
+            profile.revision,
+            cache_dir.display()
+        );
+
         // Same air-gapped remedy as the download sites below: a builder
         // failure is a Hub/network failure too, so it must not arrive as a
         // bare `HfHub` message that names no remedy.
-        let api = ApiBuilder::new().build().map_err(|e| {
-            Error::Config(format!(
-                "Failed to initialise the HuggingFace Hub client: {e}.\n\nIf running in an air-gapped environment, pre-fetch the model before going offline:\n  huggingface-cli download {} --revision {} --cache-dir ~/.cache/huggingface/hub",
-                profile.model_id, profile.revision
-            ))
-        })?;
+        let api = ApiBuilder::new()
+            .with_cache_dir(cache_dir)
+            .build()
+            .map_err(|e| {
+                Error::Config(format!(
+                    "Failed to initialise the HuggingFace Hub client: {e}.\n\n{air_gapped_hint}"
+                ))
+            })?;
 
         let repo = api.repo(Repo::with_revision(
             profile.model_id.to_string(),
@@ -179,11 +220,12 @@ impl EmbeddingEngine {
         ));
 
         // Helper function for error messaging (every profile is revision-pinned,
-        // so the hint always carries `--revision`)
-        let wrap_download_err = move |e: hf_hub::api::sync::ApiError| {
+        // so the hint always carries `--revision`). Borrows the shared hint, so
+        // it stays callable for both download sites below.
+        let wrap_download_err = |e: hf_hub::api::sync::ApiError| {
             Error::Config(format!(
-                "Failed to download embedding model '{}': {}.\n\nIf running in an air-gapped environment, pre-fetch the model before going offline:\n  huggingface-cli download {} --revision {} --cache-dir ~/.cache/huggingface/hub",
-                profile.model_id, e, profile.model_id, profile.revision
+                "Failed to download embedding model '{}': {}.\n\n{air_gapped_hint}",
+                profile.model_id, e
             ))
         };
 

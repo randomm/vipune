@@ -345,7 +345,7 @@ vipune works with zero configuration. All paths use the user's home directory:
 **Environment variables (override defaults):**
 - `VIPUNE_DATABASE_PATH` - SQLite database location
 - `VIPUNE_EMBEDDING_MODEL` - embedding model profile: `BAAI/bge-small-en-v1.5` (default) or `intfloat/multilingual-e5-small` — see [Embedding Models](#embedding-models)
-- `HF_HOME` - HuggingFace cache home directory (changes the model cache location to `$HF_HOME/hub`)
+- `HF_HOME` - HuggingFace cache home directory (relocates the model cache to `$HF_HOME/hub`; vipune's resolver honours `HF_HOME` only, and hf-hub then reads the token from `$HF_HOME/token`)
 - `VIPUNE_PROJECT` - Project identifier (overrides auto-detection)
 - `VIPUNE_SIMILARITY_THRESHOLD` - Conflict detection threshold, 0.0-1.0 (default: `0.85`)
 - `VIPUNE_RECENCY_WEIGHT` - Recency bias in search results, 0.0-1.0 (default: `0.3`)

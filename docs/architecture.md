@@ -165,7 +165,7 @@ Configurable parameters include:
 - `database_path`: Override database location (default: `~/.vipune/memories.db`)
 - `embedding_model`: HuggingFace model ID (default: `BAAI/bge-small-en-v1.5`)
 
-Model files are cached in the standard HuggingFace Hub cache at `~/.cache/huggingface/hub/`; its location is controlled by the `HF_HOME` environment variable (via `hf-hub`), not by vipune configuration.
+Model files are cached in the standard HuggingFace Hub cache at `~/.cache/huggingface/hub/`; setting `HF_HOME` relocates that cache to `$HF_HOME/hub`, a rule vipune's own resolver implements (`src/embedding/engine.rs`), not by vipune configuration. The HF access token is then read from `$HF_HOME/token`, which is hf-hub's own convention.
 
 ## Design Constraints
 
