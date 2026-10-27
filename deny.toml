@@ -46,12 +46,20 @@ features = [
     # default features for precisely this reason. Cargo feature unification
     # would silently re-enable simd-unsafe (unsafe SIMD, a 0.23 default feature)
     # if any other crate ever depends on base64 0.23 with defaults.
-    { deny = ["simd-unsafe"], crate = "base64@0.23", reason = "base64 0.23 decodes untrusted import files; simd-unsafe is a 0.23 default feature and must stay off" },
+    # Row keyed by crate name, not by release: Cargo.lock resolves duplicate
+    # base64 releases (0.13.1 and 0.22.1 as well, through independent upstream
+    # constraints), so no single `name@version` row can cover every copy.
+    # simd-unsafe exists only in 0.23, so this row is the whole ban — an
+    # exception declared in tests/deny_feature_ban_lock.rs (MULTI_COPY_EXCEPTIONS)
+    # rather than an accident. The ort rows below are per-release: ort and
+    # ort-sys each resolve to exactly one copy, so their rows must cover it.
+    { deny = ["simd-unsafe"], crate = "base64@0.23", reason = "base64 0.23 decodes untrusted import files; simd-unsafe is a 0.23 default feature and must stay off; the lock resolves duplicate base64 releases, so this row pins the 0.23 copy that has the feature" },
     # ort's rc.15 defaults to tls-native (native-tls -> OpenSSL); Cargo.toml
     # picks tls-rustls instead, so OpenSSL must never enter the tree. The
     # version is the exact `=` pin in Cargo.toml — cargo-deny silently ignores a
     # row matching nothing in Cargo.lock, and tests/deny_feature_ban_lock.rs
-    # checks every row's crate@version against the lock for exactly that.
+    # checks every row's crate@version against the lock for exactly that, per
+    # release: a second ort copy in the lock the row does not name fails the gate.
     { deny = ["tls-native", "tls-native-vendored"], crate = "ort@2.0.0-rc.15", reason = "rustls is the chosen TLS stack; tls-native/tls-native-vendored pull native-tls/OpenSSL into the tree" },
     # ort-sys declares no TLS feature of its own in Cargo.toml today: ort
     # enables the matching ort-sys features from its own tls-rustls. The row is
