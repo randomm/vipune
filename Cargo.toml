@@ -69,8 +69,9 @@ toml = "1.1"
 dirs = "7"
 
 # MCP server (optional, feature-gated)
-# Floor is 1.8, not the 1.2 that first resolved: RUSTSEC-2026-0189 is patched at
-# 1.4 and src/mcp is written against the 1.8 router API.
+# Floor is 3.7, the version src/mcp is written against (the 3.x router API and the
+# CallToolResponse envelope `tools/call` returns). RUSTSEC-2026-0189 was already
+# fixed at 1.4, so this floor is about the API, not the advisory.
 # rmcp 3's `default` list pulls its optional `base64` feature, which would unify
 # base64 0.23 back onto its default features — re-enabling `simd-unsafe`, the
 # feature deny.toml denies because vipune decodes untrusted import files with that

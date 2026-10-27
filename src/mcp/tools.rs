@@ -82,8 +82,8 @@ impl ToolHandler {
     }
 
     /// `#[tool_router]` generates a **private** `tool_router()` constructor
-    /// (rmcp-macros 1.8.0 src/tool_router.rs:63-67 emits `#vis fn tool_router()`
-    /// and `#vis` is filled only from the macro's own `vis = "..."` attribute),
+    /// (rmcp-macros 3.8.0 src/tool_router.rs:85-89 emits `#vis fn tool_router()`,
+    /// `#vis` coming only from the macro's own `vis = "..."` attribute, absent here),
     /// so the generated item is not reachable from `mcp::tests`. This thin
     /// wrapper gives the tests a crate-visible path to the router the server
     /// actually serves; rename the generated one and this line, not the tests,

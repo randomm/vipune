@@ -23,7 +23,7 @@ unsound = "workspace"
 # 0.20.2 defaults this to warn (advisories/cfg.rs:266), so an ignore row that
 # stops matching would rot silently; deny makes a stale row fail the gate.
 unused-ignored-advisory = "deny"
-# Nothing ignored: rmcp 1.8.0 is past the 1.4.0 fix for RUSTSEC-2026-0189
+# Nothing ignored: rmcp 3.7.0 is past the 1.4.0 fix for RUSTSEC-2026-0189
 # (Host-header validation, Streamable HTTP transport); vipune's MCP server is
 # stdio-only (transport-io), which the advisory says is unaffected.
 #
