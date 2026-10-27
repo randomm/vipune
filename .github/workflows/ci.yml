@@ -50,6 +50,18 @@ jobs:
           path: ~/.cache/huggingface/hub
           key: ${{ runner.os }}-${{ env.HF_CACHE_KEY }}
 
+      # ort-sys downloads the prebuilt ONNX Runtime archive at build time into
+      # ~/.cache/ort.pyke.io/dfbin/<target>/<hash>. Keyed on runner.os plus the
+      # lock: one runner OS per job, and the lock is what pins ort/ort-sys, so
+      # bumping the pin starts cold rather than restoring an older tree (no
+      # restore-keys). The path assumes ORT_CACHE_DIR and XDG_CACHE_HOME are
+      # unset, as they are on the CI runners — either one relocates the tree.
+      - name: Cache ONNX Runtime download
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ort.pyke.io
+          key: ${{ runner.os }}-ort-pyke-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Format check
         run: cargo fmt --check
 
@@ -99,6 +111,16 @@ jobs:
         with:
           path: ~/.cache/huggingface/hub
           key: ${{ runner.os }}-${{ env.HF_CACHE_KEY }}
+
+      # Same prebuilt ONNX Runtime archive as the Test job: same runner OS and
+      # the same lock, so the same key hits rather than downloading and
+      # uploading the tree twice. As above, the path assumes ORT_CACHE_DIR and
+      # XDG_CACHE_HOME are unset, as they are on the CI runners.
+      - name: Cache ONNX Runtime download
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ort.pyke.io
+          key: ${{ runner.os }}-ort-pyke-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Clippy (no default features)
         run: cargo clippy --locked --no-default-features --all-targets -- -D warnings

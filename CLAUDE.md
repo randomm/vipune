@@ -15,7 +15,8 @@ All four checks must pass. No exceptions, no bypasses (`--no-verify`, suppressio
 `cargo deny` is [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) (`cargo install
 cargo-deny` once), configured in `deny.toml`. It fails on a RustSec advisory that is neither
 fixed by a compatible update nor triaged in `deny.toml` with an ID, reason and upstream blocker,
-and on `base64` 0.23 resolving with the `simd-unsafe` feature. See
+and on `base64` 0.23 resolving with the `simd-unsafe` feature, or `ort`/`ort-sys` resolving with
+the OpenSSL TLS features `tls-native`/`tls-native-vendored`. See
 `docs/testing.md#dependency-advisory-gate`.
 
 ## Architecture

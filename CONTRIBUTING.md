@@ -104,8 +104,9 @@ is a separate bound: cargo-deny only reads it when fetching is disabled, i.e. un
 See [docs/testing.md](docs/testing.md#dependency-advisory-gate) for how to triage that.
 
 The `bans` check also fails if `base64` 0.23 ever resolves with the `simd-unsafe` feature, which
-Cargo feature unification could otherwise re-enable silently — see the comment in
-[`deny.toml`](deny.toml).
+Cargo feature unification could otherwise re-enable silently, or if `ort`/`ort-sys` ever resolve
+with the OpenSSL TLS features `tls-native`/`tls-native-vendored` (`Cargo.toml` chooses
+`tls-rustls`) — see the comments in [`deny.toml`](deny.toml).
 
 ## Commit Style
 
