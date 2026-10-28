@@ -63,6 +63,17 @@ pub(crate) fn resolve_hf_cache_dir(hf_home: Option<&str>, home: &Path) -> PathBu
     }
 }
 
+/// The hf-hub cache directory for the current process environment: reads
+/// `HF_HOME` and pairs it with the shared [`crate::config::home_dir`] fallback.
+/// `EmbeddingEngine::new` builds its `hf_hub::Cache` from this so the env read
+/// has one call site the test lane can pin.
+pub(crate) fn hf_cache_dir_from_env() -> PathBuf {
+    resolve_hf_cache_dir(
+        std::env::var("HF_HOME").ok().as_deref(),
+        &crate::config::home_dir(),
+    )
+}
+
 /// The process-wide ONNX Runtime environment, built on first use.
 ///
 /// ONNX Runtime permits exactly one environment per process: rc.15's
@@ -182,11 +193,7 @@ impl EmbeddingEngine {
         // the token from `~/.cache/huggingface/token` while downloading into
         // `$HF_HOME/hub`. `from_cache` derives both from the one directory we
         // resolved, keeping cache and token consistent.
-        //
-        // The home directory comes from the one shared lookup Config::default()
-        // uses.
-        let home = crate::config::home_dir();
-        let cache_dir = resolve_hf_cache_dir(std::env::var("HF_HOME").ok().as_deref(), &home);
+        let cache_dir = hf_cache_dir_from_env();
         let air_gapped_hint = format!(
             "If running in an air-gapped environment, pre-fetch the model before going offline:\n  huggingface-cli download {} --revision {} --cache-dir {}",
             profile.model_id,
