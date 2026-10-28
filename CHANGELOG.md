@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.20.3] - 2026-10-28
+
+### Miscellaneous
+
+- Route the config loader through the shared home lookup and pin the HF_HOME wiring ([#326](https://github.com/randomm/vipune/pull/326))
+
+
 ## [0.20.2] - 2026-10-27
 
 ### Bug Fixes
