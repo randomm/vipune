@@ -15,6 +15,7 @@ use vipune::commands;
 use vipune::commands::Commands;
 use vipune::commands::HookEvent;
 use vipune::commands::handle_hook_event;
+use vipune::commands::handle_version;
 use vipune::commands::output::{ErrorResponse, print_json};
 use vipune::errors::Error;
 use vipune::memory::MemoryStore;
@@ -115,6 +116,19 @@ fn hook_event_from_command(command: &Commands) -> Option<commands::HookEvent> {
 }
 
 fn run(cli: &Cli) -> Result<ExitCode, Error> {
+    // `version` is a diagnostic: it reports the binary's name and version and
+    // nothing else, so it must work when the database path, the config file or
+    // the schema is unusable. `Config::load()` (env/TOML validation),
+    // `ensure_directories()` (which creates the database's parent directory)
+    // and `MemoryStore::new()` (which opens the file and runs migrations) all
+    // have side effects and all fail on exactly those inputs, so the dispatch
+    // is short-circuited above them — the same pattern the hook events and the
+    // MCP early-returns already use. Ungated on purpose: unlike
+    // `Commands::Mcp`, `Commands::Version` exists in both feature lanes.
+    if matches!(cli.command, Commands::Version) {
+        return handle_version(cli.json);
+    }
+
     let mut config = Config::load()?;
     config.ensure_directories()?;
 
@@ -305,7 +319,10 @@ mod tests {
     #[test]
     fn test_cli_parse_version() {
         let cli = Cli::parse_from(["vipune", "version"]);
-        matches!(cli.command, Commands::Version);
+        assert!(
+            matches!(cli.command, Commands::Version),
+            "`vipune version` must parse to Commands::Version — the variant the run() short-circuit dispatches (issue #330)"
+        );
     }
 
     #[test]

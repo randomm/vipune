@@ -388,7 +388,7 @@ pub(crate) fn handle_update(
     Ok(ExitCode::SUCCESS)
 }
 
-pub(crate) fn handle_version(json: bool) -> Result<ExitCode, Error> {
+pub fn handle_version(json: bool) -> Result<ExitCode, Error> {
     if json {
         print_json(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),

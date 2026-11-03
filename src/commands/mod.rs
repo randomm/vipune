@@ -29,6 +29,12 @@ pub use hook_run::handle_hook_event;
 #[cfg(test)]
 pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search};
 
+/// The `version` handler, re-exported for the `run()` short-circuit (the CLI
+/// entry point dispatches `version` before the config/database boundary, so it
+/// cannot reach it through `execute`). Also test-visible for the parse test that
+/// pins `Commands::Version` reaching this handler.
+pub use handlers::handle_version;
+
 #[cfg(test)]
 #[path = "issue_178_tests.rs"]
 mod issue_178_tests;
@@ -73,6 +79,9 @@ mod reindex_prefix_tests;
 
 #[cfg(test)]
 mod reindex_tests;
+
+#[cfg(test)]
+mod version_cli_tests;
 
 use crate::config;
 use crate::errors::Error;

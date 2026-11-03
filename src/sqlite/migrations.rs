@@ -190,6 +190,17 @@ fn total_migrations() -> i32 {
     migrations().len() as i32
 }
 
+/// The schema version this binary supports — the `PRAGMA user_version` ceiling
+/// `run_migrations` refuses anything above. Test-only: the sole consumer is the
+/// CLI fixture in `commands::version_cli_tests`, which raises a database's
+/// `user_version` to `ceiling() + 1` so a test can pin that `vipune version`
+/// still prints while `Database::open` on the same file fails. Production code
+/// reads the value only through `run_migrations`, so it stays private.
+#[cfg(test)]
+pub(crate) fn ceiling() -> i32 {
+    total_migrations()
+}
+
 /// Run pending migrations on every database open.
 ///
 /// # Migration Process
