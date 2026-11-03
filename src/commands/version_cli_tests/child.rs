@@ -3,8 +3,8 @@
 //!
 //! Split from the assertions file so each stays under the repo's 500-line cap:
 //! this one owns the child-process harness (`run_child`, the binary locator,
-//! the env neutralisation) and the two fixtures the AC tests need — the
-//! unwritable database parent and the future-schema database.
+//! the env neutralisation) and the fixtures the AC tests need — the unwritable
+//! database parent and the future-schema database.
 
 use crate::commands::output::ErrorResponse;
 use crate::config::tests_utils::CONFIG_ENV_VARS;
@@ -14,17 +14,19 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::OnceLock;
 
-/// The knobs besides the config list that must not reach a child: the two
-/// `project.rs::detect_project` reads (outside `CONFIG_ENV_VARS`), plus `HOME`
-/// and `XDG_CONFIG_HOME`, which `Config::load()` resolves through
-/// `dirs::config_dir()` to find `vipune/config.toml`; `HF_HOME`, which the
-/// embedding engine's cache-dir resolver reads directly, together with the two
-/// HuggingFace credential knobs the embedding pipeline can pick up from the
-/// developer's shell; and `VIPUNE_PROMOTION_THRESHOLD`, which
-/// `commands/promote.rs` reads (and which is already in `CONFIG_ENV_VARS`).
-/// Removing these by default is what keeps a child from silently reading the
-/// developer's own config file or credentials; a test that wants a config file
-/// sets them explicitly.
+/// The knobs besides `CONFIG_ENV_VARS` that must not reach a child: the two
+/// `project.rs::detect_project` reads, the two knobs `dirs::config_dir()`
+/// resolves `vipune/config.toml` through, and the HuggingFace knobs.
+///
+/// Grouping rule: a knob is here when a child would resolve it against the
+/// *developer's* home rather than against the temp paths the test sets, so the
+/// child silently reads real config or credentials; a test that wants a config
+/// file sets the knob explicitly.
+///
+/// The `HF_*` trio is defensive. hf-hub 0.5.0 takes its token from the
+/// `$HF_HOME/token` file, not from `HF_TOKEN`/`HF_HUB_TOKEN`, so today those two
+/// reach nothing — they are removed so a hub client that does read them cannot
+/// leak the developer's credentials into a child.
 const INHERITED_ENV_VARS_EXCLUDED: &[&str] = &[
     "VIPUNE_PROJECT",
     "VIPUNE_DEBUG",
@@ -185,16 +187,16 @@ impl BlockedParent {
         self.dir.path()
     }
 
-    /// Build the fixture, or `None` when the write bit turned out not to be
-    /// enforced — for the current user (root bypasses it) or by the filesystem
-    /// (NFS exports, some containers). The caller then skips its unusable-path
-    /// assertion rather than passing vacuously on a premise that does not hold;
-    /// the probe is what keeps the `version` assertions from becoming "the
-    /// prologue succeeded because the prologue was never actually broken".
+    /// `Some(_)`: `create_dir` inside the `0o500` parent was refused, so
+    /// `ensure_directories`' `create_dir_all` would be refused too.
+    ///
+    /// `None`: the write bit is not enforced for this uid (root bypasses it) or
+    /// by the filesystem (NFS exports, some containers), so the caller skips its
+    /// unusable-path assertion with a printed line rather than passing vacuously
+    /// on a premise that does not hold.
     ///
     /// One probe suffices: `ensure_directories`' `create_dir_all` is the step
-    /// that trips first, and a `File::create` probe would test the same write
-    /// bit on the same directory.
+    /// that trips first, so the probe checks exactly that call.
     ///
     /// A chmod that fails for a *different* reason (immutable attribute,
     /// read-only mount) is a hard failure with the path and errno named, not a
@@ -238,9 +240,9 @@ impl Drop for BlockedParent {
 }
 
 /// Build the unusable-path fixture for a test, or `None` when this host cannot
-/// enforce the write bit — root, or some NFS/container mounts — in which case
-/// the caller skips rather than passes vacuously, and the reason is printed so
-/// a reviewer can tell the skip from a pass.
+/// enforce the write bit (see [`BlockedParent::new`]), in which case the caller
+/// skips rather than passes vacuously, and the reason is printed so a reviewer
+/// can tell the skip from a pass.
 pub(crate) fn unwritable_db_path_fixture(ac: &str) -> Option<BlockedParent> {
     let Some(blocked) = BlockedParent::new() else {
         eprintln!(
