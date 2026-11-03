@@ -615,38 +615,32 @@ mod tests {
 
     /// The `execute` half of the issue #330 dispatch contract: a `Version`
     /// command handed straight to `execute` panics at the `unreachable!()` arm
-    /// rather than running a handler.
+    /// with that arm's own payload rather than running a handler.
     ///
     /// The subprocess suite cannot cover this: a child sees only its own exit
     /// code and streams, so it cannot tell which arm produced them. Swapping the
     /// arm for a real `handle_version(json)` call leaves every subprocess
     /// assertion green while making `execute` a second, post-prologue dispatch
-    /// site — the arrangement the bug was.
+    /// site — the arrangement the bug was. `should_panic(expected = …)` pins the
+    /// payload as well as the panic, so the arm cannot be replaced by some other
+    /// panic inside `execute` and still pass.
     ///
     /// The store is built over a real temp database because `execute` takes
     /// `&mut MemoryStore`; the arm under test runs before anything reads it.
     #[test]
+    #[should_panic(expected = "Version is handled before execute")]
     fn version_command_panics_in_execute() {
         let dir = tempfile::TempDir::new().expect("temp dir");
         let db_path = dir.path().join("version-execute.db");
         let mut store =
             MemoryStore::new(&db_path, "m", config::Config::default()).expect("open store");
 
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = execute(
-                &Commands::Version,
-                &mut store,
-                "version-execute-test".to_string(),
-                &config::Config::default(),
-                false,
-            );
-        }))
-        .is_err();
-        assert!(
-            panicked,
-            "`execute` must never dispatch `Commands::Version` — `run()` short-circuits it \
-             above the config/database boundary (issue #330); if this arm became reachable the \
-             diagnostic would run after Config::load()/ensure_directories()/MemoryStore::new()"
+        let _ = execute(
+            &Commands::Version,
+            &mut store,
+            "version-execute-test".to_string(),
+            &config::Config::default(),
+            false,
         );
     }
 

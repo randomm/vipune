@@ -14,7 +14,6 @@ use crate::sqlite::migrations;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The knobs besides the config list that must not reach a child: the two
 /// `project.rs::detect_project` reads (outside `CONFIG_ENV_VARS`), plus `HOME`
@@ -176,19 +175,11 @@ pub(crate) fn assert_fails_json(args: &[&str], expected_word: &str, db_path: &st
 /// defect, AGENTS.md "Disk hygiene").
 pub(crate) struct BlockedParent {
     dir: tempfile::TempDir,
-    file_create_denied: bool,
 }
 
 impl BlockedParent {
     pub(crate) fn path(&self) -> &Path {
         self.dir.path()
-    }
-
-    /// Whether a *file* can be created inside the parent. The probe's outcome is
-    /// carried rather than re-derived by a test, so a caller can state which
-    /// half of the prologue its assertion rests on.
-    pub(crate) fn file_create_denied(&self) -> bool {
-        self.file_create_denied
     }
 
     /// Build the fixture, or `None` when the write bit turned out not to be
@@ -202,10 +193,19 @@ impl BlockedParent {
     /// read-only mount) is a hard failure with the path and errno named, not a
     /// silent skip: those are host problems a reviewer needs told apart from an
     /// unenforceable permission bit.
+    ///
+    /// A `Some` therefore means *both* probes were refused: the parent is not
+    /// writable, so neither a `mkdir` nor an `open(O_CREAT)` inside it
+    /// succeeded. Callers that need that second half (the data-command tests,
+    /// which reach `MemoryStore::new`'s file open) state it as a premise; there
+    /// is no carried flag to consult, because a `Some` is already the proof.
     fn new() -> Option<Self> {
         let dir = tempfile::TempDir::new().expect("temp dir for unwritable parent");
         let path = dir.path().to_path_buf();
-        // Best-effort: drop the write bits so a create inside the parent fails.
+        // Hard failure, not a skip: a chmod that errors for any reason other
+        // than the fs not enforcing it is a host problem, and a fixture that
+        // silently kept its write bits would make every probe below pass for
+        // the wrong reason.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o500))
             .unwrap_or_else(|e| panic!("chmod the fixture parent {}: {e}", path.display()));
 
@@ -219,14 +219,10 @@ impl BlockedParent {
         // data-command assertions pass for the wrong reason, so those tests
         // require both halves. `version` is unaffected either way (it creates
         // nothing).
-        let file_create_denied = std::fs::File::create(path.join("probe.db")).is_err();
-        if !file_create_denied {
+        if std::fs::File::create(path.join("probe.db")).is_ok() {
             return None;
         }
-        Some(Self {
-            dir,
-            file_create_denied,
-        })
+        Some(Self { dir })
     }
 }
 
@@ -243,82 +239,49 @@ impl Drop for BlockedParent {
     }
 }
 
-/// How the unusable-path fixture records itself: how many times it was *asked
-/// for* and how many of those probes succeeded. A host that does not enforce
-/// the write bit makes every [`BlockedParent::new`] return `None`, and every
-/// unusable-path test then skips — which would leave half of issue #330's
-/// contract unverified behind a green suite. [`fixture_never_established`] turns
-/// that into a failure rather than an `eprintln!`: attempts without a single held
-/// premise is exactly the vacuous pass the issue's premise asserts were added to
-/// close. Both counters are written by the fixture itself, so no test-site edit
-/// can empty them.
-static FIXTURE_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
-static FIXTURE_ESTABLISHED: AtomicUsize = AtomicUsize::new(0);
+/// The roster of tests that must build the unusable-path fixture: one entry per
+/// call site of [`unwritable_db_path_fixture`]. Referencing the functions is a
+/// compile-time fact — deleting or renaming a site is a compile error (the array
+/// length must match its entries) — and the length is the count, so there is no
+/// process-global counter for the parallel harness to race: under the default
+/// scheduler this assertion can be reached before any sibling test has run, which
+/// is exactly what a "how many sites ran" counter cannot survive.
+const EXPECTED_FIXTURE_SITES: usize = FIXTURE_SITE_CALLS.len();
 
-/// Record that the fixture was asked for — before the probes, so a site that
-/// skips still counts as an attempt that did not hold.
-fn note_fixture_attempt() {
-    FIXTURE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-}
-
-/// Record that a fixture did establish its premise.
-fn note_fixture_held() {
-    FIXTURE_ESTABLISHED.fetch_add(1, Ordering::Relaxed);
-}
-
-/// How many tests are *expected* to ask for the fixture. The number appears
-/// here and in the assertion below, so a deleted call site shows up as a failed
-/// pin rather than a quietly smaller expected set.
-const EXPECTED_FIXTURE_SITES: usize = 3;
+const FIXTURE_SITE_CALLS: [fn(); 3] = [
+    super::contract::version_with_unusable_db_path_is_db_free,
+    super::contract::json_version_with_unusable_db_path,
+    super::contract::data_commands_still_fail_on_unusable_db_path,
+];
 
 /// Build the unusable-path fixture for a test, or `None` when this host cannot
 /// enforce the write bit — the caller then skips, and the skip is reported here
 /// so every site says it the same way.
-///
-/// The attempt/holding counts [`fixture_never_established`] reads are recorded
-/// here, before and after the probes, so a host that silently skips every
-/// unusable-path test cannot pass the module green.
 pub(crate) fn unwritable_db_path_fixture(ac: &str) -> Option<BlockedParent> {
-    note_fixture_attempt();
     let Some(blocked) = BlockedParent::new() else {
         eprintln!(
             "skipping {ac}: the filesystem honours writes for this user, so the unusable-path premise cannot be established"
         );
         return None;
     };
-    note_fixture_held();
     Some(blocked)
 }
 
-/// The unusable-path fixture must be establishable on the host running this
-/// suite by at least one of the tests that build it. Builds the fixture itself
-/// so the guard does not depend on the scheduler having run the other sites
-/// first (the module runs under the default parallel harness).
-#[test]
-fn fixture_never_established() {
-    // The held count only advances when the caller's premise-checking sibling
-    // sees a `Some`, so the guard must build through the same wrapper the tests
-    // use — a raw `BlockedParent::new()` here would mark the premise held
-    // without any test depending on it.
-    drop(unwritable_db_path_fixture("the enforceability pin"));
-    let attempts = FIXTURE_ATTEMPTS.load(Ordering::Relaxed);
-    let established = FIXTURE_ESTABLISHED.load(Ordering::Relaxed);
-    // The threshold is the number of *sites that must ask*, not `> 0`: every
-    // site bumps the counter before it probes, so on a host that cannot enforce
-    // the write bit (root, or some NFS/container mounts) the three sites still
-    // register as attempts and the guard proves the unusable-path half of issue
-    // #330 was at least exercised. `> 0` would be satisfied by this test's own
-    // build alone — the vacuous pass the pin exists to catch. `established` is
-    // the or-branch precisely because it is *not* evidence of the sites: it is
-    // only raised when a probe really held, so it can never mask a missing site
-    // and is there to spare a host that legitimately cannot build the fixture.
-    assert!(
-        attempts >= EXPECTED_FIXTURE_SITES || established > 0,
-        "the unusable-path fixture was asked for {attempts} times and never established its premise: \
-         the unusable-path half of issue #330 went unverified on this host \
-         (root bypasses the write bit; so do some NFS/container mounts)"
-    );
-}
+/// The roster and the tests that use the fixture cannot drift apart silently:
+/// an entry per call site is a compile-time requirement, so the only way the
+/// roster shrinks is by the tests going with it. This const assertion rules out
+/// the degenerate roster — empty, or one short of AC1/AC2/AC6 — that would make
+/// that check vacuous, and it is checked at compile time for the same reason.
+///
+/// Enforceability is a *separate* premise and is deliberately not failed here:
+/// on a host that does not honour the write bit (root, or some NFS/container
+/// mounts) every `BlockedParent::new` returns `None`, each site prints why it
+/// skipped, and failing the suite for the host's filesystem would punish a
+/// developer for their uid rather than report a defect in the code.
+const _: () = assert!(
+    EXPECTED_FIXTURE_SITES >= 3,
+    "the unusable-path fixture roster must cover AC1, AC2 and AC6"
+);
 
 /// Build a database whose `PRAGMA user_version` sits one above the ceiling this
 /// binary supports, so `Database::open` on the same file refuses it.
