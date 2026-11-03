@@ -123,8 +123,11 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
     // and `MemoryStore::new()` (which opens the file and runs migrations) all
     // have side effects and all fail on exactly those inputs, so the dispatch
     // is short-circuited above them — the same pattern the hook events and the
-    // MCP early-returns already use. Ungated on purpose: unlike
-    // `Commands::Mcp`, `Commands::Version` exists in both feature lanes.
+    // MCP early-returns already use. This is the one dispatch site for
+    // `version` (the `execute` arm is an `unreachable!`, mirroring `Mcp`) and
+    // the one place the ordering is enforced, so the rationale lives here. Ungated
+    // on purpose: unlike `Commands::Mcp`, `Commands::Version` exists in both
+    // feature lanes.
     if matches!(cli.command, Commands::Version) {
         return handle_version(cli.json);
     }
@@ -318,10 +321,28 @@ mod tests {
 
     #[test]
     fn test_cli_parse_version() {
+        // Type-level routing only: `command` is a non-optional `Commands`, so
+        // this pins that the subcommand string `version` yields the very variant
+        // `run()`'s short-circuit guard matches (issue #330). clap's own
+        // `--version` flow is a separate path — `Cli` declares no
+        // `#[command(version)]` attribute, so `vipune --version` is a parse
+        // error today, which is what the next test pins.
         let cli = Cli::parse_from(["vipune", "version"]);
         assert!(
             matches!(cli.command, Commands::Version),
             "`vipune version` must parse to Commands::Version — the variant the run() short-circuit dispatches (issue #330)"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_dashdash_version_is_clap_builtin() {
+        // The string form above is the only one that reaches `Commands::Version`;
+        // `--version` has no clap builtin on this `Cli`, so it never becomes a
+        // command and can never take the short-circuit path.
+        let result = Cli::try_parse_from(["vipune", "--version"]);
+        assert!(
+            result.is_err(),
+            "`vipune --version` is not a `Commands` variant (no `#[command(version)]` on `Cli`)"
         );
     }
 

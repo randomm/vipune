@@ -29,10 +29,11 @@ pub use hook_run::handle_hook_event;
 #[cfg(test)]
 pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search};
 
-/// The `version` handler, re-exported for the `run()` short-circuit (the CLI
-/// entry point dispatches `version` before the config/database boundary, so it
-/// cannot reach it through `execute`). Also test-visible for the parse test that
-/// pins `Commands::Version` reaching this handler.
+/// The `version` handler — dispatched by `run()` above the config/database
+/// boundary (see the comment there for why); `pub` on the `commands` surface so
+/// this package's binary target can reach it, `#[doc(hidden)]` beside
+/// `handle_hook_event` because that surface is not library API.
+#[doc(hidden)]
 pub use handlers::handle_version;
 
 #[cfg(test)]
@@ -592,7 +593,10 @@ pub fn execute(
                 hook_run::handle_hook_event(config, json, HookEvent::PreCompact)
             }
         },
-        Commands::Version => handlers::handle_version(json),
+        // Dispatched by `run()` above the config/database boundary, so it never
+        // reaches `execute` — the `Mcp` arm above is the precedent for a
+        // short-circuited command (issue #330).
+        Commands::Version => unreachable!("Version is handled before execute"),
         #[cfg(feature = "mcp")]
         Commands::Mcp => unreachable!("Mcp is handled before execute"),
     }

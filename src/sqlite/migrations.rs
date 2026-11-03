@@ -191,14 +191,39 @@ fn total_migrations() -> i32 {
 }
 
 /// The schema version this binary supports — the `PRAGMA user_version` ceiling
-/// `run_migrations` refuses anything above. Test-only: the sole consumer is the
-/// CLI fixture in `commands::version_cli_tests`, which raises a database's
-/// `user_version` to `ceiling() + 1` so a test can pin that `vipune version`
-/// still prints while `Database::open` on the same file fails. Production code
-/// reads the value only through `run_migrations`, so it stays private.
+/// `run_migrations` refuses anything above, and the value the tests below assert
+/// against. One name for one bound: the production gate at
+/// [`run_migrations`] and the fixture in `commands::version_cli_tests` (which
+/// raises a database's `user_version` to `ceiling().next()` to pin that
+/// `vipune version` still prints while `Database::open` on the same file fails)
+/// both read the same list length, so they cannot drift in meaning.
 #[cfg(test)]
-pub(crate) fn ceiling() -> i32 {
-    total_migrations()
+pub(crate) fn ceiling() -> SchemaVersion {
+    SchemaVersion(total_migrations())
+}
+
+/// A `PRAGMA user_version` value. A newtype rather than a bare `i32` so a magic
+/// literal cannot be handed to `pragma_update` where a schema version is meant
+/// — every write of the pragma goes through a value derived from [`ceiling`].
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub(crate) struct SchemaVersion(i32);
+
+#[cfg(test)]
+impl SchemaVersion {
+    /// The version one above this one — the fixture value that `run_migrations`
+    /// refuses. `saturating_add` keeps the value in range rather than wrapping
+    /// to a negative version, which the gate above would read as migrated.
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.saturating_add(1))
+    }
+}
+
+#[cfg(test)]
+impl rusqlite::ToSql for SchemaVersion {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        self.0.to_sql()
+    }
 }
 
 /// Run pending migrations on every database open.
@@ -343,6 +368,24 @@ mod tests {
         assert!(err.contains("999"));
         assert!(err.contains("Upgrade vipune"));
         assert_eq!(version_of(&conn), 999);
+    }
+
+    // Both sides of the boundary AC3's fixture rests on, pinned where the
+    // contract lives: `run_migrations` accepts exactly `ceiling()` and
+    // refuses `ceiling().next()`, so the fixture in
+    // `commands::version_cli_tests` describes a real boundary rather than an
+    // arbitrary number.
+    #[test]
+    fn test_ceiling_is_the_last_accepted_user_version() {
+        let conn = create_test_db();
+        init_schema(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+        assert_eq!(version_of(&conn), ceiling().0);
+
+        // The same file, one above the ceiling: now refused.
+        conn.pragma_update(None, "user_version", ceiling().next())
+            .unwrap();
+        assert!(run_migrations(&conn).is_err());
     }
 
     // --- Migration 5: importance column ---

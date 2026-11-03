@@ -389,13 +389,11 @@ pub(crate) fn handle_update(
 }
 
 pub fn handle_version(json: bool) -> Result<ExitCode, Error> {
+    let response = version_output();
     if json {
-        print_json(&serde_json::json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "name": env!("CARGO_PKG_NAME")
-        }));
+        print_json(&response);
     } else {
-        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        println!("{} {}", response.name, response.version);
     }
     Ok(ExitCode::SUCCESS)
 }

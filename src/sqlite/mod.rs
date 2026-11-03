@@ -431,6 +431,28 @@ impl Database {
         &self.conn
     }
 
+    /// Set `PRAGMA user_version` — **test-only**.
+    ///
+    /// The only writer of the schema version outside `run_migrations` itself,
+    /// so a fixture that needs a database claiming a different version goes
+    /// through the layer that owns the migration contract instead of reaching
+    /// through [`Self::conn`] (which is write-capable and bypasses this layer's
+    /// error mapping). Takes the storage layer's own `Error`, and the newtype
+    /// form of the version so a magic literal cannot be written as a schema
+    /// version.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the pragma cannot be written.
+    #[cfg(test)]
+    pub(crate) fn set_user_version_for_test(
+        &mut self,
+        version: migrations::SchemaVersion,
+    ) -> Result<()> {
+        self.conn.pragma_update(None, "user_version", version)?;
+        Ok(())
+    }
+
     /// Open a write transaction on the connection.
     ///
     /// `&mut self` because rusqlite's `Connection::transaction` takes `&mut

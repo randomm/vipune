@@ -1,6 +1,6 @@
 //! JSON response types and formatting for CLI output.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Response for successful memory addition.
 #[derive(Serialize)]
@@ -114,8 +114,32 @@ pub struct UpdateResponse {
     pub id: String,
 }
 
+/// `vipune version` — the one output the CLI contract tests assert against.
+///
+/// Public so `commands::version_cli_tests` builds its expectation from the
+/// handler's own rendering rather than re-spelling the formatter (which would
+/// make a format change a fixture edit instead of a test failure). The output
+/// itself is part of the issue #330 contract and must not change.
+#[derive(Serialize, serde::Deserialize)]
+pub struct VersionResponse {
+    /// Crate version (`CARGO_PKG_VERSION`).
+    pub version: String,
+    /// Crate name (`CARGO_PKG_NAME`).
+    pub name: String,
+}
+
+/// The `version` handler's rendering, in one place: the human line, the JSON
+/// body, and the pair of constants both are built from. The CLI contract tests
+/// derive their expectations from these instead of duplicating the format.
+pub fn version_output() -> VersionResponse {
+    VersionResponse {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        name: env!("CARGO_PKG_NAME").to_string(),
+    }
+}
+
 /// Response for error cases.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct ErrorResponse {
     /// Error message describing what went wrong.
     pub error: String,
