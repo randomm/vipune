@@ -303,10 +303,15 @@ fn fixture_never_established() {
     drop(unwritable_db_path_fixture("the enforceability pin"));
     let attempts = FIXTURE_ATTEMPTS.load(Ordering::Relaxed);
     let established = FIXTURE_ESTABLISHED.load(Ordering::Relaxed);
-    // Compared against the number of *sites that must ask*, not `> 0`: on a host
-    // where the premise cannot be established these tests all skip and this
-    // guard's own build is the only attempt recorded, so a `> 0` threshold would
-    // pass vacuously — the exact failure mode this pin exists to catch. The `+ 1`
+    // The threshold is the number of *sites that must ask*, not `> 0`: every
+    // site bumps the counter before it probes, so on a host that cannot enforce
+    // the write bit (root, or some NFS/container mounts) the three sites still
+    // register as attempts and the guard proves the unusable-path half of issue
+    // #330 was at least exercised. `> 0` would be satisfied by this test's own
+    // build alone — the vacuous pass the pin exists to catch. `established` is
+    // the or-branch precisely because it is *not* evidence of the sites: it is
+    // only raised when a probe really held, so it can never mask a missing site
+    // and is there to spare a host that legitimately cannot build the fixture.
     assert!(
         attempts >= EXPECTED_FIXTURE_SITES || established > 0,
         "the unusable-path fixture was asked for {attempts} times and never established its premise: \

@@ -130,9 +130,11 @@ pub struct VersionResponse {
     pub name: String,
 }
 
-/// The `version` handler's rendering, in one place: the human line, the JSON
-/// body, and the pair of constants both are built from. The CLI contract tests
-/// derive their expectations from these instead of duplicating the format.
+/// The `version` handler's rendering, in one place. `handlers::handle_version`
+/// builds both the `"{name} {version}"` human line and the JSON body from this
+/// type, and the CLI contract tests build their expectations from it too, so
+/// neither side re-spells the format: a format change then fails a test instead
+/// of quietly invalidating a fixture.
 pub fn version_output() -> VersionResponse {
     VersionResponse {
         version: env!("CARGO_PKG_VERSION").to_string(),
