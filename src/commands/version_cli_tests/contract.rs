@@ -12,7 +12,7 @@ use crate::sqlite::Database;
 /// exact `"{name} {version}\n"` on stdout, nothing on stderr, and creates
 /// neither the parent directory nor the database file.
 #[test]
-pub(crate) fn version_with_unusable_db_path_is_db_free() {
+fn version_with_unusable_db_path_is_db_free() {
     let Some(blocked) = unwritable_db_path_fixture("AC1") else {
         return;
     };
@@ -68,15 +68,10 @@ fn version_does_not_create_a_writable_db_path() {
 /// output the CLI *prints*, not a DTO the CLI consumes, so there is no type to
 /// decode it through).
 #[test]
-pub(crate) fn json_version_with_unusable_db_path() {
+fn json_version_with_unusable_db_path() {
     let Some(blocked) = unwritable_db_path_fixture("AC2") else {
         return;
     };
-    // The premise, stated rather than re-checked: `Some(blocked)` already proves
-    // the parent refuses `mkdir` *and* `open(O_CREAT)` — `BlockedParent::new`
-    // returns `None` if either probe succeeded. `MemoryStore::new`'s side of the
-    // prologue (the sqlite file itself) is the half the `nested/` directory alone
-    // only breaks for `ensure_directories`.
     let db_path = blocked.path().join("nested").join("x.db");
     let db_path_str = db_path.to_string_lossy().to_string();
 
@@ -211,16 +206,10 @@ fn help_still_exits_zero_with_help_on_stdout() {
 /// database path — exit 1, the existing `Configuration error` text on stderr,
 /// and the JSON error on stdout under `--json`.
 #[test]
-pub(crate) fn data_commands_still_fail_on_unusable_db_path() {
+fn data_commands_still_fail_on_unusable_db_path() {
     let Some(blocked) = unwritable_db_path_fixture("AC6") else {
         return;
     };
-    // The premise, stated rather than re-checked: `Some(blocked)` already proves
-    // the parent refuses both `mkdir` and `open(O_CREAT)` (see
-    // `BlockedParent::new`), which is what these assertions rest on —
-    // `list`/`search`/`add` fail here through `ensure_directories` (the
-    // `nested/` create) and, if that were somehow allowed, through
-    // `MemoryStore::new` opening the file.
     let db_path = blocked.path().join("nested").join("x.db");
     let db_path_str = db_path.to_string_lossy().to_string();
 

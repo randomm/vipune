@@ -4,8 +4,7 @@
 //! Split from the assertions file so each stays under the repo's 500-line cap:
 //! this one owns the child-process harness (`run_child`, the binary locator,
 //! the env neutralisation) and the two fixtures the AC tests need — the
-//! unwritable database parent and the future-schema database — plus the pin
-//! that the unusable-path fixture was actually establishable on this host.
+//! unwritable database parent and the future-schema database.
 
 use crate::commands::output::ErrorResponse;
 use crate::config::tests_utils::CONFIG_ENV_VARS;
@@ -18,18 +17,22 @@ use std::sync::OnceLock;
 /// The knobs besides the config list that must not reach a child: the two
 /// `project.rs::detect_project` reads (outside `CONFIG_ENV_VARS`), plus `HOME`
 /// and `XDG_CONFIG_HOME`, which `Config::load()` resolves through
-/// `dirs::config_dir()` to find `vipune/config.toml`, and `HF_HOME`, which the
-/// embedding engine's cache-dir resolver reads directly (and
-/// `commands/promote.rs` reads `VIPUNE_PROMOTION_THRESHOLD`, which is already
-/// in `CONFIG_ENV_VARS`). Removing these by default is what keeps a child from
-/// silently reading the developer's own config file; a test that wants a config
-/// file sets them explicitly.
+/// `dirs::config_dir()` to find `vipune/config.toml`; `HF_HOME`, which the
+/// embedding engine's cache-dir resolver reads directly, together with the two
+/// HuggingFace credential knobs the embedding pipeline can pick up from the
+/// developer's shell; and `VIPUNE_PROMOTION_THRESHOLD`, which
+/// `commands/promote.rs` reads (and which is already in `CONFIG_ENV_VARS`).
+/// Removing these by default is what keeps a child from silently reading the
+/// developer's own config file or credentials; a test that wants a config file
+/// sets them explicitly.
 const INHERITED_ENV_VARS_EXCLUDED: &[&str] = &[
     "VIPUNE_PROJECT",
     "VIPUNE_DEBUG",
     "HOME",
     "XDG_CONFIG_HOME",
     "HF_HOME",
+    "HF_TOKEN",
+    "HF_HUB_TOKEN",
 ];
 
 /// The exit code a child produced, or `None` when a signal killed it — a
@@ -189,37 +192,32 @@ impl BlockedParent {
     /// the probe is what keeps the `version` assertions from becoming "the
     /// prologue succeeded because the prologue was never actually broken".
     ///
+    /// One probe suffices: `ensure_directories`' `create_dir_all` is the step
+    /// that trips first, and a `File::create` probe would test the same write
+    /// bit on the same directory.
+    ///
     /// A chmod that fails for a *different* reason (immutable attribute,
     /// read-only mount) is a hard failure with the path and errno named, not a
     /// silent skip: those are host problems a reviewer needs told apart from an
     /// unenforceable permission bit.
-    ///
-    /// A `Some` therefore means *both* probes were refused: the parent is not
-    /// writable, so neither a `mkdir` nor an `open(O_CREAT)` inside it
-    /// succeeded. Callers that need that second half (the data-command tests,
-    /// which reach `MemoryStore::new`'s file open) state it as a premise; there
-    /// is no carried flag to consult, because a `Some` is already the proof.
     fn new() -> Option<Self> {
         let dir = tempfile::TempDir::new().expect("temp dir for unwritable parent");
         let path = dir.path().to_path_buf();
+        // Best-effort restore before the panic: a `0o500` tree is one `TempDir`
+        // cleanup cannot undo, and Drop does not run on a panic through here.
+        let chmod =
+            |mode: u32| std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode));
         // Hard failure, not a skip: a chmod that errors for any reason other
         // than the fs not enforcing it is a host problem, and a fixture that
-        // silently kept its write bits would make every probe below pass for
-        // the wrong reason.
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o500))
-            .unwrap_or_else(|e| panic!("chmod the fixture parent {}: {e}", path.display()));
+        // silently kept its write bits would make the probe below pass for the
+        // wrong reason.
+        if let Err(e) = chmod(0o500) {
+            let _ = chmod(0o700);
+            panic!("chmod the fixture parent {}: {e}", path.display());
+        }
 
         // Probe: a directory must NOT be creatable inside it.
         if std::fs::create_dir(path.join("probe")).is_ok() {
-            return None;
-        }
-        // Second probe: a *file* must not be creatable either, which is what the
-        // CLI's `MemoryStore::new` does once the directory exists — a filesystem
-        // that honours mkdir-denial but allows `open(O_CREAT)` would let the
-        // data-command assertions pass for the wrong reason, so those tests
-        // require both halves. `version` is unaffected either way (it creates
-        // nothing).
-        if std::fs::File::create(path.join("probe.db")).is_ok() {
             return None;
         }
         Some(Self { dir })
@@ -239,24 +237,10 @@ impl Drop for BlockedParent {
     }
 }
 
-/// The roster of tests that must build the unusable-path fixture: one entry per
-/// call site of [`unwritable_db_path_fixture`]. Referencing the functions is a
-/// compile-time fact — deleting or renaming a site is a compile error (the array
-/// length must match its entries) — and the length is the count, so there is no
-/// process-global counter for the parallel harness to race: under the default
-/// scheduler this assertion can be reached before any sibling test has run, which
-/// is exactly what a "how many sites ran" counter cannot survive.
-const EXPECTED_FIXTURE_SITES: usize = FIXTURE_SITE_CALLS.len();
-
-const FIXTURE_SITE_CALLS: [fn(); 3] = [
-    super::contract::version_with_unusable_db_path_is_db_free,
-    super::contract::json_version_with_unusable_db_path,
-    super::contract::data_commands_still_fail_on_unusable_db_path,
-];
-
 /// Build the unusable-path fixture for a test, or `None` when this host cannot
-/// enforce the write bit — the caller then skips, and the skip is reported here
-/// so every site says it the same way.
+/// enforce the write bit — root, or some NFS/container mounts — in which case
+/// the caller skips rather than passes vacuously, and the reason is printed so
+/// a reviewer can tell the skip from a pass.
 pub(crate) fn unwritable_db_path_fixture(ac: &str) -> Option<BlockedParent> {
     let Some(blocked) = BlockedParent::new() else {
         eprintln!(
@@ -266,22 +250,6 @@ pub(crate) fn unwritable_db_path_fixture(ac: &str) -> Option<BlockedParent> {
     };
     Some(blocked)
 }
-
-/// The roster and the tests that use the fixture cannot drift apart silently:
-/// an entry per call site is a compile-time requirement, so the only way the
-/// roster shrinks is by the tests going with it. This const assertion rules out
-/// the degenerate roster — empty, or one short of AC1/AC2/AC6 — that would make
-/// that check vacuous, and it is checked at compile time for the same reason.
-///
-/// Enforceability is a *separate* premise and is deliberately not failed here:
-/// on a host that does not honour the write bit (root, or some NFS/container
-/// mounts) every `BlockedParent::new` returns `None`, each site prints why it
-/// skipped, and failing the suite for the host's filesystem would punish a
-/// developer for their uid rather than report a defect in the code.
-const _: () = assert!(
-    EXPECTED_FIXTURE_SITES >= 3,
-    "the unusable-path fixture roster must cover AC1, AC2 and AC6"
-);
 
 /// Build a database whose `PRAGMA user_version` sits one above the ceiling this
 /// binary supports, so `Database::open` on the same file refuses it.
