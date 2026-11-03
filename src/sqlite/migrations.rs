@@ -191,39 +191,28 @@ fn total_migrations() -> i32 {
 }
 
 /// The schema version this binary supports — the `PRAGMA user_version` ceiling
-/// `run_migrations` refuses anything above, and the value the tests below assert
-/// against. One name for one bound: the production gate at
-/// [`run_migrations`] and the fixture in `commands::version_cli_tests` (which
-/// raises a database's `user_version` to `ceiling().next()` to pin that
-/// `vipune version` still prints while `Database::open` on the same file fails)
-/// both read the same list length, so they cannot drift in meaning.
+/// `run_migrations` refuses anything above, as a bare `i32`. One name for the
+/// ceiling itself: the production gate at [`run_migrations`] and the AC3 fixture
+/// in `commands::version_cli_tests` (which raises a database's `user_version`
+/// one above it to pin that `vipune version` still prints while `Database::open`
+/// on the same file fails) both read the same list length, so they cannot drift
+/// in meaning. It is *not* the only version a test writes: the migration fixtures
+/// in this file and in `sqlite/fts_migration_tests.rs` pin `user_version` to
+/// named historical versions (3, 4, 5, 6) directly, and
+/// `sqlite::Database::set_user_version_for_test` writes the same pragma through
+/// the storage layer.
 #[cfg(test)]
-pub(crate) fn ceiling() -> SchemaVersion {
-    SchemaVersion(total_migrations())
+pub(crate) fn ceiling() -> i32 {
+    total_migrations()
 }
 
-/// A `PRAGMA user_version` value. A newtype rather than a bare `i32` so a magic
-/// literal cannot be handed to `pragma_update` where a schema version is meant
-/// — every write of the pragma goes through a value derived from [`ceiling`].
+/// The fixture value: one above [`ceiling`], i.e. the `PRAGMA user_version` that
+/// [`run_migrations`] refuses. Next to `ceiling` so the `+ 1` and its saturation
+/// (a wrap to a negative version would read as "already migrated") are stated
+/// once rather than at each call site.
 #[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub(crate) struct SchemaVersion(i32);
-
-#[cfg(test)]
-impl SchemaVersion {
-    /// The version one above this one — the fixture value that `run_migrations`
-    /// refuses. `saturating_add` keeps the value in range rather than wrapping
-    /// to a negative version, which the gate above would read as migrated.
-    pub(crate) fn next(self) -> Self {
-        Self(self.0.saturating_add(1))
-    }
-}
-
-#[cfg(test)]
-impl rusqlite::ToSql for SchemaVersion {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        self.0.to_sql()
-    }
+pub(crate) fn ceiling_plus_one() -> i32 {
+    ceiling().saturating_add(1)
 }
 
 /// Run pending migrations on every database open.
@@ -372,7 +361,7 @@ mod tests {
 
     // Both sides of the boundary AC3's fixture rests on, pinned where the
     // contract lives: `run_migrations` accepts exactly `ceiling()` and
-    // refuses `ceiling().next()`, so the fixture in
+    // refuses `ceiling_plus_one()`, so the fixture in
     // `commands::version_cli_tests` describes a real boundary rather than an
     // arbitrary number.
     #[test]
@@ -380,10 +369,10 @@ mod tests {
         let conn = create_test_db();
         init_schema(&conn).unwrap();
         run_migrations(&conn).unwrap();
-        assert_eq!(version_of(&conn), ceiling().0);
+        assert_eq!(version_of(&conn), ceiling());
 
         // The same file, one above the ceiling: now refused.
-        conn.pragma_update(None, "user_version", ceiling().next())
+        conn.pragma_update(None, "user_version", ceiling_plus_one())
             .unwrap();
         assert!(run_migrations(&conn).is_err());
     }

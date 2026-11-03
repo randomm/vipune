@@ -116,11 +116,13 @@ pub struct UpdateResponse {
 
 /// `vipune version` — the one output the CLI contract tests assert against.
 ///
-/// Public so `commands::version_cli_tests` builds its expectation from the
-/// handler's own rendering rather than re-spelling the formatter (which would
-/// make a format change a fixture edit instead of a test failure). The output
-/// itself is part of the issue #330 contract and must not change.
-#[derive(Serialize, serde::Deserialize)]
+/// `pub` beside the other DTOs in this module (its only consumers are
+/// `commands::handlers`, which imports this module with a glob, and the
+/// crate-internal `commands::version_cli_tests`, which builds its expectation
+/// from the handler's own rendering rather than re-spelling the formatter — a
+/// format change must be a test failure, not a fixture edit). The output itself
+/// is part of the issue #330 contract and must not change.
+#[derive(Serialize)]
 pub struct VersionResponse {
     /// Crate version (`CARGO_PKG_VERSION`).
     pub version: String,

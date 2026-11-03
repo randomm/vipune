@@ -64,8 +64,9 @@ fn version_does_not_create_a_writable_db_path() {
 
 /// AC2: `vipune --json version` against an unusable path exits 0 and prints a
 /// JSON object with `version` / `name`. Byte layout is not asserted — only the
-/// parsed shape, per the criterion, decoded through the handler's own
-/// [`VersionResponse`] DTO.
+/// parsed shape, per the criterion, decoded as a `serde_json::Value` (this is
+/// output the CLI *prints*, not a DTO the CLI consumes, so there is no type to
+/// decode it through).
 #[test]
 fn json_version_with_unusable_db_path() {
     let Some(blocked) = unwritable_db_path_fixture("AC2") else {

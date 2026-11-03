@@ -32,7 +32,11 @@ pub(crate) use handlers::{SearchContext, handle_get, handle_list, handle_search}
 /// The `version` handler — dispatched by `run()` above the config/database
 /// boundary (see the comment there for why); `pub` on the `commands` surface so
 /// this package's binary target can reach it, `#[doc(hidden)]` beside
-/// `handle_hook_event` because that surface is not library API.
+/// `handle_hook_event` because that surface is not library API. The `execute`
+/// arm for it is an `unreachable!()` pinned by
+/// `version_command_panics_in_execute` below — a child process cannot tell which
+/// arm inside the library served it, so the subprocess suite in
+/// `commands::version_cli_tests` cannot pin that arm.
 #[doc(hidden)]
 pub use handlers::handle_version;
 
@@ -595,7 +599,10 @@ pub fn execute(
         },
         // Dispatched by `run()` above the config/database boundary, so it never
         // reaches `execute` — the `Mcp` arm above is the precedent for a
-        // short-circuited command (issue #330).
+        // short-circuited command (issue #330). This arm panicking is pinned by
+        // `version_command_panics_in_execute` below; the `run()` guard that keeps
+        // it unreachable is pinned by the subprocess AC1/AC2/AC3 suite in
+        // `commands::version_cli_tests`.
         Commands::Version => unreachable!("Version is handled before execute"),
         #[cfg(feature = "mcp")]
         Commands::Mcp => unreachable!("Mcp is handled before execute"),
@@ -605,6 +612,43 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `execute` half of the issue #330 dispatch contract: a `Version`
+    /// command handed straight to `execute` panics at the `unreachable!()` arm
+    /// rather than running a handler.
+    ///
+    /// The subprocess suite cannot cover this: a child sees only its own exit
+    /// code and streams, so it cannot tell which arm produced them. Swapping the
+    /// arm for a real `handle_version(json)` call leaves every subprocess
+    /// assertion green while making `execute` a second, post-prologue dispatch
+    /// site — the arrangement the bug was.
+    ///
+    /// The store is built over a real temp database because `execute` takes
+    /// `&mut MemoryStore`; the arm under test runs before anything reads it.
+    #[test]
+    fn version_command_panics_in_execute() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let db_path = dir.path().join("version-execute.db");
+        let mut store =
+            MemoryStore::new(&db_path, "m", config::Config::default()).expect("open store");
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = execute(
+                &Commands::Version,
+                &mut store,
+                "version-execute-test".to_string(),
+                &config::Config::default(),
+                false,
+            );
+        }))
+        .is_err();
+        assert!(
+            panicked,
+            "`execute` must never dispatch `Commands::Version` — `run()` short-circuits it \
+             above the config/database boundary (issue #330); if this arm became reachable the \
+             diagnostic would run after Config::load()/ensure_directories()/MemoryStore::new()"
+        );
+    }
 
     #[test]
     fn test_validate_short_text() {

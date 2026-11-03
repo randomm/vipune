@@ -320,13 +320,13 @@ fn fixture_never_established() {
 ///
 /// `create_schema` is all `IF NOT EXISTS`, so raising the pragma by hand leaves
 /// a fully migrated schema behind — the fixture is a real database that merely
-/// claims a newer version, not a corrupt file. The pragma is raised through the
-/// storage layer that owns the migration contract (a `#[cfg(test)]` method on
-/// `Database`), not through `Database::conn()`.
+/// claims a newer version, not a corrupt file. The pragma is raised through
+/// `Database::set_user_version_for_test`, the storage layer that owns the
+/// migration contract, rather than through `Database::conn()`.
 pub(crate) fn future_schema_db(dir: &tempfile::TempDir) -> std::path::PathBuf {
     let path = dir.path().join("future.db");
     let mut db = Database::open(&path).expect("open fixture database");
-    db.set_user_version_for_test(migrations::ceiling().next())
+    db.set_user_version_for_test(migrations::ceiling_plus_one())
         .expect("raise user_version");
     drop(db);
 

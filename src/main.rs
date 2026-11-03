@@ -123,11 +123,13 @@ fn run(cli: &Cli) -> Result<ExitCode, Error> {
     // and `MemoryStore::new()` (which opens the file and runs migrations) all
     // have side effects and all fail on exactly those inputs, so the dispatch
     // is short-circuited above them — the same pattern the hook events and the
-    // MCP early-returns already use. This is the one dispatch site for
-    // `version` (the `execute` arm is an `unreachable!`, mirroring `Mcp`) and
-    // the one place the ordering is enforced, so the rationale lives here. Ungated
-    // on purpose: unlike `Commands::Mcp`, `Commands::Version` exists in both
-    // feature lanes.
+    // MCP early-returns already use. This is the one dispatch site for `version`
+    // (the `execute` arm beside `Mcp`'s is an `unreachable!()`), and the one place
+    // the ordering is enforced, so the rationale lives here. Pinned by the
+    // subprocess suite in `commands::version_cli_tests`, which spawns the real
+    // binary: remove the guard and the AC1/AC2/AC3/AC4 children exit 1 with the
+    // prologue's error. Ungated on purpose: unlike `Commands::Mcp`,
+    // `Commands::Version` exists in both feature lanes.
     if matches!(cli.command, Commands::Version) {
         return handle_version(cli.json);
     }
