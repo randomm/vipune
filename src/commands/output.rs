@@ -1,6 +1,6 @@
 //! JSON response types and formatting for CLI output.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Response for successful memory addition.
 #[derive(Serialize)]
@@ -114,8 +114,36 @@ pub struct UpdateResponse {
     pub id: String,
 }
 
-/// Response for error cases.
+/// `vipune version` — the one output the CLI contract tests assert against.
+///
+/// `pub` beside the other DTOs in this module (its only consumers are
+/// `commands::handlers`, which imports this module with a glob, and the
+/// crate-internal `commands::version_cli_tests`, which builds its expectation
+/// from the handler's own rendering rather than re-spelling the formatter — a
+/// format change must be a test failure, not a fixture edit). The output itself
+/// is part of the issue #330 contract and must not change.
 #[derive(Serialize)]
+pub struct VersionResponse {
+    /// Crate version (`CARGO_PKG_VERSION`).
+    pub version: String,
+    /// Crate name (`CARGO_PKG_NAME`).
+    pub name: String,
+}
+
+/// The `version` handler's rendering, in one place. `handlers::handle_version`
+/// builds both the `"{name} {version}"` human line and the JSON body from this
+/// type, and the CLI contract tests build their expectations from it too, so
+/// neither side re-spells the format: a format change then fails a test instead
+/// of quietly invalidating a fixture.
+pub fn version_output() -> VersionResponse {
+    VersionResponse {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        name: env!("CARGO_PKG_NAME").to_string(),
+    }
+}
+
+/// Response for error cases.
+#[derive(Serialize, Deserialize)]
 pub struct ErrorResponse {
     /// Error message describing what went wrong.
     pub error: String,

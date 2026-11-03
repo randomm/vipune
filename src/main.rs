@@ -15,6 +15,7 @@ use vipune::commands;
 use vipune::commands::Commands;
 use vipune::commands::HookEvent;
 use vipune::commands::handle_hook_event;
+use vipune::commands::handle_version;
 use vipune::commands::output::{ErrorResponse, print_json};
 use vipune::errors::Error;
 use vipune::memory::MemoryStore;
@@ -115,6 +116,24 @@ fn hook_event_from_command(command: &Commands) -> Option<commands::HookEvent> {
 }
 
 fn run(cli: &Cli) -> Result<ExitCode, Error> {
+    // `version` is a diagnostic: it reports the binary's name and version and
+    // nothing else, so it must work when the database path, the config file or
+    // the schema is unusable. `Config::load()` (env/TOML validation),
+    // `ensure_directories()` (which creates the database's parent directory)
+    // and `MemoryStore::new()` (which opens the file and runs migrations) all
+    // have side effects and all fail on exactly those inputs, so the dispatch
+    // is short-circuited above them — the same pattern the hook events and the
+    // MCP early-returns already use. This is the one dispatch site for `version`
+    // (the `execute` arm beside `Mcp`'s is an `unreachable!()`), and the one place
+    // the ordering is enforced, so the rationale lives here. Pinned by the
+    // subprocess suite in `commands::version_cli_tests`, which spawns the real
+    // binary: remove the guard and the AC1/AC2/AC3/AC4 children exit 1 with the
+    // prologue's error. Ungated on purpose: unlike `Commands::Mcp`,
+    // `Commands::Version` exists in both feature lanes.
+    if matches!(cli.command, Commands::Version) {
+        return handle_version(cli.json);
+    }
+
     let mut config = Config::load()?;
     config.ensure_directories()?;
 
@@ -304,8 +323,29 @@ mod tests {
 
     #[test]
     fn test_cli_parse_version() {
+        // Type-level routing only: `command` is a non-optional `Commands`, so
+        // this pins that the subcommand string `version` yields the very variant
+        // `run()`'s short-circuit guard matches (issue #330). clap's own
+        // `--version` flow is a separate path — `Cli` declares no
+        // `#[command(version)]` attribute, so `vipune --version` is a parse
+        // error today, which is what the next test pins.
         let cli = Cli::parse_from(["vipune", "version"]);
-        matches!(cli.command, Commands::Version);
+        assert!(
+            matches!(cli.command, Commands::Version),
+            "`vipune version` must parse to Commands::Version — the variant the run() short-circuit dispatches (issue #330)"
+        );
+    }
+
+    #[test]
+    fn test_cli_parse_dashdash_version_is_clap_builtin() {
+        // The string form above is the only one that reaches `Commands::Version`;
+        // `--version` has no clap builtin on this `Cli`, so it never becomes a
+        // command and can never take the short-circuit path.
+        let result = Cli::try_parse_from(["vipune", "--version"]);
+        assert!(
+            result.is_err(),
+            "`vipune --version` is not a `Commands` variant (no `#[command(version)]` on `Cli`)"
+        );
     }
 
     #[test]

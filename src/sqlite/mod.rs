@@ -431,6 +431,25 @@ impl Database {
         &self.conn
     }
 
+    /// Set `PRAGMA user_version` — **test-only**.
+    ///
+    /// `run_migrations` is the only *production* writer of this pragma; the rest
+    /// are test fixtures (the `pragma_update` call sites in `sqlite/migrations.rs`
+    /// and `sqlite/fts_migration_tests.rs`). This one exists so the AC3 fixture of
+    /// issue #330 goes through the layer that owns the migration contract instead
+    /// of reaching through [`Self::conn`], which is write-capable and bypasses this
+    /// layer's error mapping. The parameter is the raw pragma `i32`: a newtype here
+    /// would put a `#[cfg(test)]`-only type in a storage signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the pragma cannot be written.
+    #[cfg(test)]
+    pub(crate) fn set_user_version_for_test(&mut self, version: i32) -> Result<()> {
+        self.conn.pragma_update(None, "user_version", version)?;
+        Ok(())
+    }
+
     /// Open a write transaction on the connection.
     ///
     /// `&mut self` because rusqlite's `Connection::transaction` takes `&mut

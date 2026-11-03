@@ -190,6 +190,31 @@ fn total_migrations() -> i32 {
     migrations().len() as i32
 }
 
+/// The schema version this binary supports — the `PRAGMA user_version` ceiling
+/// `run_migrations` refuses anything above, as a bare `i32`. One name for the
+/// ceiling itself: the production gate at [`run_migrations`] and the AC3 fixture
+/// in `commands::version_cli_tests` (which raises a database's `user_version`
+/// one above it to pin that `vipune version` still prints while `Database::open`
+/// on the same file fails) both read the same list length, so they cannot drift
+/// in meaning. It is *not* the only version a test writes: the migration fixtures
+/// in this file and in `sqlite/fts_migration_tests.rs` pin `user_version` to
+/// named historical versions (3, 4, 5, 6) directly, and
+/// `sqlite::Database::set_user_version_for_test` writes the same pragma through
+/// the storage layer.
+#[cfg(test)]
+pub(crate) fn ceiling() -> i32 {
+    total_migrations()
+}
+
+/// The fixture value: one above [`ceiling`], i.e. the `PRAGMA user_version` that
+/// [`run_migrations`] refuses. Next to `ceiling` so the `+ 1` and its saturation
+/// (a wrap to a negative version would read as "already migrated") are stated
+/// once rather than at each call site.
+#[cfg(test)]
+pub(crate) fn ceiling_plus_one() -> i32 {
+    ceiling().saturating_add(1)
+}
+
 /// Run pending migrations on every database open.
 ///
 /// # Migration Process
@@ -332,6 +357,24 @@ mod tests {
         assert!(err.contains("999"));
         assert!(err.contains("Upgrade vipune"));
         assert_eq!(version_of(&conn), 999);
+    }
+
+    // Both sides of the boundary AC3's fixture rests on, pinned where the
+    // contract lives: `run_migrations` accepts exactly `ceiling()` and
+    // refuses `ceiling_plus_one()`, so the fixture in
+    // `commands::version_cli_tests` describes a real boundary rather than an
+    // arbitrary number.
+    #[test]
+    fn test_ceiling_is_the_last_accepted_user_version() {
+        let conn = create_test_db();
+        init_schema(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+        assert_eq!(version_of(&conn), ceiling());
+
+        // The same file, one above the ceiling: now refused.
+        conn.pragma_update(None, "user_version", ceiling_plus_one())
+            .unwrap();
+        assert!(run_migrations(&conn).is_err());
     }
 
     // --- Migration 5: importance column ---
